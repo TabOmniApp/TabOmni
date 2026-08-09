@@ -43,8 +43,8 @@ can see at a glance which branch the panels are pointed at.
 
 ## Requirements
 
-- **macOS 12 (Monterey) or newer** to run the packaged app, Apple Silicon or
-  Intel — each architecture has a build of its own
+- **macOS 12 (Monterey) or newer**, Apple Silicon or Intel — each architecture
+  has a build of its own — or **Linux x64** (AppImage) or **Windows x64**
 - **[Bun](https://bun.sh) 1.3+** and **Node 20+**, only to build it from source
 - **Docker**, only for a project's own Docker-managed databases
 - **`claude` on your PATH**, only for agent sessions and the AI features
@@ -52,12 +52,15 @@ can see at a glance which branch the panels are pointed at.
 Neither Docker nor the CLI is needed to start the app, and each says so in the
 place it would have been used.
 
-**Platform support is honest about itself:** Tabula is developed and packaged
-on macOS. The Electron build config declares Windows (NSIS) and Linux
-(AppImage) targets and CI runs the test suite on Linux, but those builds are far
-less travelled. Reports are welcome; assume rough edges.
+**Platform support is honest about itself:** every release carries all three,
+built by the same workflow, but Tabula is developed on macOS and that is where
+it is actually used day to day. The Linux and Windows builds compile and the
+test suite runs on Linux; they are far less travelled than that sentence makes
+them sound. Reports are welcome; assume rough edges.
 
 ## Install
+
+### macOS
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tabulapp/tabula/main/install.sh | bash
@@ -94,6 +97,29 @@ xattr -dr com.apple.quarantine "/Applications/Tabula.app"
 
 before it will open. If neither is a trade you want to make, build it yourself
 below.
+
+### Linux
+
+The AppImage from the
+[Releases](https://github.com/tabulapp/tabula/releases) page is the whole
+install — there is nothing to unpack:
+
+```bash
+chmod +x Tabula-0.1.0-x64.AppImage
+./Tabula-0.1.0-x64.AppImage
+```
+
+An AppImage needs FUSE, which some distributions no longer ship by default
+(`sudo apt install libfuse2` on Debian and Ubuntu). Failing that,
+`--appimage-extract-and-run` unpacks it to a temporary directory instead.
+
+### Windows
+
+Run the `.exe` from the [Releases](https://github.com/tabulapp/tabula/releases)
+page. It is an NSIS installer and it is **not signed**, so SmartScreen will
+show "Windows protected your PC" — _More info_ then _Run anyway_ is the way
+past it, and the same caveat as macOS applies: you are skipping the check, not
+passing it.
 
 ## Running it from source
 

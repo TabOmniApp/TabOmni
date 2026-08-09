@@ -143,11 +143,13 @@
       ]
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "linux": {
       "target": "AppImage",
-      "category": "Development"
+      "category": "Development",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     }
   }
 }
