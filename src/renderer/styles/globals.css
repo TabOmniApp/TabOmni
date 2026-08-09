@@ -1,0 +1,198 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+@source "../**/*.{ts,tsx}";
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --font-sans: var(--font-sans);
+}
+
+/*
+ * The palette is built around one hue — 285, violet — and every neutral in it
+ * carries a little of that hue rather than being a true grey. shadcn's default
+ * ships every token at chroma 0, which is what made the studio read as
+ * uniformly grey no matter how the layout was arranged; a surface at chroma
+ * 0.006 still reads as "white" or "dark" but stops reading as *nothing*.
+ *
+ * `--brand-hue` is not consumed by the tokens below (oklch takes a literal),
+ * it records the number so a future re-hue has one place to start from.
+ */
+:root {
+  --brand-hue: 285;
+
+  --background: oklch(0.994 0.003 285);
+  --foreground: oklch(0.17 0.015 285);
+  --card: oklch(1 0.002 285);
+  --card-foreground: oklch(0.17 0.015 285);
+  --popover: oklch(1 0.002 285);
+  --popover-foreground: oklch(0.17 0.015 285);
+  --primary: oklch(0.55 0.22 285);
+  --primary-foreground: oklch(0.99 0.005 285);
+  --secondary: oklch(0.965 0.008 285);
+  --secondary-foreground: oklch(0.28 0.03 285);
+  --muted: oklch(0.97 0.007 285);
+  --muted-foreground: oklch(0.53 0.025 285);
+  --accent: oklch(0.955 0.018 285);
+  --accent-foreground: oklch(0.38 0.12 285);
+  --destructive: oklch(0.58 0.22 25);
+  --border: oklch(0.915 0.008 285);
+  --input: oklch(0.915 0.01 285);
+  --ring: oklch(0.62 0.18 285);
+
+  /*
+     * Status colours as tokens rather than as `text-emerald-600` at each call
+     * site. The raw utilities forced every one of them to spell out its own
+     * dark-mode twin (`text-emerald-600 dark:text-emerald-400`), which is why
+     * they had already drifted between panels.
+     */
+  --success: oklch(0.56 0.14 158);
+  --success-foreground: oklch(0.99 0.01 158);
+  --warning: oklch(0.65 0.15 70);
+  --warning-foreground: oklch(0.99 0.01 70);
+  --info: oklch(0.56 0.16 245);
+  --info-foreground: oklch(0.99 0.01 245);
+
+  /*
+     * One hue per section of the rail, far enough apart in hue that the active
+     * item says which panel you are in before the icon does. None of them sit
+     * on 285 — the brand hue stays reserved for primary actions, so a coloured
+     * rail item never looks like a button.
+     */
+  --section-database: oklch(0.55 0.17 250);
+  --section-api: oklch(0.58 0.21 320);
+  /* Mail takes the widest gap left on the wheel — 45 from Specs on one side
+       and Terminal on the other. Webhooks is the awkward one: with eight
+       sections nothing is more than 30 from its nearest neighbour, so it is
+       placed by *rail adjacency* instead, which is what the eye actually
+       compares. At 350 it sits 125 from Mail above it and 80 from Specs below;
+       its nearest hue overall is API at 320, which is three rows away. */
+  --section-mail: oklch(0.6 0.16 115);
+  --section-webhook: oklch(0.58 0.2 350);
+  --section-spec: oklch(0.62 0.15 70);
+  --section-terminal: oklch(0.56 0.14 160);
+
+  --chart-1: oklch(0.55 0.22 285);
+  --chart-2: oklch(0.58 0.21 320);
+  --chart-3: oklch(0.55 0.17 250);
+  --chart-4: oklch(0.56 0.14 160);
+  --chart-5: oklch(0.62 0.15 70);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.978 0.006 285);
+  --sidebar-foreground: oklch(0.17 0.015 285);
+  --sidebar-primary: oklch(0.55 0.22 285);
+  --sidebar-primary-foreground: oklch(0.99 0.005 285);
+  --sidebar-accent: oklch(0.95 0.016 285);
+  --sidebar-accent-foreground: oklch(0.35 0.12 285);
+  --sidebar-border: oklch(0.912 0.009 285);
+  --sidebar-ring: oklch(0.62 0.18 285);
+}
+
+/*
+ * Dark is not the light palette inverted: chroma has to rise as lightness
+ * falls or the hue disappears into the black, and the accents move lighter so
+ * they clear the surface they sit on.
+ */
+.dark {
+  --background: oklch(0.16 0.012 285);
+  --foreground: oklch(0.97 0.006 285);
+  --card: oklch(0.205 0.014 285);
+  --card-foreground: oklch(0.97 0.006 285);
+  --popover: oklch(0.21 0.015 285);
+  --popover-foreground: oklch(0.97 0.006 285);
+  --primary: oklch(0.7 0.19 285);
+  --primary-foreground: oklch(0.17 0.05 285);
+  --secondary: oklch(0.27 0.018 285);
+  --secondary-foreground: oklch(0.97 0.006 285);
+  --muted: oklch(0.27 0.016 285);
+  --muted-foreground: oklch(0.71 0.022 285);
+  --accent: oklch(0.3 0.035 285);
+  --accent-foreground: oklch(0.93 0.03 285);
+  --destructive: oklch(0.7 0.19 22);
+  --border: oklch(0.75 0.04 285 / 14%);
+  --input: oklch(0.75 0.04 285 / 18%);
+  --ring: oklch(0.6 0.17 285);
+
+  --success: oklch(0.75 0.16 160);
+  --success-foreground: oklch(0.18 0.04 160);
+  --warning: oklch(0.8 0.15 75);
+  --warning-foreground: oklch(0.2 0.05 75);
+  --info: oklch(0.7 0.15 245);
+  --info-foreground: oklch(0.18 0.04 245);
+
+  --section-database: oklch(0.7 0.15 250);
+  --section-api: oklch(0.72 0.18 320);
+  --section-mail: oklch(0.76 0.16 115);
+  --section-webhook: oklch(0.72 0.18 350);
+  --section-spec: oklch(0.78 0.14 70);
+  --section-terminal: oklch(0.74 0.14 160);
+
+  --chart-1: oklch(0.7 0.19 285);
+  --chart-2: oklch(0.72 0.18 320);
+  --chart-3: oklch(0.7 0.15 250);
+  --chart-4: oklch(0.74 0.14 160);
+  --chart-5: oklch(0.78 0.14 70);
+  --sidebar: oklch(0.185 0.013 285);
+  --sidebar-foreground: oklch(0.97 0.006 285);
+  --sidebar-primary: oklch(0.7 0.19 285);
+  --sidebar-primary-foreground: oklch(0.17 0.05 285);
+  --sidebar-accent: oklch(0.28 0.03 285);
+  --sidebar-accent-foreground: oklch(0.97 0.006 285);
+  --sidebar-border: oklch(0.75 0.04 285 / 12%);
+  --sidebar-ring: oklch(0.6 0.17 285);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

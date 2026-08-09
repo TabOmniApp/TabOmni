@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# Installs Tabula into /Applications from a GitHub release.
+#
+#   ./install.sh            the latest release
+#   ./install.sh 0.1.0      that release
+#
+# The download is the point of this script. macOS puts `com.apple.quarantine`
+# on anything a browser, Mail or AirDrop hands over, and Gatekeeper refuses a
+# quarantined app that carries no Developer ID — which these builds do not,
+# since signing one costs an Apple Developer membership. `curl` sets no such
+# attribute, so an app installed this way opens normally. That is a check being
+# skipped rather than passed: what you get is the integrity of the transfer,
+# not proof of who built the file. Read this script before running it.
+
+set -euo pipefail
+
+REPO="tabulapp/tabula"
+# Overridable so the script can be exercised against a scratch directory.
+APPLICATIONS="${APPLICATIONS:-/Applications}"
+
+case "$(uname -s)" in
+  Darwin) ;;
+  *) echo "This installer is for macOS only." >&2; exit 1 ;;
+esac
+
+# Electron 43 sets LSMinimumSystemVersion to 12.0, and an older macOS fails at
+# launch with nothing that says why.
+MACOS_MAJOR=$(sw_vers -productVersion | cut -d. -f1)
+if [ "$MACOS_MAJOR" -lt 12 ]; then
+  echo "Tabula needs macOS 12 (Monterey) or newer." >&2
+  echo "This machine runs $(sw_vers -productVersion)." >&2
+  exit 1
+fi
+
+case "$(uname -m)" in
+  arm64) ARCH=arm64 ;;
+  x86_64) ARCH=x64 ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+if [ ! -w "$APPLICATIONS" ]; then
+  echo "$APPLICATIONS is not writable by $(whoami)." >&2
+  exit 1
+fi
+
+# The asset is asked for by architecture rather than built out of a version and
+# a naming template: a release whose files are named something else should fail
+# as "no arm64 build here" instead of as a 404 on a URL this script invented.
+asset_url() {
+  curl -fsL "$1" \
+    | grep -o '"browser_download_url":[[:space:]]*"[^"]*"' \
+    | sed 's/.*"\(https[^"]*\)"/\1/' \
+    | grep -- "-${ARCH}\.dmg$" \
+    | head -1
+}
+
+echo "Looking up the release…"
+VERSION="${1:-}"
+if [ -n "$VERSION" ]; then
+  # Both tag spellings, because which one a release used is not something the
+  # person running this should have to know.
+  URL=$(asset_url "https://api.github.com/repos/$REPO/releases/tags/v${VERSION#v}") || true
+  [ -n "${URL:-}" ] ||
+    URL=$(asset_url "https://api.github.com/repos/$REPO/releases/tags/${VERSION#v}") || true
+else
+  URL=$(asset_url "https://api.github.com/repos/$REPO/releases/latest") || true
+fi
+
+if [ -z "${URL:-}" ]; then
+  echo "No ${ARCH} .dmg in ${VERSION:-the latest release} of $REPO." >&2
+  echo "See https://github.com/$REPO/releases" >&2
+  exit 1
+fi
+
+TMP=$(mktemp -d)
+MOUNT="$TMP/mnt"
+cleanup() {
+  # Detaching a volume that was never attached is not an error worth printing.
+  hdiutil detach "$MOUNT" -quiet 2>/dev/null || true
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
+
+echo "Downloading $(basename "${URL//%20/ }")…"
+curl -fL --progress-bar -o "$TMP/app.dmg" "$URL"
+
+mkdir -p "$MOUNT"
+hdiutil attach "$TMP/app.dmg" -nobrowse -quiet -mountpoint "$MOUNT"
+
+APP_SRC=$(find "$MOUNT" -maxdepth 1 -name "*.app" -print -quit)
+if [ -z "$APP_SRC" ]; then
+  echo "No .app inside the disk image." >&2
+  exit 1
+fi
+APP_NAME=$(basename "$APP_SRC")
+
+# Replacing a bundle out from under a running process leaves it half-swapped,
+# and the pty daemon it spawned holds a socket in ~/.tabula that a new
+# build would then talk to.
+if pgrep -qx "${APP_NAME%.app}"; then
+  echo "Quitting ${APP_NAME%.app}…"
+  osascript -e "quit app \"${APP_NAME%.app}\"" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -qx "${APP_NAME%.app}" || break
+    sleep 0.5
+  done
+fi
+
+rm -rf "$APPLICATIONS/$APP_NAME"
+# `ditto` rather than `cp -R`: it is the macOS tool for copying a bundle, and it
+# carries the symlinks and metadata inside a Framework unchanged.
+ditto "$APP_SRC" "$APPLICATIONS/$APP_NAME"
+
+if xattr -p com.apple.quarantine "$APPLICATIONS/$APP_NAME" >/dev/null 2>&1; then
+  # Nothing here should have set it, so this means the assumption above no
+  # longer holds — say so rather than let Gatekeeper be the one to explain.
+  echo
+  echo "Warning: the installed app is quarantined and macOS will refuse to open it."
+  echo "Remove it with:"
+  echo "  xattr -dr com.apple.quarantine \"$APPLICATIONS/$APP_NAME\""
+fi
+
+echo
+echo "Installed $APP_NAME to $APPLICATIONS"
+echo "Open it with:  open \"$APPLICATIONS/$APP_NAME\""

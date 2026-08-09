@@ -1,0 +1,21 @@
+/*
+ * How a Crepe editor is sized inside a spec section — the counterpart to
+ * `chat-composer.css`, whose rules are for a fixed-height card and would be
+ * wrong here. The palette both share is in `milkdown-theme.css`.
+ *
+ * Nothing sets a height: a spec section grows with what is written in it, and
+ * the page around it scrolls. `min-height` is only so an empty section is still
+ * a target big enough to click into — with none, Crepe's placeholder line is
+ * the entire hit area.
+ */
+.spec-prose .ProseMirror {
+  /* Crepe's own `reset.css` sets `padding: 60px 120px` here, sized for a
+   * full document page. A section of a spec is not one. */
+  padding: 0.75rem 1rem !important;
+  min-height: 7rem;
+  outline: none;
+  /* Crepe sets no caret-color of its own here, and left alone it is
+   * `currentColor` — thin and easy to lose against body text of the same
+   * colour. Same reasoning, and same value, as the composer's. */
+  caret-color: var(--crepe-color-primary);
+}

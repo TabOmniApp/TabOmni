@@ -1,0 +1,66 @@
+/*
+ * What every Crepe editor in this app looks like.
+ *
+ * Crepe's own CSS (`@milkdown/crepe/theme/common/style.css`) styles every
+ * feature it ships — toolbar, block-edit menu, placeholder, link tooltip,
+ * cursor, list items, tables, LaTeX, and more — entirely off `--crepe-*`
+ * custom properties scoped to `.milkdown`. Rather than also importing one of
+ * its bundled visual themes (`frame`, `nord`, `classic`, each its own fixed
+ * palette with its own light/dark pair), those variables are pointed at this
+ * app's own tokens directly, so an editor reads as part of the app and follows
+ * its theme toggle for free — the same reason `body-editor.tsx`'s CodeMirror
+ * instance never pulled in a themed package either. Features an editor
+ * disables still get some unused CSS from that import; harmless, since nothing
+ * of theirs exists in that DOM to match it.
+ *
+ * Its own file because there are now two of these editors — the chat composer
+ * and the Spec panel's prose sections — and only their *sizing* differs. Each
+ * keeps its own stylesheet for that (`chat-composer.css`, `spec-prose.css`);
+ * what they must not do is disagree about what a Milkdown editor is coloured
+ * like, which is why the palette is here and not in either of them.
+ */
+.milkdown {
+  --crepe-color-background: var(--background);
+  --crepe-color-on-background: var(--foreground);
+  --crepe-color-surface: var(--popover);
+  --crepe-color-surface-low: var(--muted);
+  --crepe-color-on-surface: var(--popover-foreground);
+  --crepe-color-on-surface-variant: var(--muted-foreground);
+  --crepe-color-outline: var(--border);
+  /*
+   * Not `var(--primary)`: this app's `--primary` is a neutral gray/black
+   * (by design — the whole app is monochrome), but Crepe uses this same
+   * variable for a link's text color *and* the floating toolbar's active-
+   * button state, both of which read as broken/invisible without an actual
+   * hue — a link that isn't a different color from its surrounding text
+   * doesn't look like a link. A dedicated blue, scoped to just this editor,
+   * is the one deliberate exception to the app's own palette. Two values
+   * (not one fixed color) for the same reason `--destructive` gets a
+   * lighter variant in `.dark` below — a shade tuned for a light background
+   * reads too dark against a near-black one.
+   */
+  --crepe-color-primary: oklch(0.55 0.22 260);
+  --crepe-color-secondary: var(--secondary);
+  --crepe-color-on-secondary: var(--secondary-foreground);
+  --crepe-color-inverse: var(--popover);
+  --crepe-color-on-inverse: var(--popover-foreground);
+  --crepe-color-inline-code: var(--foreground);
+  --crepe-color-error: var(--destructive);
+  --crepe-color-hover: var(--accent);
+  --crepe-color-selected: var(--accent);
+  --crepe-color-inline-area: var(--muted);
+
+  --crepe-base-font-size: 13.5px;
+  --crepe-font-title: var(--font-sans);
+  --crepe-font-default: var(--font-sans);
+  --crepe-font-code: var(--font-mono);
+
+  --crepe-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --crepe-shadow-2: 0 2px 8px rgba(0, 0, 0, 0.16);
+}
+
+/* Lighter and less saturated so it still reads clearly against a near-black
+ * background, the same adjustment the app's own `--destructive` gets. */
+.dark .milkdown {
+  --crepe-color-primary: oklch(0.72 0.17 260);
+}
