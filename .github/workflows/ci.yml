@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [!main]
+    branches: [main]
   pull_request:
 
 # A force-push or a second push to a PR makes the earlier run pointless.

@@ -25,7 +25,6 @@ release
 
 # Generated from resources/icon-source.png and by scripts/dmg-background.mjs.
 # The source art is committed; what is derived from it is not.
-resources/icon.png
 resources/background.png
 resources/background@2x.png
 
