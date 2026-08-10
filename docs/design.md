@@ -31,6 +31,9 @@ for; the manifest records an absolute path and the files stay yours.
     folders.json    the groups those requests are filed under
     cookies.json
     inbox.json      what the two capture servers caught
+    notes.json      the Notes panel's listing
+    note-folders.json
+    notes/<note-id>.md   one note's own markdown
     db/<db-id>/     one Docker-managed database's own data
 ```
 
@@ -533,6 +536,138 @@ servers rather than one per folder: a port can only be bound once, and the code
 that sends the mail and the code that receives the callback are usually two
 folders of the same project anyway. Nothing sent while a server is down can be
 caught afterwards, which is what that switch is for.
+
+## Notes
+
+The panel for what the work needs written down and nothing else knows where to
+put — the payload that took an hour to get right, the shape a response comes
+back in, what the next step was. It is a rail section beside the other five, not
+a corner of one of them, because that is what makes it reachable from whichever
+panel raised the thing worth writing down.
+
+Notes belong to the **workspace**, like the requests and the captures and for
+the same reason: a note about how a frontend calls its API is about both
+folders, and filing it under one would decide which one is allowed to see it.
+They are filed into folders of their own — arbitrarily deep, dragged between,
+right-clicked exactly the way the API panel's requests are.
+
+Two panels wanting the same tree is what pulled that tree out into
+`lib/tree.ts`: nesting by `parentId`, the cycle guard that stops a folder being
+dropped into its own subtree, and the count behind "this deletes 4 notes and 2
+subfolders". `lib/http/folders.ts` now delegates to it and keeps only what is
+genuinely the API panel's — the headers and params that cascade down a request
+folder, which a note folder has no equivalent of. `test/tree.ts` covers it: a
+wrong answer there is a subtree detached from the root or a delete confirmed
+against the wrong number.
+
+**A note is a markdown file.** `notes.json` is the listing — name, folder,
+timestamps — and the text lives beside it, one `notes/<id>.md` per note. Two
+reasons, and the second is the better one: typing into a note rewrites that note
+rather than every note at once, and what is left on disk is a directory of plain
+markdown that grep, an editor, or git can read without this app's help. The id
+comes from the renderer and is used as a filename, so `Store` checks it is a
+UUID before it touches the path — an id is not a name the user typed, and it
+should not be able to become one.
+
+Writes are debounced 400ms, per note, so two notes open at once cannot cancel
+each other's save; closing a tab flushes what is still waiting, and deleting a
+note cancels it — a write landing after a delete would put the file back. The
+`Store`'s own queue is what makes that ordering hold rather than a race.
+
+The editor is **Crepe**, Milkdown's batteries-included editor, already here for
+the Terminal panel's chat composer. It brings the selection toolbar, the `/`
+block menu and the drag handles rather than having them hand-built, and it reads
+as part of the studio because `milkdown-theme.css` points its `--crepe-*`
+variables at the app's own tokens — one palette, following the theme toggle, with
+nothing in the panel that has to know which theme is on. `note-editor.css` is
+the sizing, kept apart from the colour for the same reason `chat-composer.css`
+is: Crepe's own padding is sized for a full document page, and this pane is one
+half of a split workbench.
+
+Three of Crepe's features are off, each for a reason:
+
+- **Image block.** Its uploader hands an inserted file back as a `blob:` URL —
+  bytes held in this window's memory, gone the next time the app opens. A note
+  is a file on disk, so that is the one place the link has to keep working. An
+  `![alt](https://…)` still renders; what is missing is dropping a file in, and
+  a dead image is worse than none.
+- **LaTeX**, which needs KaTeX's stylesheet, not a dependency this app declares.
+- **AI** and the top bar, which are not what this panel is.
+
+Code blocks are on, with the languages built from the `@codemirror/lang-*`
+packages the SQL console and body editors already pull in rather than from
+`@codemirror/language-data` — that package's list is every grammar CodeMirror
+has, and here it would be a longer dropdown rather than a better one. Each
+loads on demand, so a note with no code block costs nothing.
+
+The editor is keyed on the note id and rebuilt when the tab changes: Crepe takes
+its content once, at construction, and has no "load this instead". The pane
+waits for the file rather than mounting empty and filling in, which would put a
+document nobody typed through ProseMirror's history and make one undo empty the
+note.
+
+### Drawings
+
+`/drawing` in a note puts a canvas in it: freehand, shapes, arrows, text and
+images, on **Excalidraw** rather than anything hand-built. It is MIT, it is the
+tool people already reach for, and a drawing editor is not something to write in
+an afternoon — tldraw would have been the other candidate and its licence does
+not suit an MIT app.
+
+A drawing is edited in a **dialog**, not in the note. Excalidraw claims the wheel
+for zoom, so a live canvas in the middle of a scrolling document is something
+the page cannot be scrolled past; and a diagram wants more room than a column of
+prose has. What sits in the note is the finished drawing, exported to SVG —
+click it, or Edit, and the canvas opens over the note.
+
+**A drawing is a file, and the note keeps only its id**, in a fenced block:
+
+````markdown
+```drawing
+7c3f1a2e-5b6d-4a8f-9e21-1f0b3c4d5e6f
+```
+````
+
+The scene itself is `workspace/drawings/<id>.excalidraw`, Excalidraw's own
+format, openable at excalidraw.com or in its desktop app. Inline was the
+alternative and it loses on the thing this panel is built around: an uploaded
+image is base64, and a megabyte of it in the middle of a note ends the claim
+that what is on disk is markdown anybody can read. A fence, meanwhile,
+round-trips through any markdown parser untouched.
+
+Getting that fence to _stay_ a drawing took one narrowing. Milkdown's parser
+asks every node in the schema which mdast node it matches and takes the first
+that says yes, in schema order — and the commonmark code block says yes to every
+fence, this one included, whichever order the two are registered in. So
+`keepDrawingFencesOutOfCodeBlocks` narrows the general one rather than racing the
+specific one, as a config on `codeBlockSchema`'s ctx: Crepe registers the
+commonmark preset itself and there is no swapping its copy out from outside.
+
+The block is a ProseMirror node view, which is a plain DOM object rather than a
+React component — so it reaches the editor dialog through an event
+(`onDrawingOpened`) rather than a callback nobody was in a position to hand it,
+and it redraws on a theme change through one `MutationObserver` on `<html>`
+shared by every block in the document. A drawing is exported light or dark
+rather than tinted; Excalidraw inverts the strokes, and a preview that stayed
+dark on a white page would be the only thing in the studio that did.
+
+Excalidraw is around a megabyte and most sessions never open a drawing, so it is
+loaded on demand: `React.lazy` for the editor, a dynamic `import()` in the node
+view for the SVG export, and neither runs for a note with no drawing in it. Its
+**fonts are served by this app**, not from esm.sh where it looks by default — a
+desktop app should not go to the network for a file it can ship, and the glyph
+widths should not depend on whether it got there. The `excalidraw-fonts` plugin
+in `vite.config.ts` reads them out of `node_modules` in dev and emits them into
+the bundle for a build; `public/` was the other option and 13MB of vendored
+woff2 does not belong in git.
+
+Deleting a note deletes the drawings its markdown refers to, read out of the
+text while it is still there. Duplicating a note copies them and re-points the
+copy, so editing the duplicate cannot change the original. Deleting just the
+block leaves its scene behind on purpose: that has to be undoable, and a delete
+that had already removed the file would come back as an empty drawing.
+`test/drawings.ts` covers the reading, since both directions are destructive
+when it is wrong.
 
 ## The system bar
 

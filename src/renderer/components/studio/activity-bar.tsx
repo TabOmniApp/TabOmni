@@ -16,18 +16,32 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useEffect, useMemo, useState, type ComponentType } from "react"
-import { Database, Mail, Send, SquareTerminal, Webhook } from "lucide-react"
+import {
+  Database,
+  Mail,
+  NotebookPen,
+  Send,
+  SquareTerminal,
+  Webhook,
+} from "lucide-react"
 
 import { unreadCount, useInbox } from "@/lib/inbox/store"
 import { useRail } from "@/lib/rail"
 
 /** Top-level areas of the workbench. */
-export type Section = "database" | "api" | "mail" | "webhook" | "terminal"
+export type Section =
+  "database" | "api" | "mail" | "webhook" | "terminal" | "note"
 
 /**
  * Ordered the way the work goes: the data and the endpoints behind it, then
  * what those endpoints send back out and what arrives unasked, then the
  * terminal.
+ *
+ * Notes sit last because they are about all of the others rather than beside
+ * any one of them — what a payload has to look like, what the next step was —
+ * and because a remembered layout from a build without them appends unknown
+ * ids in this list's own order, which puts them where they would have gone
+ * anyway.
  *
  * Mail and Webhooks are two sections rather than one because they replace two
  * applications and are read in two different frames of mind — a rendered email
@@ -47,6 +61,7 @@ export const SECTIONS: {
   { id: "mail", label: "Mail", Icon: Mail },
   { id: "webhook", label: "Webhooks", Icon: Webhook },
   { id: "terminal", label: "Terminal", Icon: SquareTerminal },
+  { id: "note", label: "Notes", Icon: NotebookPen },
 ]
 
 /**
@@ -61,6 +76,7 @@ export const SECTION_ACCENT: Record<Section, string> = {
   mail: "var(--section-mail)",
   webhook: "var(--section-webhook)",
   terminal: "var(--section-terminal)",
+  note: "var(--section-note)",
 }
 
 /** The rail's own order, which a remembered one is reconciled against. */

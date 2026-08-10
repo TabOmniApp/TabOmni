@@ -1,10 +1,19 @@
 import { cn } from "@/lib/utils"
-import { Folder, Mail, Plus, Settings2, Terminal, Webhook } from "lucide-react"
+import {
+  FileText,
+  Folder,
+  Mail,
+  Plus,
+  Settings2,
+  Terminal,
+  Webhook,
+} from "lucide-react"
 
 import type { Relation } from "@/lib/db/engines/types"
 import { useExplorer, type OpenTab } from "@/lib/db/explorer-store"
 import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
 import { messagesOf, SETTINGS_TAB, useInbox } from "@/lib/inbox/store"
+import { useNotes } from "@/lib/note/store"
 import { useStudio, type Pane } from "@/lib/store"
 import { arrange, bare, kindOf, PREFIX } from "@/lib/tabs"
 import { SESSION_TYPES, sessionLabel } from "@/lib/terminal/catalog"
@@ -113,6 +122,15 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
       ]
     })
 
+  const notes = useNotes((state) => state.notes)
+  const noteOpenIds = useNotes((state) => state.openIds)
+  const noteSelectedId = useNotes((state) => state.selectedId)
+  const noteSelect = useNotes((state) => state.select)
+  const closeNote = useNotes((state) => state.close)
+  const closeOtherNotes = useNotes((state) => state.closeOthers)
+  const closeAllNotes = useNotes((state) => state.closeAll)
+  const reorderNotes = useNotes((state) => state.reorder)
+
   // Filtered here rather than in the selector: `liveSessions` builds a new
   // array, and a selector that never returns the same reference twice re-renders
   // on every store write.
@@ -197,6 +215,18 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
         title: session.exited ? `${label} — ended` : label,
       }
     }),
+    ...noteOpenIds.flatMap((id) => {
+      const note = notes.find((candidate) => candidate.id === id)
+      if (!note) return []
+      return [
+        {
+          id: PREFIX.note + id,
+          label: note.name,
+          icon: <FileText className="size-3.5 shrink-0" />,
+          title: note.name,
+        },
+      ]
+    }),
   ]
 
   const items = arrange(grouped, tabOrder)
@@ -224,12 +254,17 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
             inboxOpenIds[pane].includes(inboxSelectedId[pane]!)
             ? PREFIX[pane] + inboxSelectedId[pane]
             : null
-          : // Not `activeId` itself: with none set the panel falls back to the
-            // most recent session, and the strip has to mark the same one.
-            (() => {
-              const active = activeSessionOf(sessions, terminalActiveId)
-              return active ? PREFIX.terminal + active.id : null
-            })()
+          : pane === "note"
+            ? noteSelectedId && noteOpenIds.includes(noteSelectedId)
+              ? PREFIX.note + noteSelectedId
+              : null
+            : // Not `activeId` itself: with none set the panel falls back to
+              // the most recent session, and the strip has to mark the same
+              // one.
+              (() => {
+                const active = activeSessionOf(sessions, terminalActiveId)
+                return active ? PREFIX.terminal + active.id : null
+              })()
 
   // Nothing here switches the pane: each panel's own `select` does that, so a
   // table opened from the tree and one opened from this strip behave alike.
@@ -241,6 +276,7 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
     if (kind === "api") apiSelect(own)
     else if (kind === "mail" || kind === "webhook") inboxSelect(kind, own)
     else if (kind === "terminal") terminalSelect(own)
+    else if (kind === "note") noteSelect(own)
     else {
       const tab = dbTabs.find((item) => dbTabId(item) === own)
       if (!tab) return
@@ -257,6 +293,7 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
     if (kind === "database") closeDbTab(own)
     else if (kind === "api") closeApi(own)
     else if (kind === "mail" || kind === "webhook") closeInbox(kind, own)
+    else if (kind === "note") closeNote(own)
     else closeTerminal(own)
   }
 
@@ -266,6 +303,7 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
     closeAllInbox("mail")
     closeAllInbox("webhook")
     closeAllTerminals()
+    closeAllNotes()
   }
 
   function closeOthers(id: string) {
@@ -279,11 +317,13 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
     if (kind !== "mail") closeAllInbox("mail")
     if (kind !== "webhook") closeAllInbox("webhook")
     if (kind !== "terminal") closeAllTerminals()
+    if (kind !== "note") closeAllNotes()
 
     const own = bare(id, kind)
     if (kind === "database") closeOtherDbTabs(own)
     else if (kind === "api") closeOtherApi(own)
     else if (kind === "mail" || kind === "webhook") closeOtherInbox(kind, own)
+    else if (kind === "note") closeOtherNotes(own)
     else closeOtherTerminals(own)
   }
 
@@ -304,6 +344,7 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
     reorderInbox("mail", of("mail"))
     reorderInbox("webhook", of("webhook"))
     reorderTerminals(of("terminal"))
+    reorderNotes(of("note"))
   }
 
   return (
@@ -347,6 +388,7 @@ export function useHasOpenTabs(): boolean {
   const dbTabs = useExplorer((state) => state.openTabs)
   const apiOpenIds = useApi((state) => state.openIds)
   const inboxOpenIds = useInbox((state) => state.openIds)
+  const noteOpenIds = useNotes((state) => state.openIds)
   const sessions = useTerminal((state) => state.sessions)
 
   return (
@@ -354,6 +396,7 @@ export function useHasOpenTabs(): boolean {
     apiOpenIds.length > 0 ||
     inboxOpenIds.mail.length > 0 ||
     inboxOpenIds.webhook.length > 0 ||
+    noteOpenIds.length > 0 ||
     // A folder listing nothing but closed sessions has no tab in the strip,
     // and the pane belongs to `NothingOpen`.
     liveSessions(sessions).length > 0

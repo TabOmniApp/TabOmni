@@ -28,6 +28,8 @@ import {
   type HttpSendInput,
   type InboxKind,
   type NewDatabaseInput,
+  type NoteFolder,
+  type NoteRecord,
 } from "../shared/api"
 import {
   agentCommandWith,
@@ -467,6 +469,38 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.httpSend, (_event, input: HttpSendInput) =>
     sendHttp(input)
+  )
+
+  ipcMain.handle(IPC.listNotes, () => store.listNotes())
+
+  ipcMain.handle(IPC.saveNotes, (_event, notes: NoteRecord[]) =>
+    store.saveNotes(notes)
+  )
+
+  ipcMain.handle(IPC.listNoteFolders, () => store.listNoteFolders())
+
+  ipcMain.handle(IPC.saveNoteFolders, (_event, folders: NoteFolder[]) =>
+    store.saveNoteFolders(folders)
+  )
+
+  ipcMain.handle(IPC.readNote, (_event, id: string) => store.readNote(id))
+
+  ipcMain.handle(IPC.writeNote, (_event, id: string, markdown: string) =>
+    store.writeNote(id, markdown)
+  )
+
+  ipcMain.handle(IPC.deleteNotes, (_event, ids: string[]) =>
+    store.deleteNotes(ids)
+  )
+
+  ipcMain.handle(IPC.readDrawing, (_event, id: string) => store.readDrawing(id))
+
+  ipcMain.handle(IPC.writeDrawing, (_event, id: string, scene: string) =>
+    store.writeDrawing(id, scene)
+  )
+
+  ipcMain.handle(IPC.deleteDrawings, (_event, ids: string[]) =>
+    store.deleteDrawings(ids)
   )
 
   ipcMain.handle(IPC.inboxStart, (_event, server: InboxKind, port: number) =>

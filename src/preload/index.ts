@@ -87,6 +87,19 @@ const api: DesktopApi = {
   saveCookies: (cookies) => ipcRenderer.invoke(IPC.saveCookies, cookies),
   httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
 
+  listNotes: () => ipcRenderer.invoke(IPC.listNotes),
+  saveNotes: (notes) => ipcRenderer.invoke(IPC.saveNotes, notes),
+  listNoteFolders: () => ipcRenderer.invoke(IPC.listNoteFolders),
+  saveNoteFolders: (folders) =>
+    ipcRenderer.invoke(IPC.saveNoteFolders, folders),
+  readNote: (id) => ipcRenderer.invoke(IPC.readNote, id),
+  writeNote: (id, markdown) => ipcRenderer.invoke(IPC.writeNote, id, markdown),
+  deleteNotes: (ids) => ipcRenderer.invoke(IPC.deleteNotes, ids),
+
+  readDrawing: (id) => ipcRenderer.invoke(IPC.readDrawing, id),
+  writeDrawing: (id, scene) => ipcRenderer.invoke(IPC.writeDrawing, id, scene),
+  deleteDrawings: (ids) => ipcRenderer.invoke(IPC.deleteDrawings, ids),
+
   inboxStart: (server, port) =>
     ipcRenderer.invoke(IPC.inboxStart, server, port),
   inboxStop: (server) => ipcRenderer.invoke(IPC.inboxStop, server),

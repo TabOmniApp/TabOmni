@@ -30,109 +30,76 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import {
   ChevronDown,
   ChevronRight,
-  Copy,
   CopyPlus,
+  FileText,
   Folder,
   FolderPlus,
+  NotebookPen,
   Pencil,
   Plus,
-  Send,
-  Settings2,
-  Sparkles,
   Trash2,
 } from "lucide-react"
 
-import type { HttpFolder, HttpRequestRecord } from "@shared/api"
+import type { NoteFolder, NoteRecord } from "@shared/api"
+import { useNotes } from "@/lib/note/store"
 import {
-  buildFolderTree,
-  folderDeleteImpact,
+  buildTree,
+  deleteImpact,
   isDescendant,
-  type FolderTreeNode,
-} from "@/lib/http/folders"
-import {
-  resolveUrl,
-  SETTINGS_TAB_ID,
-  useApi,
-  variablesFrom,
-} from "@/lib/http/store"
-import { useStudio } from "@/lib/store"
+  type TreeNode,
+} from "@/lib/tree"
 import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
 import { RenameDialog } from "../db/rename-dialog"
 import { SideRow } from "../side-row"
-import { ApiImportDialog } from "./api-import-dialog"
 
-/** A method's colour, so a list of them can be read down the left edge. */
-export const METHOD_TONES: Record<string, string> = {
-  GET: "text-emerald-600 dark:text-emerald-400",
-  POST: "text-blue-600 dark:text-blue-400",
-  PUT: "text-amber-600 dark:text-amber-400",
-  PATCH: "text-violet-600 dark:text-violet-400",
-  DELETE: "text-destructive",
-  HEAD: "text-muted-foreground",
-  OPTIONS: "text-muted-foreground",
-}
-
-/** What the context menu was opened on — the tree, a folder row, or the
- * empty area of the list itself. */
+/** What the context menu was opened on — a note, a folder row, or the empty
+ * area of the list itself. */
 type MenuTarget =
-  | { kind: "request"; request: HttpRequestRecord }
-  | { kind: "folder"; folder: HttpFolder }
+  | { kind: "note"; note: NoteRecord }
+  | { kind: "folder"; folder: NoteFolder }
   | { kind: "root" }
 
 type PendingDelete =
-  | { kind: "request"; request: HttpRequestRecord }
-  | { kind: "folder"; folder: HttpFolder }
+  { kind: "note"; note: NoteRecord } | { kind: "folder"; folder: NoteFolder }
 
-/** What's being dragged, for a folder or request row dropped onto a folder
- * (or the root drop zone) to reparent it. */
-type DragItem = { kind: "request" | "folder"; id: string }
+/** What's being dragged, for a folder or note row dropped onto a folder (or
+ * the root drop zone) to reparent it. */
+type DragItem = { kind: "note" | "folder"; id: string }
 
-export function RequestList() {
-  // Only the AI import needs this: it reads a repository's source, and there
-  // is nothing for it to read until the workspace has one. Named apart from
-  // the `folders` below, which are this panel's own groups of requests.
-  const workspaceFolders = useStudio((state) => state.folders)
-  const requests = useApi((state) => state.requests)
-  const selectedId = useApi((state) => state.selectedId)
-  const refresh = useApi((state) => state.refresh)
-  const create = useApi((state) => state.create)
-  const select = useApi((state) => state.select)
-  const update = useApi((state) => state.update)
-  const remove = useApi((state) => state.remove)
-  const duplicate = useApi((state) => state.duplicate)
-
-  const folders = useApi((state) => state.folders)
-  const createFolder = useApi((state) => state.createFolder)
-  const renameFolder = useApi((state) => state.renameFolder)
-  const removeFolder = useApi((state) => state.removeFolder)
-  const moveFolder = useApi((state) => state.moveFolder)
-  const moveRequestToFolder = useApi((state) => state.moveRequestToFolder)
-
-  const environments = useApi((state) => state.environments)
-  const activeEnvironmentId = useApi((state) => state.activeEnvironmentId)
-  const selectEnvironment = useApi((state) => state.selectEnvironment)
+/**
+ * The Notes sidebar: folders and notes, arranged the way the API panel's
+ * requests are.
+ *
+ * Deliberately the same shape as `request-list.tsx` — the same tree, the same
+ * right-click menu, the same drag onto a folder — because they are the same
+ * gesture in two panels, and a studio where each sidebar files things its own
+ * way is four things to learn instead of one.
+ */
+export function NoteList() {
+  const notes = useNotes((state) => state.notes)
+  const folders = useNotes((state) => state.folders)
+  const selectedId = useNotes((state) => state.selectedId)
+  const refresh = useNotes((state) => state.refresh)
+  const create = useNotes((state) => state.create)
+  const rename = useNotes((state) => state.rename)
+  const duplicate = useNotes((state) => state.duplicate)
+  const remove = useNotes((state) => state.remove)
+  const select = useNotes((state) => state.select)
+  const moveToFolder = useNotes((state) => state.moveToFolder)
+  const createFolder = useNotes((state) => state.createFolder)
+  const renameFolder = useNotes((state) => state.renameFolder)
+  const removeFolder = useNotes((state) => state.removeFolder)
+  const moveFolder = useNotes((state) => state.moveFolder)
 
   const [query, setQuery] = useState("")
-  /** `undefined` when closed; otherwise the folder id to import into, or
-   * `null` for the top level. */
-  const [importTarget, setImportTarget] = useState<string | null | undefined>(
-    undefined
-  )
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null)
-  const [renaming, setRenaming] = useState<HttpRequestRecord | null>(null)
-  const [renamingFolder, setRenamingFolder] = useState<HttpFolder | null>(null)
+  const [renaming, setRenaming] = useState<NoteRecord | null>(null)
+  const [renamingFolder, setRenamingFolder] = useState<NoteFolder | null>(null)
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [dragItem, setDragItem] = useState<DragItem | null>(null)
@@ -143,26 +110,14 @@ export function RequestList() {
     void refresh()
   }, [refresh])
 
-  const variables = useMemo(
-    () => variablesFrom(environments, activeEnvironmentId),
-    [environments, activeEnvironmentId]
-  )
-
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    if (!needle) return requests
-    return requests.filter(
-      (request) =>
-        request.name.toLowerCase().includes(needle) ||
-        request.url.toLowerCase().includes(needle)
-    )
-  }, [requests, query])
+    if (!needle) return notes
+    return notes.filter((note) => note.name.toLowerCase().includes(needle))
+  }, [notes, query])
 
-  const tree = useMemo(
-    () => buildFolderTree(folders, filtered),
-    [folders, filtered]
-  )
-  const hasAnything = requests.length > 0 || folders.length > 0
+  const tree = useMemo(() => buildTree(folders, filtered), [folders, filtered])
+  const hasAnything = notes.length > 0 || folders.length > 0
   const showNoMatch =
     query.trim() !== "" && filtered.length === 0 && folders.length === 0
 
@@ -175,23 +130,18 @@ export function RequestList() {
     })
   }
 
-  /**
-   * One handler for the whole tree rather than one per row: a row's own
-   * `onContextMenu` would have to call `stopPropagation` to keep a click on
-   * it from also being read as a click on the empty area below, and that
-   * would stop the event from ever reaching the trigger that opens the menu
-   * in the first place. Reading `event.target` here instead — same as the
-   * grid's `onCellContextMenu` — needs nothing stopped.
-   */
+  /** One handler for the whole tree rather than one per row — see the same
+   * reasoning in `request-list.tsx`: a row's own `onContextMenu` would have to
+   * stop the event, and that would stop it reaching the trigger too. */
   function onListContextMenu(event: React.MouseEvent) {
     const target = event.target as HTMLElement
-    const requestEl = target.closest<HTMLElement>("[data-request-id]")
-    if (requestEl) {
-      const request = requests.find(
-        (candidate) => candidate.id === requestEl.dataset.requestId
+    const noteEl = target.closest<HTMLElement>("[data-note-id]")
+    if (noteEl) {
+      const note = notes.find(
+        (candidate) => candidate.id === noteEl.dataset.noteId
       )
-      if (request) {
-        setMenuTarget({ kind: "request", request })
+      if (note) {
+        setMenuTarget({ kind: "note", note })
         return
       }
     }
@@ -214,8 +164,8 @@ export function RequestList() {
     setDropRoot(false)
   }
 
-  /** A folder can't be dropped into itself or its own subtree. A request has
-   * no subtree to worry about, so it can move into any folder. */
+  /** A folder can't be dropped into itself or its own subtree. A note has no
+   * subtree to worry about, so it can move into any folder. */
   function canDropOnFolder(folderId: string): boolean {
     if (!dragItem) return false
     if (dragItem.kind === "folder") {
@@ -226,14 +176,13 @@ export function RequestList() {
 
   function onRowDragStart(item: DragItem) {
     return (event: DragEvent) => {
-      // A folder's own `<li>` nests its children's — dragging one of them
-      // would otherwise bubble into the parent folder's `onDragStart` too,
-      // overwriting `dragItem` with the parent instead of what was actually
-      // grabbed.
+      // A folder's own `<li>` nests its children's — without this, dragging a
+      // child would bubble into the parent's handler and overwrite what was
+      // actually grabbed.
       event.stopPropagation()
       setDragItem(item)
       // Something has to be on the transfer for a drag to start at all in
-      // Chromium, the same reason tab-strip.tsx sets it.
+      // Chromium, the same reason `tab-strip.tsx` sets it.
       event.dataTransfer.setData("text/plain", item.id)
       event.dataTransfer.effectAllowed = "move"
     }
@@ -254,7 +203,7 @@ export function RequestList() {
       event.stopPropagation()
       if (dragItem && canDropOnFolder(folderId)) {
         if (dragItem.kind === "folder") moveFolder(dragItem.id, folderId)
-        else moveRequestToFolder(dragItem.id, folderId)
+        else moveToFolder(dragItem.id, folderId)
       }
       endDrag()
     }
@@ -270,38 +219,34 @@ export function RequestList() {
     event.preventDefault()
     if (dragItem) {
       if (dragItem.kind === "folder") moveFolder(dragItem.id, null)
-      else moveRequestToFolder(dragItem.id, null)
+      else moveToFolder(dragItem.id, null)
     }
     endDrag()
   }
 
-  function renderNodes(nodes: FolderTreeNode[], depth: number): ReactNode {
+  function renderNodes(
+    nodes: TreeNode<NoteFolder, NoteRecord>[],
+    depth: number
+  ): ReactNode {
     return nodes.map((node) => {
       if (node.type === "item") {
-        const request = node.item
+        const note = node.item
         return (
           <li
-            key={request.id}
-            data-request-id={request.id}
+            key={note.id}
+            data-note-id={note.id}
             draggable
-            onDragStart={onRowDragStart({ kind: "request", id: request.id })}
+            onDragStart={onRowDragStart({ kind: "note", id: note.id })}
             onDragEnd={endDrag}
           >
             <SideRow
               indent={depth}
-              active={request.id === selectedId}
-              title={`${request.method} ${request.url}`}
-              onClick={() => select(request.id)}
+              active={note.id === selectedId}
+              title={note.name}
+              onClick={() => select(note.id)}
             >
-              <span
-                className={cn(
-                  "w-10 shrink-0 font-mono text-[0.6rem] font-semibold",
-                  METHOD_TONES[request.method] ?? "text-muted-foreground"
-                )}
-              >
-                {request.method}
-              </span>
-              <span className="truncate">{request.name}</span>
+              <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate">{note.name}</span>
             </SideRow>
           </li>
         )
@@ -326,7 +271,6 @@ export function RequestList() {
         >
           <SideRow
             indent={depth}
-            active={folder.id === selectedId}
             onClick={() => toggleCollapsed(folder.id)}
             className={cn(
               dropFolderId === folder.id &&
@@ -357,61 +301,18 @@ export function RequestList() {
 
   const folderDeleteInfo =
     pendingDelete?.kind === "folder"
-      ? folderDeleteImpact(pendingDelete.folder.id, folders, requests)
+      ? deleteImpact(pendingDelete.folder.id, folders, notes)
       : null
 
   return (
     <ContextMenu>
       <div className="flex h-full flex-col">
-        <PanelHeader title="API">
-          <Select
-            items={environments.map((environment) => ({
-              value: environment.id,
-              label: environment.name,
-            }))}
-            value={activeEnvironmentId}
-            onValueChange={(value) =>
-              selectEnvironment(value ? String(value) : null)
-            }
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label="Environment"
-              disabled={environments.length === 0}
-              className="h-6 w-24 min-w-0 px-1.5 text-[0.7rem]"
-            >
-              <SelectValue placeholder="No environment" />
-            </SelectTrigger>
-            <SelectContent
-              align="end"
-              alignItemWithTrigger={false}
-              className="w-auto min-w-(--anchor-width)"
-            >
-              {environments.map((environment) => (
-                <SelectItem key={environment.id} value={environment.id}>
-                  {environment.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <IconButton
-            label="API settings"
-            onClick={() => select(SETTINGS_TAB_ID)}
-          >
-            <Settings2 />
-          </IconButton>
-
-          <IconButton label="New request" onClick={() => void create()}>
+        <PanelHeader title="Notes">
+          <IconButton label="New note" onClick={() => void create()}>
             <Plus />
           </IconButton>
-
-          <IconButton
-            label="AI import"
-            disabled={workspaceFolders.length === 0}
-            onClick={() => setImportTarget(null)}
-          >
-            <Sparkles />
+          <IconButton label="New folder" onClick={() => createFolder(null)}>
+            <FolderPlus />
           </IconButton>
         </PanelHeader>
 
@@ -420,8 +321,8 @@ export function RequestList() {
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter requests…"
-              aria-label="Filter requests"
+              placeholder="Filter notes…"
+              aria-label="Filter notes"
               spellCheck={false}
               className="h-7 border-transparent bg-muted/60 text-xs md:text-xs"
             />
@@ -441,19 +342,19 @@ export function RequestList() {
               <Empty className="p-4">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
-                    <Send />
+                    <NotebookPen />
                   </EmptyMedia>
-                  <EmptyTitle>No requests</EmptyTitle>
+                  <EmptyTitle>No notes</EmptyTitle>
                   <EmptyDescription className="text-xs">
-                    Add one to call the app you are building — a path like{" "}
-                    <code className="font-mono">/api/users</code> goes to its
-                    dev server.
+                    Somewhere to keep what the work needs written down — a
+                    payload that took an hour to get right, the shape of a
+                    schema, what the next step was.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : showNoMatch ? (
               <p className="px-3 py-2 text-xs text-muted-foreground">
-                No requests match “{query.trim()}”.
+                No notes match “{query.trim()}”.
               </p>
             ) : (
               <ul>{renderNodes(tree, 0)}</ul>
@@ -477,11 +378,11 @@ export function RequestList() {
 
         {renaming && (
           <RenameDialog
-            title="Rename request"
-            label="Request name"
+            title="Rename note"
+            label="Note name"
             currentName={renaming.name}
             onRename={async (name) => {
-              update(renaming.id, { name: name.trim() })
+              rename(renaming.id, name.trim())
               return null
             }}
             onClose={() => setRenaming(null)}
@@ -513,14 +414,14 @@ export function RequestList() {
                 Delete “
                 {pendingDelete?.kind === "folder"
                   ? pendingDelete.folder.name
-                  : pendingDelete?.request.name}
+                  : pendingDelete?.note.name}
                 ”?
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {folderDeleteInfo &&
-                (folderDeleteInfo.requestCount > 0 ||
+                (folderDeleteInfo.itemCount > 0 ||
                   folderDeleteInfo.folderCount > 0)
-                  ? `This deletes ${folderDeleteInfo.requestCount} request${folderDeleteInfo.requestCount === 1 ? "" : "s"}${
+                  ? `This deletes ${folderDeleteInfo.itemCount} note${folderDeleteInfo.itemCount === 1 ? "" : "s"}${
                       folderDeleteInfo.folderCount > 0
                         ? ` and ${folderDeleteInfo.folderCount} subfolder${folderDeleteInfo.folderCount === 1 ? "" : "s"}`
                         : ""
@@ -535,8 +436,8 @@ export function RequestList() {
                 onClick={() => {
                   if (pendingDelete?.kind === "folder") {
                     removeFolder(pendingDelete.folder.id)
-                  } else if (pendingDelete?.kind === "request") {
-                    remove(pendingDelete.request.id)
+                  } else if (pendingDelete?.kind === "note") {
+                    remove(pendingDelete.note.id)
                   }
                   setPendingDelete(null)
                 }}
@@ -546,45 +447,27 @@ export function RequestList() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-
-        {importTarget !== undefined && (
-          <ApiImportDialog
-            initialFolderId={importTarget}
-            onClose={() => setImportTarget(undefined)}
-          />
-        )}
       </div>
 
       {menuTarget && (
         <ContextMenuContent className="w-48">
-          {menuTarget.kind === "request" && (
+          {menuTarget.kind === "note" && (
             <>
-              <ContextMenuItem onClick={() => setRenaming(menuTarget.request)}>
+              <ContextMenuItem onClick={() => setRenaming(menuTarget.note)}>
                 <Pencil />
                 Rename…
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => duplicate(menuTarget.request.id)}>
+              <ContextMenuItem
+                onClick={() => void duplicate(menuTarget.note.id)}
+              >
                 <CopyPlus />
                 Duplicate
-              </ContextMenuItem>
-              <ContextMenuItem
-                onClick={() =>
-                  void navigator.clipboard.writeText(
-                    resolveUrl(menuTarget.request.url, variables).url
-                  )
-                }
-              >
-                <Copy />
-                Copy URL
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem
                 variant="destructive"
                 onClick={() =>
-                  setPendingDelete({
-                    kind: "request",
-                    request: menuTarget.request,
-                  })
+                  setPendingDelete({ kind: "note", note: menuTarget.note })
                 }
               >
                 <Trash2 />
@@ -599,7 +482,7 @@ export function RequestList() {
                 onClick={() => void create(menuTarget.folder.id)}
               >
                 <Plus />
-                New request
+                New note
               </ContextMenuItem>
               <ContextMenuItem
                 onClick={() => createFolder(menuTarget.folder.id)}
@@ -608,20 +491,10 @@ export function RequestList() {
                 New folder
               </ContextMenuItem>
               <ContextMenuItem
-                onClick={() => setImportTarget(menuTarget.folder.id)}
-              >
-                <Sparkles />
-                AI import…
-              </ContextMenuItem>
-              <ContextMenuItem
                 onClick={() => setRenamingFolder(menuTarget.folder)}
               >
                 <Pencil />
                 Rename…
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => select(menuTarget.folder.id)}>
-                <Settings2 />
-                Settings
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem
@@ -643,15 +516,11 @@ export function RequestList() {
             <>
               <ContextMenuItem onClick={() => void create(null)}>
                 <Plus />
-                New request
+                New note
               </ContextMenuItem>
               <ContextMenuItem onClick={() => createFolder(null)}>
                 <FolderPlus />
                 New folder
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => setImportTarget(null)}>
-                <Sparkles />
-                AI import…
               </ContextMenuItem>
             </>
           )}

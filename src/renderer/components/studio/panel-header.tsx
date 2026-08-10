@@ -13,6 +13,7 @@ const ACCENT_BY_TITLE: Record<string, Section> = {
   Mail: "mail",
   Webhooks: "webhook",
   Terminal: "terminal",
+  Notes: "note",
 }
 
 /**

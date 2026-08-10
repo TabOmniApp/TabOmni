@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 
 import { useDatabases } from "@/lib/db/databases-store"
 import { useInbox } from "@/lib/inbox/store"
+import { useNotes } from "@/lib/note/store"
 import { useTerminal } from "@/lib/terminal/store"
 import { useRail } from "@/lib/rail"
 import { useStudio, type Pane } from "@/lib/store"
@@ -21,6 +22,8 @@ import { DatabaseWorkspace } from "./db/database-workspace"
 import { AddFolderDialog } from "./add-folder-dialog"
 import { CaptureList } from "./inbox/capture-list"
 import { CaptureWorkspace } from "./inbox/capture-workspace"
+import { NoteList } from "./note/note-list"
+import { NoteWorkspace } from "./note/note-workspace"
 import { NothingOpen } from "./nothing-open"
 import { SystemBar } from "./system-bar"
 import {
@@ -49,15 +52,19 @@ export function Studio() {
   const [launch, setLaunch] = useState<Launch>("splash")
 
   // Everything the studio holds belongs to the one workspace, so this is the
-  // only moment it is read. The two here rather than in their own panels are
+  // only moment it is read. The three here rather than in their own panels are
   // the ones that matter before the panel is opened: the rail's unread badges
-  // come from the inbox, and the databases feed the tree the app starts on.
+  // come from the inbox, the databases feed the tree the app starts on, and a
+  // note is the one thing whose *tab* can be restored onto a pane whose sidebar
+  // is not the one showing — the strip cannot draw a tab for a note it has
+  // never read.
   useEffect(() => {
     void useStudio.getState().init()
     void useTerminal.getState().restore()
     void useRail.getState().restore()
     void useDatabases.getState().refresh()
     void useInbox.getState().refresh()
+    void useNotes.getState().refresh()
   }, [])
 
   /*
@@ -170,6 +177,8 @@ function Workbench() {
               <CaptureList server="mail" />
             ) : section === "webhook" ? (
               <CaptureList server="webhook" />
+            ) : section === "note" ? (
+              <NoteList />
             ) : (
               <TerminalSidebar onAddFolder={() => setAdding(true)} />
             )}
@@ -213,6 +222,8 @@ function Workbench() {
                     <CaptureWorkspace server="mail" />
                   ) : pane === "webhook" ? (
                     <CaptureWorkspace server="webhook" />
+                  ) : pane === "note" ? (
+                    <NoteWorkspace />
                   ) : (
                     <ApiWorkspace />
                   )}
