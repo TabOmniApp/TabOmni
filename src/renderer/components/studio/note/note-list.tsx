@@ -20,8 +20,18 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Empty,
   EmptyDescription,
@@ -29,23 +39,28 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import {
+  BookmarkPlus,
   ChevronDown,
   ChevronRight,
   CopyPlus,
   FileText,
   Folder,
   FolderPlus,
+  LayoutTemplate,
   NotebookPen,
   Pencil,
   Plus,
+  Settings2,
   Trash2,
 } from "lucide-react"
 
-import type { NoteFolder, NoteRecord } from "@shared/api"
+import type { NoteFolder, NoteRecord, NoteTemplate } from "@shared/api"
 import { useNotes } from "@/lib/note/store"
+import { useNoteTemplates } from "@/lib/note/templates"
 import {
   buildTree,
   deleteImpact,
@@ -56,6 +71,57 @@ import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
 import { RenameDialog } from "../db/rename-dialog"
 import { SideRow } from "../side-row"
+import { ManageTemplatesDialog } from "./manage-templates-dialog"
+
+/** A template in a menu: what it is called, and the line saying what it is
+ * for. The description is what makes a list of four names worth reading. */
+function TemplateLabel({ template }: { template: NoteTemplate }) {
+  return (
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate">{template.name}</span>
+      {template.description && (
+        <span className="truncate text-[0.65rem] text-muted-foreground">
+          {template.description}
+        </span>
+      )}
+    </span>
+  )
+}
+
+/**
+ * "New from template" on a right-click, for a folder or for the top level.
+ *
+ * Nothing at all when there are no templates: a submenu that opens onto an
+ * empty list is a dead end, and the header's own menu is where templates are
+ * made.
+ */
+function TemplateSubmenu({
+  templates,
+  onPick,
+}: {
+  templates: NoteTemplate[]
+  onPick: (templateId: string) => void
+}) {
+  if (templates.length === 0) return null
+  return (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger>
+        <LayoutTemplate />
+        New from template
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent className="w-56">
+        {templates.map((template) => (
+          <ContextMenuItem
+            key={template.id}
+            onClick={() => onPick(template.id)}
+          >
+            <TemplateLabel template={template} />
+          </ContextMenuItem>
+        ))}
+      </ContextMenuSubContent>
+    </ContextMenuSub>
+  )
+}
 
 /** What the context menu was opened on — a note, a folder row, or the empty
  * area of the list itself. */
@@ -86,6 +152,8 @@ export function NoteList() {
   const selectedId = useNotes((state) => state.selectedId)
   const refresh = useNotes((state) => state.refresh)
   const create = useNotes((state) => state.create)
+  const createFromTemplate = useNotes((state) => state.createFromTemplate)
+  const saveAsTemplate = useNotes((state) => state.saveAsTemplate)
   const rename = useNotes((state) => state.rename)
   const duplicate = useNotes((state) => state.duplicate)
   const remove = useNotes((state) => state.remove)
@@ -96,6 +164,9 @@ export function NoteList() {
   const removeFolder = useNotes((state) => state.removeFolder)
   const moveFolder = useNotes((state) => state.moveFolder)
 
+  const templates = useNoteTemplates((state) => state.templates)
+  const refreshTemplates = useNoteTemplates((state) => state.refresh)
+
   const [query, setQuery] = useState("")
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null)
   const [renaming, setRenaming] = useState<NoteRecord | null>(null)
@@ -105,10 +176,19 @@ export function NoteList() {
   const [dragItem, setDragItem] = useState<DragItem | null>(null)
   const [dropFolderId, setDropFolderId] = useState<string | null>(null)
   const [dropRoot, setDropRoot] = useState(false)
+  /** The manage dialog, and which template it should open on — `null` when it
+   * is closed, since "open on nothing in particular" is a value too. */
+  const [managing, setManaging] = useState<{ initialId: string | null } | null>(
+    null
+  )
 
   useEffect(() => {
     void refresh()
-  }, [refresh])
+    // The templates are read here rather than in the dialog alone: the menus
+    // below list them, so the panel needs them before anything is opened. The
+    // read is also what seeds the presets into a workspace that has none.
+    void refreshTemplates()
+  }, [refresh, refreshTemplates])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -308,9 +388,42 @@ export function NoteList() {
     <ContextMenu>
       <div className="flex h-full flex-col">
         <PanelHeader title="Notes">
+          {/* Still one click for a blank note: that is what the button was for
+              and what it is asked for most. Starting from a template is the
+              deliberate choice, so it is the one that opens a menu. */}
           <IconButton label="New note" onClick={() => void create()}>
             <Plus />
           </IconButton>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="New note from template"
+                >
+                  <LayoutTemplate />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="w-56">
+              {templates.map((template) => (
+                <DropdownMenuItem
+                  key={template.id}
+                  onClick={() => void createFromTemplate(template.id, null)}
+                >
+                  <TemplateLabel template={template} />
+                </DropdownMenuItem>
+              ))}
+              {templates.length > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuItem
+                onClick={() => setManaging({ initialId: null })}
+              >
+                <Settings2 />
+                Manage templates…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <IconButton label="New folder" onClick={() => createFolder(null)}>
             <FolderPlus />
           </IconButton>
@@ -375,6 +488,13 @@ export function NoteList() {
             )}
           </ContextMenuTrigger>
         </div>
+
+        {managing && (
+          <ManageTemplatesDialog
+            initialTemplateId={managing.initialId}
+            onClose={() => setManaging(null)}
+          />
+        )}
 
         {renaming && (
           <RenameDialog
@@ -463,6 +583,19 @@ export function NoteList() {
                 <CopyPlus />
                 Duplicate
               </ContextMenuItem>
+              {/* Opens the manage dialog on the template it just made, because
+                  the name it inherits is the note's and is rarely the right one
+                  for a template. */}
+              <ContextMenuItem
+                onClick={() =>
+                  void saveAsTemplate(menuTarget.note.id).then((id) => {
+                    if (id) setManaging({ initialId: id })
+                  })
+                }
+              >
+                <BookmarkPlus />
+                Save as template…
+              </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem
                 variant="destructive"
@@ -484,6 +617,12 @@ export function NoteList() {
                 <Plus />
                 New note
               </ContextMenuItem>
+              <TemplateSubmenu
+                templates={templates}
+                onPick={(templateId) =>
+                  void createFromTemplate(templateId, menuTarget.folder.id)
+                }
+              />
               <ContextMenuItem
                 onClick={() => createFolder(menuTarget.folder.id)}
               >
@@ -518,6 +657,10 @@ export function NoteList() {
                 <Plus />
                 New note
               </ContextMenuItem>
+              <TemplateSubmenu
+                templates={templates}
+                onPick={(templateId) => void createFromTemplate(templateId)}
+              />
               <ContextMenuItem onClick={() => createFolder(null)}>
                 <FolderPlus />
                 New folder

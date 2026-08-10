@@ -34,6 +34,8 @@ for; the manifest records an absolute path and the files stay yours.
     notes.json      the Notes panel's listing
     note-folders.json
     notes/<note-id>.md   one note's own markdown
+    note-templates.json  the text a new note can start from
+    note-templates/<template-id>.md
     db/<db-id>/     one Docker-managed database's own data
 ```
 
@@ -604,7 +606,42 @@ The editor is keyed on the note id and rebuilt when the tab changes: Crepe takes
 its content once, at construction, and has no "load this instead". The pane
 waits for the file rather than mounting empty and filling in, which would put a
 document nobody typed through ProseMirror's history and make one undo empty the
-note.
+note. Both of those live in `markdown-editor.tsx` rather than in the note pane,
+because the templates below are the same editor over a different file.
+
+### Templates
+
+A template is the text a new note starts from — the headings a meeting always
+needs, the fields a bug report is useless without. They are made from the
+`LayoutTemplate` button in the panel header, from **New from template** on a
+right-click, and from **Save as template** on a note that turned out to be worth
+starting from again.
+
+**A template is not a note with a flag on it.** It has no folder, no tab and no
+place in the strip, and nothing accumulates them the way work accumulates notes.
+Filing both in `notes.json` would mean every read of the notes remembering to
+filter, and one forgotten filter is a template showing up as a note. So it is
+its own listing and its own directory, `note-templates.json` and
+`note-templates/<id>.md`, split for the same two reasons a note's body is split
+from its listing.
+
+What it _is_ is the same markdown, which is why the manage dialog's right-hand
+pane is the note pane's own editor — same block menu, same tables, same
+drawings — and why a name typed there is saved on the same 400ms delay as the
+text, flushed when the dialog closes rather than confirmed with a button.
+
+A drawing in a template is **copied** into every note made from it
+(`cloneDrawingsIn`, the same call `duplicate` leans on), and copied again on the
+way in when a note is saved as a template. Sharing the scene would mean every
+note made from one template drew on a single canvas, and deleting any of them
+took that canvas from all the others.
+
+**Four presets are seeded once** — meeting notes, a bug repro, an API endpoint,
+a decision record — on the first read of a workspace that has no templates. From
+that moment they are ordinary templates: renameable, editable, and gone for good
+when deleted. The guard is a settings flag rather than "is the list empty",
+because deleting every template is a thing someone may mean, and an empty list is
+the one state that would bring the presets back on the next launch.
 
 ### Drawings
 
