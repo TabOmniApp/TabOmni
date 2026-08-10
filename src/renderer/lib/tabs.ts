@@ -14,6 +14,7 @@ export const PREFIX: Record<Pane, string> = {
   mail: "mail:",
   webhook: "hook:",
   terminal: "term:",
+  note: "note:",
 }
 
 export function kindOf(id: string): Pane | null {
@@ -22,6 +23,7 @@ export function kindOf(id: string): Pane | null {
   if (id.startsWith(PREFIX.mail)) return "mail"
   if (id.startsWith(PREFIX.webhook)) return "webhook"
   if (id.startsWith(PREFIX.terminal)) return "terminal"
+  if (id.startsWith(PREFIX.note)) return "note"
   return null
 }
 

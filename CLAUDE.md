@@ -150,11 +150,31 @@ bring. See the Motion section of `docs/design.md`.
 `bunx shadcn@latest add dialog`. Vite's root is `src/renderer`, so `index.html`
 and `public/` are there too.
 
-The activity rail is Database, API, Mail, Webhooks and Terminal, and
+The activity rail is Database, API, Mail, Webhooks, Terminal and Notes, and
 `components/studio/activity-bar.tsx` is the one list that says so. There is no
 git panel, no code search and no specs panel: all three were removed rather
 than left hidden, and the only thing git is still asked is each folder's branch
 name, shown beside the folder in the Terminal sidebar.
+
+Notes is a workspace-wide scratchpad — folders and markdown files, filed and
+right-clicked the way the API panel's requests are. `lib/tree.ts` is the tree
+both sidebars are built from (nesting, the drag-reparent cycle guard, the
+delete count); `lib/http/folders.ts` delegates to it and keeps only the
+cascading headers and params that are the API panel's own. A note's listing is
+`notes.json` and its text is `notes/<id>.md` beside it, so typing rewrites one
+note rather than all of them and what is left on disk is readable without this
+app. The editor is Crepe — the same Milkdown editor as the chat composer, and
+themed by the same `milkdown-theme.css`, so it follows the theme toggle without
+a second palette. See the Notes section of `docs/design.md` before changing it.
+
+`/drawing` in a note opens an Excalidraw canvas — shapes, arrows, freehand,
+images — in a dialog, and leaves the finished drawing in the note as an exported
+SVG. The scene is its own `workspace/drawings/<id>.excalidraw` file and the note
+holds only the id, in a ```drawing fence; `drawing-node.ts` is the ProseMirror
+node behind that fence, and the comment on
+`keepDrawingFencesOutOfCodeBlocks` is the one thing to read before touching it.
+Excalidraw is loaded on demand and its fonts are served by this app rather than
+from a CDN — see the `excalidraw-fonts` plugin in `vite.config.ts`.
 
 The workspace's folders are listed, added and removed in that same sidebar
 (`components/studio/terminal/terminal-sidebar.tsx`), rather than in a menu of

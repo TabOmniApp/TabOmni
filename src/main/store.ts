@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises"
+import {
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises"
 import path from "node:path"
 
 import type {
@@ -11,6 +18,8 @@ import type {
   HttpFolder,
   HttpRequestRecord,
   InboxMessage,
+  NoteFolder,
+  NoteRecord,
   UpdateDatabaseInput,
   WorkspaceFolder,
   WorkspaceRecord,
@@ -100,6 +109,44 @@ export const FOLDERS_FILE = "folders.json"
  * slowest thing the panel did.
  */
 export const INBOX_FILE = "inbox.json"
+
+/** The workspace's notes — their listing; each body is a file of its own. */
+export const NOTES_FILE = "notes.json"
+
+/** The groups those notes are filed under. */
+export const NOTE_FOLDERS_FILE = "note-folders.json"
+
+/**
+ * Where each note's markdown is kept, one `<id>.md` per note.
+ *
+ * Apart from the listing so that typing into a note rewrites only that note:
+ * a body inline in `notes.json` would mean rewriting every note's text on
+ * every keystroke in one of them. It also leaves a directory of plain markdown
+ * that grep, an editor or git can read without going through this app.
+ */
+export const NOTES_DIR = "notes"
+
+/**
+ * Where a note's drawings are kept, one `<id>.excalidraw` per drawing.
+ *
+ * Beside the notes rather than under one of them: the file is Excalidraw's own
+ * format, and a flat directory of them is something the editor's own app can
+ * open. The note keeps only the id, in a fenced block.
+ */
+export const DRAWINGS_DIR = "drawings"
+
+/**
+ * A renderer-generated id, checked before it becomes a filename.
+ *
+ * Notes and drawings are both created with `crypto.randomUUID()`, and anything
+ * that is not that shape is refused — which is what keeps a `../` in an id from
+ * naming a file outside the workspace. An id is not a name the user typed, and
+ * it must not be able to become one.
+ */
+function ownId(id: string): string {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error(`Not an id: ${id}`)
+  return id
+}
 
 type Manifest = {
   workspace: WorkspaceRecord
@@ -494,6 +541,96 @@ export class Store {
 
   saveCookies(cookies: HttpCookie[]): Promise<void> {
     return this.writeList(COOKIES_FILE, cookies)
+  }
+
+  listNotes(): Promise<NoteRecord[]> {
+    return this.readList(NOTES_FILE)
+  }
+
+  saveNotes(notes: NoteRecord[]): Promise<void> {
+    return this.writeList(NOTES_FILE, notes)
+  }
+
+  listNoteFolders(): Promise<NoteFolder[]> {
+    return this.readList(NOTE_FOLDERS_FILE)
+  }
+
+  saveNoteFolders(folders: NoteFolder[]): Promise<void> {
+    return this.writeList(NOTE_FOLDERS_FILE, folders)
+  }
+
+  /** A note's markdown, or "" for one that has never been written to. */
+  readNote(id: string): Promise<string> {
+    return this.readOwnFile(this.noteBodyPath(id))
+  }
+
+  writeNote(id: string, markdown: string): Promise<void> {
+    return this.writeOwnFile(this.noteBodyPath(id), markdown)
+  }
+
+  /** Removes those notes' bodies. A body that was never written is not an
+   * error — a note deleted before anything was typed into it has no file. */
+  deleteNotes(ids: string[]): Promise<void> {
+    return this.deleteOwnFiles(ids.map((id) => this.noteBodyPath(id)))
+  }
+
+  /** A drawing's scene, or "" for one that has never been saved. */
+  readDrawing(id: string): Promise<string> {
+    return this.readOwnFile(this.drawingPath(id))
+  }
+
+  writeDrawing(id: string, scene: string): Promise<void> {
+    return this.writeOwnFile(this.drawingPath(id), scene)
+  }
+
+  deleteDrawings(ids: string[]): Promise<void> {
+    return this.deleteOwnFiles(ids.map((id) => this.drawingPath(id)))
+  }
+
+  /** One note's markdown. */
+  private noteBodyPath(id: string): string {
+    return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.md`)
+  }
+
+  /** One drawing's scene, in Excalidraw's own file format. */
+  private drawingPath(id: string): string {
+    return path.join(this.workspaceDir, DRAWINGS_DIR, `${ownId(id)}.excalidraw`)
+  }
+
+  /** One of the workspace's own per-record files, or "" when it does not
+   * exist yet — which is every one of them until something is written. */
+  private readOwnFile(file: string): Promise<string> {
+    return this.enqueue(async () => {
+      try {
+        return await readFile(file, "utf8")
+      } catch (error) {
+        if (isNotFound(error)) return ""
+        throw error
+      }
+    })
+  }
+
+  private writeOwnFile(file: string, contents: string): Promise<void> {
+    return this.enqueue(async () => {
+      await mkdir(path.dirname(file), { recursive: true })
+      await writeFile(file, contents, "utf8")
+    })
+  }
+
+  /** A file that was never written is not an error — a note deleted before
+   * anything was typed into it has none. */
+  private deleteOwnFiles(files: string[]): Promise<void> {
+    return this.enqueue(async () => {
+      await Promise.all(
+        files.map(async (file) => {
+          try {
+            await rm(file)
+          } catch (error) {
+            if (!isNotFound(error)) throw error
+          }
+        })
+      )
+    })
   }
 
   listInbox(): Promise<InboxMessage[]> {

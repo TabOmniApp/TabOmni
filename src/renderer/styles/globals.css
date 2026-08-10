@@ -115,6 +115,9 @@
   --section-mail: oklch(0.6 0.16 115);
   --section-webhook: oklch(0.58 0.2 350);
   --section-terminal: oklch(0.56 0.14 160);
+  /* Notes takes the amber nobody else had: its nearest neighbour is Mail at
+       115, and it sits below Terminal on the rail, 95 away. */
+  --section-note: oklch(0.58 0.15 65);
 
   --chart-1: oklch(0.55 0.22 285);
   --chart-2: oklch(0.58 0.21 320);
@@ -169,6 +172,7 @@
   --section-mail: oklch(0.76 0.16 115);
   --section-webhook: oklch(0.72 0.18 350);
   --section-terminal: oklch(0.74 0.14 160);
+  --section-note: oklch(0.76 0.14 65);
 
   --chart-1: oklch(0.7 0.19 285);
   --chart-2: oklch(0.72 0.18 320);

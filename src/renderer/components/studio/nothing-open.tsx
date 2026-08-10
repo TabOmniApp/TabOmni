@@ -21,6 +21,7 @@ const HINTS: Record<Section, string> = {
   mail: "Mail caught by the SMTP sink on the left opens here.",
   webhook: "Callbacks caught by the endpoint on the left open here.",
   terminal: "Start a session with + on the left — a shell, or Claude Code.",
+  note: "Pick a note from the list on the left, or write a new one.",
 }
 
 /**

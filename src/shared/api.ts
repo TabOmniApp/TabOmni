@@ -636,6 +636,55 @@ export type HttpResponseResult = {
 }
 
 /**
+ * A group of notes, nested arbitrarily deep.
+ *
+ * Shaped like `HttpFolder` minus the cascading headers and params, because a
+ * note folder inherits nothing down the tree — it is a place to put things and
+ * not a set of defaults. Kept as its own type rather than a shared "folder" so
+ * that giving one of the two panels something the other has no use for does
+ * not mean widening a record both of them store.
+ */
+export type NoteFolder = {
+  id: string
+  name: string
+  /** The folder it sits in, or `null` at the top level. */
+  parentId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * One note in the workspace — its listing, not its text.
+ *
+ * The body lives beside the manifest as its own `.md` file (see
+ * `store.ts`'s `NOTES_DIR`) rather than inline here, for two reasons: a note
+ * grows without bound and this list is rewritten whenever anything is renamed
+ * or moved, and a directory of markdown files is something the user can grep,
+ * open in an editor, or put under version control without this app's help.
+ */
+export type NoteRecord = {
+  id: string
+  name: string
+  /** The note folder it is filed under, or `null` at the top level. Not a
+   * workspace folder — notes belong to the workspace, not to a repository. */
+  folderId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * The language a note's fenced block carries when it holds a drawing.
+ *
+ * A drawing is a scene of shapes and images, which markdown has no syntax for,
+ * so the note keeps only the id and the scene lives in its own file. A fence is
+ * what that id travels in: it round-trips through any markdown parser
+ * untouched, and a plain reader sees a short code block rather than a wall of
+ * JSON. Shared because the renderer writes these and the store deletes the
+ * files behind them.
+ */
+export const DRAWING_LANGUAGE = "drawing"
+
+/**
  * Which of the Inbox panel's two servers caught something.
  *
  * One panel rather than two because they are the same job seen from both
@@ -963,6 +1012,36 @@ export type DesktopApi = {
   listCookies: () => Promise<HttpCookie[]>
   saveCookies: (cookies: HttpCookie[]) => Promise<void>
 
+  /** Every note in the workspace, and the folders they are filed under —
+   * their listings only; a body is read one at a time. */
+  listNotes: () => Promise<NoteRecord[]>
+  saveNotes: (notes: NoteRecord[]) => Promise<void>
+  listNoteFolders: () => Promise<NoteFolder[]>
+  saveNoteFolders: (folders: NoteFolder[]) => Promise<void>
+
+  /** One note's markdown. Empty for a note whose file does not exist yet —
+   * which is every note until the first thing is typed into it. */
+  readNote: (id: string) => Promise<string>
+  writeNote: (id: string, markdown: string) => Promise<void>
+  /** Deletes those notes' bodies. Takes a list because deleting a folder
+   * takes every note under it, and one call is one pass over the directory. */
+  deleteNotes: (ids: string[]) => Promise<void>
+
+  /**
+   * One drawing's scene, as the text of its `.excalidraw` file — Excalidraw's
+   * own format, so a scene can be opened at excalidraw.com or in the editor's
+   * desktop app without this studio.
+   *
+   * Text rather than a parsed object: the main process only stores it, and a
+   * type here would be this app's second opinion about a schema Excalidraw
+   * owns. Empty for a drawing that has never been saved.
+   */
+  readDrawing: (id: string) => Promise<string>
+  writeDrawing: (id: string, scene: string) => Promise<void>
+  /** Deletes those drawings' scenes — what deleting the note holding them
+   * takes with it. */
+  deleteDrawings: (ids: string[]) => Promise<void>
+
   /**
    * Sends one request from the main process rather than the renderer, which
    * puts it outside the page's origin: no CORS preflight, no cookie jar, and
@@ -1163,6 +1242,16 @@ export const IPC = {
   listCookies: "http:list-cookies",
   saveCookies: "http:save-cookies",
   httpSend: "http:send",
+  listNotes: "notes:list",
+  saveNotes: "notes:save",
+  listNoteFolders: "notes:list-folders",
+  saveNoteFolders: "notes:save-folders",
+  readNote: "notes:read",
+  writeNote: "notes:write",
+  deleteNotes: "notes:delete",
+  readDrawing: "drawings:read",
+  writeDrawing: "drawings:write",
+  deleteDrawings: "drawings:delete",
   inboxStart: "inbox:start",
   inboxStop: "inbox:stop",
   inboxStatus: "inbox:status",
