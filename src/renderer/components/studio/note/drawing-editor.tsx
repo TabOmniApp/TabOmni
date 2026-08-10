@@ -43,6 +43,8 @@ type ExcalidrawApi = {
   getSceneElements: () => readonly unknown[]
   getAppState: () => Record<string, unknown>
   getFiles: () => Record<string, unknown>
+  /** Re-measures where the canvas sits on screen — see `settleOffsets` below. */
+  refresh: () => void
 }
 
 /**
@@ -75,6 +77,30 @@ export function DrawingEditor({
       cancelled = true
     }
   }, [drawingId])
+
+  /**
+   * Excalidraw measures the rect its canvas occupies once, when it mounts, and
+   * every pointer event afterwards is read against that one measurement. The
+   * dialog arrives on a `zoom-in-95` animation, so a canvas that mounts while
+   * that is still running measures a box 5% too small and still moving, and
+   * from then on the cursor and the shape under it are apart — a click at
+   * (50, 50) landing at (47, 47), the whole canvas off by the scale.
+   *
+   * Which is why it was the *second* drawing that was wrong and never the
+   * first: the first opening pays for the megabyte of editor below, which
+   * outlasts the animation by an order of magnitude, so it mounts into a box
+   * that has long since settled. Once that chunk and its CSS are cached, the
+   * mount wins the race instead.
+   *
+   * Re-measuring when the animation ends covers both orders — whichever of the
+   * two got there first, this runs after the box has stopped moving. It fires
+   * on the closing animation too, and on any of Excalidraw's own UI animations
+   * were the target not checked; a refresh costs one `getBoundingClientRect`,
+   * but the check keeps it to the one element whose size is the question.
+   */
+  function settleOffsets(event: React.AnimationEvent<HTMLElement>) {
+    if (event.target === event.currentTarget) api.current?.refresh()
+  }
 
   async function save() {
     const editor = api.current
@@ -109,7 +135,10 @@ export function DrawingEditor({
       {/* Far larger than the dialog's own default: this is a canvas, and one
           sized like a form would be a worse place to draw than a sheet of
           paper. */}
-      <DialogContent className="flex h-[88vh] w-[92vw] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+      <DialogContent
+        className="flex h-[88vh] w-[92vw] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+        onAnimationEnd={settleOffsets}
+      >
         <DialogHeader className="shrink-0 border-b px-4 py-3">
           <DialogTitle className="text-sm">Drawing</DialogTitle>
         </DialogHeader>
