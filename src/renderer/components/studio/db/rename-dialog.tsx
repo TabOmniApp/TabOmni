@@ -1,8 +1,9 @@
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -19,12 +20,17 @@ import { Input } from "@/components/ui/input"
  */
 export function RenameDialog({
   title,
+  description,
   label,
   currentName,
   onRename,
   onClose,
 }: {
   title: string
+  /** For a rename whose reach is not obvious — a workspace folder's name is
+   * the studio's own label and not the directory on disk, and the dialog is
+   * where that has to be said. */
+  description?: ReactNode
   /** The accessible name for the field, e.g. "Table name". */
   label: string
   currentName: string
@@ -58,6 +64,7 @@ export function RenameDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
+          {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
         <form onSubmit={submit} className="space-y-3">
           <Input

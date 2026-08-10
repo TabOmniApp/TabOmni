@@ -129,10 +129,43 @@ async function readShellPath(): Promise<string | null> {
   }
 }
 
+/** Markers a running `claude` exports for whatever it spawns, none of which
+ * any shell profile sets. */
+const AGENT_SESSION_VARS = new Set([
+  "CLAUDECODE",
+  "CLAUDE_PID",
+  "CLAUDE_EFFORT",
+  "CLAUDE_TMPDIR",
+])
+
+/**
+ * The same environment without the marks of an agent session that spawned us.
+ *
+ * Launching the app from inside a `claude` session — `bun dev` run by an agent,
+ * which is how this app tends to get built — leaks those marks the whole way
+ * down: agent → Electron → daemon → pty → the `claude` the user just opened in
+ * the Terminal panel. The CLI reads `CLAUDE_CODE_CHILD_SESSION`, decides it is
+ * a nested run of itself, and stops writing a transcript. That is not the
+ * cosmetic warning it looks like: the chat view is a tail of that transcript,
+ * so it stays empty for the entire session.
+ *
+ * Stripped rather than overridden, because the pty is a login shell: anything
+ * the user genuinely configured in their own profile is exported again a
+ * moment later, and only what was inherited is lost.
+ */
+export function withoutAgentSession<T extends NodeJS.ProcessEnv>(env: T): T {
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("CLAUDE_CODE_") || AGENT_SESSION_VARS.has(key)) {
+      delete env[key]
+    }
+  }
+  return env
+}
+
 export function environment(
   extra: Record<string, string> = {}
 ): Record<string, string | undefined> {
-  const env = { ...process.env }
+  const env = withoutAgentSession({ ...process.env })
 
   // Set for Electron's own child processes; inside a shell it would make any
   // `electron` the user runs behave as a bare Node instead.

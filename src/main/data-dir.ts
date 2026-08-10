@@ -12,8 +12,8 @@ import path from "node:path"
 export const DATA_DIR_NAME = ".tabula"
 
 /**
- * `TABULA_DATA_DIR` moves the whole tree — projects, manifest and the
- * agent settings alike.
+ * `TABULA_DATA_DIR` moves the whole tree — the manifest, the workspace's own
+ * files and the agent settings alike.
  *
  * Read on every call rather than captured once, so that a test can point it
  * somewhere disposable before the first read. That is not a detail: the

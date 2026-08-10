@@ -35,9 +35,10 @@ const api: DesktopApi = {
   // `process.platform` is one of the few things a sandboxed preload still has.
   platform: process.platform as DesktopApi["platform"],
 
-  listProjects: () => ipcRenderer.invoke(IPC.listProjects),
-  renameProject: (id, name) => ipcRenderer.invoke(IPC.renameProject, id, name),
-  deleteProject: (id) => ipcRenderer.invoke(IPC.deleteProject, id),
+  getWorkspace: () => ipcRenderer.invoke(IPC.getWorkspace),
+  addFolder: (input) => ipcRenderer.invoke(IPC.addFolder, input),
+  renameFolder: (id, name) => ipcRenderer.invoke(IPC.renameFolder, id, name),
+  removeFolder: (id) => ipcRenderer.invoke(IPC.removeFolder, id),
 
   pickDirectory: () => ipcRenderer.invoke(IPC.pickDirectory),
   pickImages: () => ipcRenderer.invoke(IPC.pickImages),
@@ -45,19 +46,17 @@ const api: DesktopApi = {
   // `File` from inside the preload's own privileged context.
   getPathForFile: (file) => webUtils.getPathForFile(file),
   readImageDataUrl: (path) => ipcRenderer.invoke(IPC.readImageDataUrl, path),
-  importProject: (input) => ipcRenderer.invoke(IPC.importProject, input),
+  clipboardImagePath: () => ipcRenderer.invoke(IPC.clipboardImagePath),
 
   onMenuCommand: (listener) =>
     subscribe<MenuCommand>(IPC.menuCommand, listener),
-  setMenuState: (state) => ipcRenderer.invoke(IPC.menuState, state),
 
   dockerStatus: () => ipcRenderer.invoke(IPC.dockerStatus),
 
-  aiFilter: (projectId, request, columns) =>
-    ipcRenderer.invoke(IPC.aiFilter, projectId, request, columns),
-  aiImportApi: (projectId) => ipcRenderer.invoke(IPC.aiImportApi, projectId),
-  listDatabases: (projectId) =>
-    ipcRenderer.invoke(IPC.listDatabases, projectId),
+  aiFilter: (request, columns) =>
+    ipcRenderer.invoke(IPC.aiFilter, request, columns),
+  aiImportApi: (folderId) => ipcRenderer.invoke(IPC.aiImportApi, folderId),
+  listDatabases: () => ipcRenderer.invoke(IPC.listDatabases),
   createDatabase: (input) => ipcRenderer.invoke(IPC.createDatabase, input),
   updateDatabase: (id, input) =>
     ipcRenderer.invoke(IPC.updateDatabase, id, input),
@@ -65,25 +64,7 @@ const api: DesktopApi = {
   testDatabaseConnection: (input) =>
     ipcRenderer.invoke(IPC.testDatabaseConnection, input),
 
-  listFiles: (projectId) => ipcRenderer.invoke(IPC.listFiles, projectId),
-  readFile: (projectId, path) =>
-    ipcRenderer.invoke(IPC.readFile, projectId, path),
-  writeFile: (projectId, path, content) =>
-    ipcRenderer.invoke(IPC.writeFile, projectId, path, content),
-  importProjectFile: (projectId, sourcePath, directory) =>
-    ipcRenderer.invoke(IPC.importProjectFile, projectId, sourcePath, directory),
-  readProjectImage: (projectId, path) =>
-    ipcRenderer.invoke(IPC.readProjectImage, projectId, path),
-  deletePath: (projectId, path) =>
-    ipcRenderer.invoke(IPC.deletePath, projectId, path),
-  createDirectory: (projectId, path) =>
-    ipcRenderer.invoke(IPC.createDirectory, projectId, path),
-  movePath: (projectId, from, to) =>
-    ipcRenderer.invoke(IPC.movePath, projectId, from, to),
-  copyPath: (projectId, from, to) =>
-    ipcRenderer.invoke(IPC.copyPath, projectId, from, to),
-
-  gitBranch: (projectId) => ipcRenderer.invoke(IPC.gitBranch, projectId),
+  gitBranch: (folderId) => ipcRenderer.invoke(IPC.gitBranch, folderId),
 
   getSetting: (key) => ipcRenderer.invoke(IPC.getSetting, key),
   setSetting: (key, value) => ipcRenderer.invoke(IPC.setSetting, key, value),
@@ -94,44 +75,35 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.dbExec, databaseId, sql, params, options),
   dbReset: (databaseId) => ipcRenderer.invoke(IPC.dbReset, databaseId),
 
-  listRequests: (projectId) => ipcRenderer.invoke(IPC.listRequests, projectId),
-  saveRequests: (projectId, requests) =>
-    ipcRenderer.invoke(IPC.saveRequests, projectId, requests),
-  listEnvironments: (projectId) =>
-    ipcRenderer.invoke(IPC.listEnvironments, projectId),
-  saveEnvironments: (projectId, environments) =>
-    ipcRenderer.invoke(IPC.saveEnvironments, projectId, environments),
-  listFolders: (projectId) => ipcRenderer.invoke(IPC.listFolders, projectId),
-  saveFolders: (projectId, folders) =>
-    ipcRenderer.invoke(IPC.saveFolders, projectId, folders),
-  listCookies: (projectId) => ipcRenderer.invoke(IPC.listCookies, projectId),
-  saveCookies: (projectId, cookies) =>
-    ipcRenderer.invoke(IPC.saveCookies, projectId, cookies),
+  listRequests: () => ipcRenderer.invoke(IPC.listRequests),
+  saveRequests: (requests) => ipcRenderer.invoke(IPC.saveRequests, requests),
+  listEnvironments: () => ipcRenderer.invoke(IPC.listEnvironments),
+  saveEnvironments: (environments) =>
+    ipcRenderer.invoke(IPC.saveEnvironments, environments),
+  listRequestFolders: () => ipcRenderer.invoke(IPC.listRequestFolders),
+  saveRequestFolders: (folders) =>
+    ipcRenderer.invoke(IPC.saveRequestFolders, folders),
+  listCookies: () => ipcRenderer.invoke(IPC.listCookies),
+  saveCookies: (cookies) => ipcRenderer.invoke(IPC.saveCookies, cookies),
   httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
 
-  inboxStart: (projectId, server, port) =>
-    ipcRenderer.invoke(IPC.inboxStart, projectId, server, port),
-  inboxStop: (projectId, server) =>
-    ipcRenderer.invoke(IPC.inboxStop, projectId, server),
-  inboxStatus: (projectId) => ipcRenderer.invoke(IPC.inboxStatus, projectId),
-  inboxMessages: (projectId) =>
-    ipcRenderer.invoke(IPC.inboxMessages, projectId),
-  inboxMarkRead: (projectId, id) =>
-    ipcRenderer.invoke(IPC.inboxMarkRead, projectId, id),
-  inboxDelete: (projectId, id) =>
-    ipcRenderer.invoke(IPC.inboxDelete, projectId, id),
-  inboxClear: (projectId, server) =>
-    ipcRenderer.invoke(IPC.inboxClear, projectId, server),
-  inboxReplay: (projectId, id, url) =>
-    ipcRenderer.invoke(IPC.inboxReplay, projectId, id, url),
+  inboxStart: (server, port) =>
+    ipcRenderer.invoke(IPC.inboxStart, server, port),
+  inboxStop: (server) => ipcRenderer.invoke(IPC.inboxStop, server),
+  inboxStatus: () => ipcRenderer.invoke(IPC.inboxStatus),
+  inboxMessages: () => ipcRenderer.invoke(IPC.inboxMessages),
+  inboxMarkRead: (id) => ipcRenderer.invoke(IPC.inboxMarkRead, id),
+  inboxDelete: (id) => ipcRenderer.invoke(IPC.inboxDelete, id),
+  inboxClear: (server) => ipcRenderer.invoke(IPC.inboxClear, server),
+  inboxReplay: (id, url) => ipcRenderer.invoke(IPC.inboxReplay, id, url),
 
   onInboxMessage: (listener) =>
     subscribe<InboxEvent>(IPC.inboxMessage, listener),
   onInboxStatus: (listener) =>
     subscribe<InboxStatusEvent>(IPC.inboxStatusChanged, listener),
 
-  startProcess: (projectId, command, args) =>
-    ipcRenderer.invoke(IPC.startProcess, projectId, command, args),
+  startProcess: (folderId, command, args) =>
+    ipcRenderer.invoke(IPC.startProcess, folderId, command, args),
   stopProcess: (processId) => ipcRenderer.invoke(IPC.stopProcess, processId),
 
   onProcessOutput: (listener) =>
@@ -142,13 +114,13 @@ const api: DesktopApi = {
   agentTools: () => ipcRenderer.invoke(IPC.agentTools),
   agentInstall: (cols, rows, kind) =>
     ipcRenderer.invoke(IPC.agentInstall, cols, rows, kind),
-  claudeCommands: (projectId) =>
-    ipcRenderer.invoke(IPC.claudeCommands, projectId),
+  claudeCommands: (folderId) =>
+    ipcRenderer.invoke(IPC.claudeCommands, folderId),
 
-  terminalCreate: (projectId, cols, rows, kind, claudeSessionId) =>
+  terminalCreate: (folderId, cols, rows, kind, claudeSessionId) =>
     ipcRenderer.invoke(
       IPC.terminalCreate,
-      projectId,
+      folderId,
       cols,
       rows,
       kind,
@@ -166,17 +138,17 @@ const api: DesktopApi = {
   onTerminalExit: (listener) =>
     subscribe<TerminalExit>(IPC.terminalExit, listener),
 
-  transcriptWatch: (mirrorId, projectId, claudeSessionId) =>
+  transcriptWatch: (mirrorId, folderId, claudeSessionId) =>
     ipcRenderer.invoke(
       IPC.transcriptWatch,
       mirrorId,
-      projectId,
+      folderId,
       claudeSessionId
     ),
   transcriptUnwatch: (mirrorId) =>
     ipcRenderer.invoke(IPC.transcriptUnwatch, mirrorId),
-  claudeListSessions: (projectId) =>
-    ipcRenderer.invoke(IPC.claudeListSessions, projectId),
+  claudeListSessions: (folderId) =>
+    ipcRenderer.invoke(IPC.claudeListSessions, folderId),
   claudeUsageLimits: () => ipcRenderer.invoke(IPC.claudeUsageLimits),
 
   onTranscriptEvent: (listener) =>

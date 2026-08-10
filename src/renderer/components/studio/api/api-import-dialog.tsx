@@ -28,12 +28,16 @@ import { METHOD_TONES } from "./request-list"
 const TOP_LEVEL = "__top-level__"
 
 /**
- * Reads the current project's source with Claude Code and proposes API
+ * Reads one of the workspace's folders with Claude Code and proposes API
  * folders/requests to add.
+ *
+ * Which folder is asked rather than assumed: the workspace holds several
+ * repositories and only one of them is the API. It defaults to the first,
+ * which is the right answer whenever there is only one.
  *
  * Proposes, never applies: what comes back sits here for the user to read
  * before Import commits it, the same rule the Data tab's AI filter follows.
- * Scanning a whole project is much slower than that filter's one-shot
+ * Scanning a whole repository is much slower than that filter's one-shot
  * answer, so the loading state says as much rather than looking hung.
  */
 export function ApiImportDialog({
@@ -45,7 +49,7 @@ export function ApiImportDialog({
    * or the top level from the panel header's button. Still editable. */
   initialFolderId?: string | null
 }) {
-  const projectId = useStudio((state) => state.projectId)
+  const workspaceFolders = useStudio((state) => state.folders)
   const folders = useApi((state) => state.folders)
   const importFromAi = useApi((state) => state.importFromAi)
 
@@ -53,19 +57,20 @@ export function ApiImportDialog({
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ApiImportResult | null>(null)
   const [targetFolderId, setTargetFolderId] = useState(initialFolderId)
+  const [sourceId, setSourceId] = useState(workspaceFolders[0]?.id ?? "")
 
   const flatFolders = useMemo(() => flattenFolders(folders), [folders])
 
   async function scan() {
-    if (!projectId) return
+    if (!sourceId) return
     setScanning(true)
     setError(null)
     setResult(null)
     try {
-      const proposed = await window.desktop.aiImportApi(projectId)
+      const proposed = await window.desktop.aiImportApi(sourceId)
       if (proposed.folders.length === 0 && proposed.requests.length === 0) {
         setError(
-          "Found nothing that looked like an HTTP endpoint in this project."
+          "Found nothing that looked like an HTTP endpoint in that folder."
         )
         return
       }
@@ -93,11 +98,42 @@ export function ApiImportDialog({
         <DialogHeader>
           <DialogTitle>AI import</DialogTitle>
           <DialogDescription>
-            Has Claude Code read this project&apos;s source — routes,
-            controllers, specs, schemas — and propose requests to add. Nothing
-            is added until you say so below.
+            Has Claude Code read a folder&apos;s source — routes, controllers,
+            specs, schemas — and propose requests to add. Nothing is added until
+            you say so below.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 text-xs text-muted-foreground">Read</span>
+          <Select
+            items={workspaceFolders.map((folder) => ({
+              value: folder.id,
+              label: folder.name,
+            }))}
+            value={sourceId}
+            onValueChange={(value) => setSourceId(String(value))}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label="Folder to read"
+              className="h-7 min-w-0 flex-1 text-xs"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              align="start"
+              alignItemWithTrigger={false}
+              className="w-auto min-w-(--anchor-width)"
+            >
+              {workspaceFolders.map((folder) => (
+                <SelectItem key={folder.id} value={folder.id}>
+                  {folder.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         <div className="flex items-center gap-2">
           <span className="shrink-0 text-xs text-muted-foreground">
@@ -143,7 +179,7 @@ export function ApiImportDialog({
         </div>
 
         {!result && (
-          <Button onClick={() => void scan()} disabled={scanning}>
+          <Button onClick={() => void scan()} disabled={scanning || !sourceId}>
             <Sparkles data-icon="inline-start" />
             {scanning
               ? "Scanning the project… this can take a couple of minutes"

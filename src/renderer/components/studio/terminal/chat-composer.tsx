@@ -37,8 +37,8 @@ import {
 } from "lucide-react"
 
 import {
-  claudeModelKey,
-  claudePermissionModeKey,
+  CLAUDE_MODEL_KEY,
+  CLAUDE_PERMISSION_MODE_KEY,
   type ClaudeModel,
   type ClaudePermissionMode,
   type ClaudeSlashCommand,
@@ -139,7 +139,7 @@ function ComposerEditor({
 
     return crepe
     // Built once and kept, with no dependency on `commands`: it reads the
-    // list through a ref, and `claudeProjectId` is fixed for as long as a
+    // list through a ref, and `claudeFolderId` is fixed for as long as a
     // session's pane exists (its kind and project cannot change under it).
     // Rebuilding the editor would throw away whatever is half-typed.
   }, [])
@@ -161,17 +161,17 @@ function ComposerEditor({
  * (often the very thing the session was asked to do) should not need a
  * restart to show up.
  */
-function useSlashCommands(projectId: string | null) {
+function useSlashCommands(folderId: string | null) {
   const commands = useRef<ClaudeSlashCommand[]>([])
   const lastFetch = useRef(0)
 
   const refresh = useCallback(() => {
-    if (projectId === null) return
+    if (folderId === null) return
     if (Date.now() - lastFetch.current < 5_000) return
     lastFetch.current = Date.now()
 
     window.desktop
-      .claudeCommands(projectId)
+      .claudeCommands(folderId)
       .then((found) => {
         commands.current = found
       })
@@ -179,19 +179,19 @@ function useSlashCommands(projectId: string | null) {
       // composer with no `/` menu is a far better answer to it than a broken
       // one — the editor itself is unaffected either way.
       .catch(() => {})
-  }, [projectId])
+  }, [folderId])
 
   useEffect(refresh, [refresh])
 
   return {
-    enabled: projectId !== null,
+    enabled: folderId !== null,
     read: useCallback(() => commands.current, []),
     refresh,
   }
 }
 
 /**
- * A project's choice of model or permission mode, remembered across runs.
+ * The workspace's choice of model or permission mode, remembered across runs.
  *
  * `applied` is what the value was when this composer mounted, which is what
  * the session running above it was started with — the main process reads
@@ -291,7 +291,7 @@ export function ChatComposer({
   disabled = false,
   busy = false,
   onInterrupt,
-  claudeProjectId = null,
+  claudeFolderId = null,
   runsSlashCommands = false,
   onApplyModel,
   onApplyPermissionMode,
@@ -311,10 +311,10 @@ export function ChatComposer({
    * composer only ever injects text into an interactive prompt, which has no
    * concept of a turn this side could ask to stop. */
   onInterrupt?: () => void
-  /** The project this is a Claude Code session for, or null for a kind that
-   * is not one. Turns on the model and permission controls, which work for
-   * any Claude session because they reach the CLI as startup flags. */
-  claudeProjectId?: string | null
+  /** The folder this is a Claude Code session for, or null for a kind that is
+   * not one. Turns on the model and permission controls, which work for any
+   * Claude session because they reach the CLI as startup flags. */
+  claudeFolderId?: string | null
   /**
    * Whether a `/…` line handed to `onSend` is *run* by the other end rather
    * than read as message text. True for a `claude` session, whose composer
@@ -350,7 +350,7 @@ export function ChatComposer({
         disabled={disabled}
         busy={busy}
         onInterrupt={onInterrupt}
-        claudeProjectId={claudeProjectId}
+        claudeFolderId={claudeFolderId}
         runsSlashCommands={runsSlashCommands}
         onApplyModel={onApplyModel}
         onApplyPermissionMode={onApplyPermissionMode}
@@ -366,7 +366,7 @@ function ComposerBody({
   disabled,
   busy,
   onInterrupt,
-  claudeProjectId,
+  claudeFolderId,
   runsSlashCommands,
   onApplyModel,
   onApplyPermissionMode,
@@ -377,7 +377,7 @@ function ComposerBody({
   disabled: boolean
   busy: boolean
   onInterrupt?: () => void
-  claudeProjectId: string | null
+  claudeFolderId: string | null
   runsSlashCommands: boolean
   onApplyModel?: (model: ClaudeModel) => void
   onApplyPermissionMode?: (mode: ClaudePermissionMode) => void
@@ -389,12 +389,12 @@ function ComposerBody({
   const [loading, getInstance] = useInstance()
 
   const model = usePersistedChoice<ClaudeModel>(
-    claudeProjectId && claudeModelKey(claudeProjectId),
+    claudeFolderId && CLAUDE_MODEL_KEY,
     CLAUDE_MODEL_IDS,
     "default"
   )
   const permission = usePersistedChoice<ClaudePermissionMode>(
-    claudeProjectId && claudePermissionModeKey(claudeProjectId),
+    claudeFolderId && CLAUDE_PERMISSION_MODE_KEY,
     CLAUDE_PERMISSION_MODE_IDS,
     "default",
     permissionMode
@@ -532,19 +532,39 @@ function ComposerBody({
   /**
    * Same reasoning as `onDrop`, for Cmd/Ctrl+V of an image (a screenshot
    * copied to the clipboard, say) instead of a dragged file — otherwise
-   * Milkdown inserts the exact same kind of dead `blob:` reference. Unlike a
-   * dropped file, pasted clipboard image data has no real path on disk to
-   * attach, so this only ever discards it — never silently lets a broken
-   * reference through. A paste that isn't an image (the overwhelmingly
-   * common case: normal text) is left alone entirely.
+   * Milkdown inserts the exact same kind of dead `blob:` reference.
+   *
+   * This used to discard the image instead of attaching it, because a
+   * screenshot carries no path: it reaches the page as a `File` that
+   * `getPathForFile` answers about with an empty string, and there was
+   * nothing to reference it by. `clipboardImagePath` is that missing half —
+   * main writes the clipboard's own bytes out under a name — so a pasted
+   * image now ends up in the state a dropped one does. A file copied in
+   * Finder still needs none of it and is attached where it already lives.
+   *
+   * A paste that isn't an image (the overwhelmingly common case: normal
+   * text) is left alone entirely.
    */
   function onPaste(event: ClipboardEvent<HTMLDivElement>) {
-    const hasImage = [...event.clipboardData.items].some((item) =>
-      item.type.startsWith("image/")
+    const image = [...event.clipboardData.items].find(
+      (item) => item.kind === "file" && item.type.startsWith("image/")
     )
-    if (!hasImage) return
+    if (!image) return
+
     event.preventDefault()
     event.stopPropagation()
+    if (disabled) return
+
+    const file = image.getAsFile()
+    const onDisk = file ? window.desktop.getPathForFile(file) : ""
+    if (onDisk) {
+      addPaths([onDisk])
+      return
+    }
+
+    void window.desktop.clipboardImagePath().then((path) => {
+      if (path) addPaths([path])
+    })
   }
 
   function send() {
@@ -620,7 +640,7 @@ function ComposerBody({
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 pt-2.5">
           <ComposerEditor
             onMarkdownChange={setText}
-            slashCommandsFor={runsSlashCommands ? claudeProjectId : null}
+            slashCommandsFor={runsSlashCommands ? claudeFolderId : null}
           />
         </div>
 
@@ -633,7 +653,7 @@ function ComposerBody({
             <Paperclip />
           </IconButton>
 
-          {runsSlashCommands && claudeProjectId !== null && (
+          {runsSlashCommands && claudeFolderId !== null && (
             <IconButton
               label="Commands and skills"
               onClick={insertSlash}
@@ -643,7 +663,7 @@ function ComposerBody({
             </IconButton>
           )}
 
-          {claudeProjectId !== null && (
+          {claudeFolderId !== null && (
             <>
               <BarSelect
                 label="Model"

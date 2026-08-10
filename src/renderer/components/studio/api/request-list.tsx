@@ -100,7 +100,10 @@ type PendingDelete =
 type DragItem = { kind: "request" | "folder"; id: string }
 
 export function RequestList() {
-  const projectId = useStudio((state) => state.projectId)
+  // Only the AI import needs this: it reads a repository's source, and there
+  // is nothing for it to read until the workspace has one. Named apart from
+  // the `folders` below, which are this panel's own groups of requests.
+  const workspaceFolders = useStudio((state) => state.folders)
   const requests = useApi((state) => state.requests)
   const selectedId = useApi((state) => state.selectedId)
   const refresh = useApi((state) => state.refresh)
@@ -138,7 +141,7 @@ export function RequestList() {
 
   useEffect(() => {
     void refresh()
-  }, [refresh, projectId])
+  }, [refresh])
 
   const variables = useMemo(
     () => variablesFrom(environments, activeEnvironmentId),
@@ -394,23 +397,18 @@ export function RequestList() {
 
           <IconButton
             label="API settings"
-            disabled={!projectId}
             onClick={() => select(SETTINGS_TAB_ID)}
           >
             <Settings2 />
           </IconButton>
 
-          <IconButton
-            label="New request"
-            disabled={!projectId}
-            onClick={() => void create()}
-          >
+          <IconButton label="New request" onClick={() => void create()}>
             <Plus />
           </IconButton>
 
           <IconButton
             label="AI import"
-            disabled={!projectId}
+            disabled={workspaceFolders.length === 0}
             onClick={() => setImportTarget(null)}
           >
             <Sparkles />
@@ -431,52 +429,50 @@ export function RequestList() {
         )}
 
         <div className="min-h-0 flex-1 overflow-auto py-1">
-          {!projectId ? null : (
-            <ContextMenuTrigger
-              render={
-                <div
-                  className="flex min-h-full flex-col"
-                  onContextMenu={onListContextMenu}
-                />
-              }
-            >
-              {!hasAnything ? (
-                <Empty className="p-4">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <Send />
-                    </EmptyMedia>
-                    <EmptyTitle>No requests</EmptyTitle>
-                    <EmptyDescription className="text-xs">
-                      Add one to call the app you are building — a path like{" "}
-                      <code className="font-mono">/api/users</code> goes to its
-                      dev server.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : showNoMatch ? (
-                <p className="px-3 py-2 text-xs text-muted-foreground">
-                  No requests match “{query.trim()}”.
-                </p>
-              ) : (
-                <ul>{renderNodes(tree, 0)}</ul>
-              )}
+          <ContextMenuTrigger
+            render={
+              <div
+                className="flex min-h-full flex-col"
+                onContextMenu={onListContextMenu}
+              />
+            }
+          >
+            {!hasAnything ? (
+              <Empty className="p-4">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Send />
+                  </EmptyMedia>
+                  <EmptyTitle>No requests</EmptyTitle>
+                  <EmptyDescription className="text-xs">
+                    Add one to call the app you are building — a path like{" "}
+                    <code className="font-mono">/api/users</code> goes to its
+                    dev server.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : showNoMatch ? (
+              <p className="px-3 py-2 text-xs text-muted-foreground">
+                No requests match “{query.trim()}”.
+              </p>
+            ) : (
+              <ul>{renderNodes(tree, 0)}</ul>
+            )}
 
-              {dragItem && (
-                <div
-                  onDragOver={onRootDragOver}
-                  onDragLeave={() => setDropRoot(false)}
-                  onDrop={onRootDrop}
-                  className={cn(
-                    "m-2 mt-auto rounded-md border border-dashed p-2 text-center text-[0.65rem] text-muted-foreground",
-                    dropRoot && "border-primary bg-accent/40 text-foreground"
-                  )}
-                >
-                  Drop here to move to the top level
-                </div>
-              )}
-            </ContextMenuTrigger>
-          )}
+            {dragItem && (
+              <div
+                onDragOver={onRootDragOver}
+                onDragLeave={() => setDropRoot(false)}
+                onDrop={onRootDrop}
+                className={cn(
+                  "m-2 mt-auto rounded-md border border-dashed p-2 text-center text-[0.65rem] text-muted-foreground",
+                  dropRoot && "border-primary bg-accent/40 text-foreground"
+                )}
+              >
+                Drop here to move to the top level
+              </div>
+            )}
+          </ContextMenuTrigger>
         </div>
 
         {renaming && (

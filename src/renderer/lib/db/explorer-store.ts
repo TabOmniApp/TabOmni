@@ -13,6 +13,7 @@ import {
   type NewColumnDraft,
   type Partition,
   type Relation,
+  type RelationKind,
   type FilterSet,
   type SortOrder,
   type TableDraft,
@@ -24,6 +25,7 @@ import { QUERY_ROW_LIMIT, withRowLimit } from "./row-limit"
 import type { ColumnPref } from "./display"
 import { pickLabelColumn } from "./field-kind"
 import { useStudio } from "../store"
+import { recall, remember } from "../tab-memory"
 import { useDatabases } from "./databases-store"
 import { databaseRunner, type SqlResult, type SqlRunner } from "./runner"
 
@@ -248,6 +250,64 @@ type ExplorerState = {
  * Guards against a slow load overwriting a newer one: every load takes a token
  * and drops its result if another has started since.
  */
+/**
+ * Which tables and queries each database had open, keyed by database id.
+ *
+ * Per database because switching one out blanks the panel: tabs belong to the
+ * connection they were opened against, and a table name means nothing in
+ * another database. Query tabs are kept with their SQL — a restored console
+ * with an empty buffer would be worse than no tab at all — but not with their
+ * results, which belong to a connection that has since closed.
+ */
+const OPEN_TABS_KEY = "db.tabs"
+
+type RememberedDbTab =
+  | { kind: "relation"; relation: Relation }
+  | { kind: "query"; title: string; sql: string }
+
+type RememberedDbTabs = {
+  tabs: RememberedDbTab[]
+  /** Which tab was on screen, as an index into `tabs`. An index rather than an
+   * id because a query tab's id comes from a counter this build restarts. */
+  active: number | null
+}
+
+function isRememberedDbTabs(value: unknown): value is RememberedDbTabs {
+  const record = value as Partial<RememberedDbTabs> | null
+  if (!Array.isArray(record?.tabs)) return false
+  if (record.active !== null && typeof record.active !== "number") return false
+  return record.tabs.every((tab: RememberedDbTab) =>
+    tab?.kind === "relation"
+      ? isRelation(tab.relation)
+      : tab?.kind === "query" &&
+        typeof tab.title === "string" &&
+        typeof tab.sql === "string"
+  )
+}
+
+const RELATION_KINDS = new Set<RelationKind>([
+  "table",
+  "partitioned",
+  "view",
+  "matview",
+])
+
+function isRelation(value: unknown): value is Relation {
+  const record = value as Partial<Relation> | null
+  return (
+    typeof record?.schema === "string" &&
+    typeof record.name === "string" &&
+    RELATION_KINDS.has(record.kind as RelationKind)
+  )
+}
+
+function isRememberedByDatabase(
+  value: unknown
+): value is Record<string, RememberedDbTabs> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  return Object.values(value).every(isRememberedDbTabs)
+}
+
 let token = 0
 
 /** Names new query tabs "Query 1", "Query 2"… — never reused, even once one
@@ -363,6 +423,126 @@ async function loadFkLabels(
 }
 
 export const useExplorer = create<ExplorerState>((set, get) => {
+  /** Every database's remembered strip, or null before it has been read. */
+  let rememberedTabs: Record<string, RememberedDbTabs> | null = null
+  /** Which databases have had their strip put back this launch. Per database,
+   * not one flag: browsing away and back reads the schema again, and the second
+   * read must not reopen tabs closed in between. */
+  const restored = new Set<string>()
+  let pendingTabSave: ReturnType<typeof setTimeout> | undefined
+
+  /** Debounced: `setQuerySql` runs on every keystroke in the console, and the
+   * strip is not worth a settings write per character. */
+  function rememberTabs() {
+    const { databaseId, openTabs, activeQueryTabId, selected } = get()
+    if (!databaseId) return
+
+    const tabs: RememberedDbTab[] = openTabs.map((item) =>
+      item.kind === "relation"
+        ? { kind: "relation" as const, relation: item.relation }
+        : {
+            kind: "query" as const,
+            title: item.query.title,
+            sql: item.query.sql,
+          }
+    )
+
+    const active = openTabs.findIndex((item) =>
+      activeQueryTabId === null
+        ? item.kind === "relation" &&
+          selected !== null &&
+          sameRelation(item.relation, selected)
+        : item.kind === "query" && item.query.id === activeQueryTabId
+    )
+
+    rememberedTabs = {
+      ...(rememberedTabs ?? {}),
+      [databaseId]: { tabs, active: active === -1 ? null : active },
+    }
+
+    clearTimeout(pendingTabSave)
+    const snapshot = rememberedTabs
+    pendingTabSave = setTimeout(() => remember(OPEN_TABS_KEY, snapshot), 400)
+  }
+
+  /**
+   * Puts one database's strip back, as soon as that database is the open one.
+   *
+   * Deliberately not waiting on the schema: nothing reads a database until its
+   * branch in the tree is opened, so restoring from `refresh` meant the strip
+   * stayed empty on launch and filled in only once a table was clicked. A
+   * remembered tab carries the whole `Relation`, which is all a tab needs — a
+   * table dropped since is dropped by `refresh`'s own filter when the schema is
+   * eventually read, which is the same reconcile a table dropped while running
+   * goes through.
+   */
+  async function restoreTabs(databaseId: string) {
+    // Read once for the whole window: every database's strip is one value, and
+    // browsing between two of them must not re-read it each time.
+    rememberedTabs ??=
+      (await recall(OPEN_TABS_KEY, isRememberedByDatabase)) ?? {}
+
+    const stored = rememberedTabs[databaseId]
+    if (!stored) return
+    // The database may have been switched again while this was in flight.
+    if (get().databaseId !== databaseId) return
+    // Anything opened in the meantime wins — the strip on screen is the truth.
+    if (get().openTabs.length > 0) return
+
+    const openTabs: OpenTab[] = []
+    for (const tab of stored.tabs) {
+      if (tab.kind === "relation") {
+        openTabs.push({ kind: "relation", relation: tab.relation })
+        continue
+      }
+      openTabs.push({
+        kind: "query",
+        query: {
+          id: `q${++queryCounter}`,
+          title: tab.title,
+          sql: tab.sql,
+          results: null,
+          resultEdit: null,
+          readOnlyReason: null,
+          inserting: false,
+          ranSql: null,
+          rowLimit: null,
+          sqlError: null,
+          elapsedMs: null,
+          running: false,
+        },
+      })
+    }
+    if (openTabs.length === 0) return
+
+    // `active` indexes the stored strip, so it is matched by what it pointed
+    // *at* rather than by position.
+    const wanted =
+      stored.active === null ? undefined : stored.tabs[stored.active]
+    const onScreen =
+      openTabs.find((item) =>
+        wanted?.kind === "relation"
+          ? item.kind === "relation" &&
+            sameRelation(item.relation, wanted.relation)
+          : wanted?.kind === "query" &&
+            item.kind === "query" &&
+            item.query.title === wanted.title
+      ) ?? openTabs[0]
+
+    set({
+      openTabs,
+      selected: onScreen?.kind === "relation" ? onScreen.relation : null,
+      activeQueryTabId: onScreen?.kind === "query" ? onScreen.query.id : null,
+      page: 0,
+    })
+
+    // The one statement a restored strip is worth sending on its own: the table
+    // that was on screen is on screen again, and an empty grid under its own
+    // tab would read as a table with no rows. A connection is opened by the
+    // first statement through it, so this is that statement.
+    if (onScreen?.kind === "relation") void loadRelation(onScreen.relation, 0)
+  }
+
   /**
    * The currently selected database.
    *
@@ -592,6 +772,13 @@ export const useExplorer = create<ExplorerState>((set, get) => {
         ? defaultSchemaFor(database.engine, database.database)
         : "public",
     })
+
+    // Once per database per launch: coming back to one whose tabs were all
+    // closed must not reopen them.
+    if (database && !restored.has(database.id)) {
+      restored.add(database.id)
+      void restoreTabs(database.id)
+    }
   })
 
   return {
@@ -755,6 +942,7 @@ export const useExplorer = create<ExplorerState>((set, get) => {
         rowCount: null,
         data: null,
       })
+      rememberTabs()
       void loadRelation(relation, 0)
     },
 
@@ -765,6 +953,9 @@ export const useExplorer = create<ExplorerState>((set, get) => {
 
       const remaining = openTabs.filter((_, position) => position !== index)
       set({ openTabs: remaining })
+      // Ahead of the fallback below, which may hand off to `select` and write
+      // again: the debounce means only the settled strip is stored.
+      rememberTabs()
 
       const activeId =
         activeQueryTabId ?? (selected ? relationKey(selected) : null)
@@ -783,12 +974,14 @@ export const useExplorer = create<ExplorerState>((set, get) => {
       const keep = get().openTabs.find((item) => tabId(item) === id)
       if (!keep) return
       set({ openTabs: [keep] })
+      rememberTabs()
       if (keep.kind === "relation") get().select(keep.relation)
       else get().selectQueryTab(keep.query.id)
     },
 
     closeAllTabs() {
       set({ openTabs: [], activeQueryTabId: null, ...closedSelection() })
+      rememberTabs()
     },
 
     reorderTabs(ids) {
@@ -799,6 +992,7 @@ export const useExplorer = create<ExplorerState>((set, get) => {
         .filter((item): item is OpenTab => item !== undefined)
       if (reordered.length !== openTabs.length) return
       set({ openTabs: reordered })
+      rememberTabs()
     },
 
     setTab(tab) {
@@ -1083,11 +1277,13 @@ export const useExplorer = create<ExplorerState>((set, get) => {
         openTabs: [...state.openTabs, { kind: "query" as const, query }],
         activeQueryTabId: id,
       }))
+      rememberTabs()
     },
 
     selectQueryTab(id) {
       useStudio.getState().showPane("database")
       set({ activeQueryTabId: id })
+      rememberTabs()
     },
 
     setQuerySql(id, sql) {
@@ -1098,6 +1294,7 @@ export const useExplorer = create<ExplorerState>((set, get) => {
             : item
         ),
       }))
+      rememberTabs()
     },
 
     async runQuery(id, options) {

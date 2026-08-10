@@ -92,7 +92,6 @@ type MenuTarget =
  */
 export function DatabaseTree() {
   const databases = useDatabases((state) => state.databases)
-  const projectId = useDatabases((state) => state.projectId)
   const openDatabaseId = useDatabases((state) => state.selectedId)
   const removeDatabase = useDatabases((state) => state.remove)
 
@@ -218,7 +217,6 @@ export function DatabaseTree() {
         <PanelHeader title="Database">
           <IconButton
             label="Add a database"
-            disabled={!projectId}
             onClick={() => setAddingDatabase(true)}
           >
             <Plus />
@@ -239,129 +237,121 @@ export function DatabaseTree() {
         )}
 
         <div className="min-h-0 flex-1 overflow-auto py-1">
-          {!projectId ? null : (
-            <ContextMenuTrigger
-              render={
-                <div
-                  className="flex min-h-full flex-col"
-                  onContextMenu={onTreeContextMenu}
-                />
-              }
-            >
-              {databases.length === 0 ? (
-                <Empty className="p-4">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <Database />
-                    </EmptyMedia>
-                    <EmptyTitle>No database yet</EmptyTitle>
-                    <EmptyDescription className="text-xs">
-                      Create one, or connect to a database you already have.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                  <EmptyContent>
-                    <Button size="xs" onClick={() => setAddingDatabase(true)}>
-                      <Plus data-icon="inline-start" />
-                      Add a database
-                    </Button>
-                  </EmptyContent>
-                </Empty>
-              ) : (
-                <ul>
-                  {databases.map((database) => {
-                    const branch = branches[database.id] ?? CLOSED
-                    const isOpen = expanded[database.id] === true
-                    const isCurrent = database.id === openDatabaseId
-                    const tables = tablesOf(database)
+          <ContextMenuTrigger
+            render={
+              <div
+                className="flex min-h-full flex-col"
+                onContextMenu={onTreeContextMenu}
+              />
+            }
+          >
+            {databases.length === 0 ? (
+              <Empty className="p-4">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Database />
+                  </EmptyMedia>
+                  <EmptyTitle>No database yet</EmptyTitle>
+                  <EmptyDescription className="text-xs">
+                    Create one, or connect to a database you already have.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button size="xs" onClick={() => setAddingDatabase(true)}>
+                    <Plus data-icon="inline-start" />
+                    Add a database
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            ) : (
+              <ul>
+                {databases.map((database) => {
+                  const branch = branches[database.id] ?? CLOSED
+                  const isOpen = expanded[database.id] === true
+                  const isCurrent = database.id === openDatabaseId
+                  const tables = tablesOf(database)
 
-                    return (
-                      <li key={database.id} data-database-id={database.id}>
-                        <SideRow
-                          title={summarise(
-                            database,
-                            isCurrent ? version : null
-                          )}
-                          onClick={() => void toggle(database)}
-                          className={cn(
-                            isCurrent && "font-medium text-foreground"
-                          )}
-                        >
-                          {branch.loading ? (
-                            <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
-                          ) : isOpen ? (
-                            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-                          ) : (
-                            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-                          )}
-                          <Database className="size-3.5 shrink-0" />
-                          <span className="truncate">{database.name}</span>
-                          <span className="ml-auto shrink-0 pl-2 text-[0.65rem] text-muted-foreground">
-                            {ENGINE_LABEL[database.engine]}
-                          </span>
-                        </SideRow>
-
-                        {isOpen && (
-                          <ul>
-                            {branch.error ? (
-                              <li className="py-1 pr-2 pl-6 font-mono text-xs whitespace-pre-wrap text-destructive">
-                                {branch.error}
-                              </li>
-                            ) : tables.length === 0 ? (
-                              <li className="py-1 pr-2 pl-6 text-xs text-muted-foreground">
-                                {needle
-                                  ? `No tables match “${query.trim()}”.`
-                                  : "No tables."}
-                              </li>
-                            ) : (
-                              tables.map((relation) => {
-                                const Icon = KIND_ICONS[relation.kind]
-                                const active =
-                                  isCurrent &&
-                                  selected?.schema === relation.schema &&
-                                  selected.name === relation.name
-
-                                return (
-                                  <li
-                                    key={relationKey(relation)}
-                                    data-relation={relationKey(relation)}
-                                  >
-                                    <SideRow
-                                      indent={1}
-                                      active={active}
-                                      title={`${relation.name} — ${KIND_LABELS[relation.kind]}`}
-                                      onClick={() =>
-                                        void openTable(database, relation)
-                                      }
-                                    >
-                                      <Icon className="size-3.5 shrink-0" />
-                                      <span className="truncate">
-                                        {relation.name}
-                                      </span>
-                                    </SideRow>
-                                  </li>
-                                )
-                              })
-                            )}
-                          </ul>
+                  return (
+                    <li key={database.id} data-database-id={database.id}>
+                      <SideRow
+                        title={summarise(database, isCurrent ? version : null)}
+                        onClick={() => void toggle(database)}
+                        className={cn(
+                          isCurrent && "font-medium text-foreground"
                         )}
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </ContextMenuTrigger>
-          )}
+                      >
+                        {branch.loading ? (
+                          <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
+                        ) : isOpen ? (
+                          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                        )}
+                        <Database className="size-3.5 shrink-0" />
+                        <span className="truncate">{database.name}</span>
+                        <span className="ml-auto shrink-0 pl-2 text-[0.65rem] text-muted-foreground">
+                          {ENGINE_LABEL[database.engine]}
+                        </span>
+                      </SideRow>
+
+                      {isOpen && (
+                        <ul>
+                          {branch.error ? (
+                            <li className="py-1 pr-2 pl-6 font-mono text-xs whitespace-pre-wrap text-destructive">
+                              {branch.error}
+                            </li>
+                          ) : tables.length === 0 ? (
+                            <li className="py-1 pr-2 pl-6 text-xs text-muted-foreground">
+                              {needle
+                                ? `No tables match “${query.trim()}”.`
+                                : "No tables."}
+                            </li>
+                          ) : (
+                            tables.map((relation) => {
+                              const Icon = KIND_ICONS[relation.kind]
+                              const active =
+                                isCurrent &&
+                                selected?.schema === relation.schema &&
+                                selected.name === relation.name
+
+                              return (
+                                <li
+                                  key={relationKey(relation)}
+                                  data-relation={relationKey(relation)}
+                                >
+                                  <SideRow
+                                    indent={1}
+                                    active={active}
+                                    title={`${relation.name} — ${KIND_LABELS[relation.kind]}`}
+                                    onClick={() =>
+                                      void openTable(database, relation)
+                                    }
+                                  >
+                                    <Icon className="size-3.5 shrink-0" />
+                                    <span className="truncate">
+                                      {relation.name}
+                                    </span>
+                                  </SideRow>
+                                </li>
+                              )
+                            })
+                          )}
+                        </ul>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </ContextMenuTrigger>
         </div>
 
         {creating && engine && (
           <NewTableDialog onClose={() => setCreating(false)} />
         )}
 
-        {addingDatabase && projectId && (
-          <NewDatabaseDialog
-            projectId={projectId}
-            onClose={() => setAddingDatabase(false)}
-          />
+        {addingDatabase && (
+          <NewDatabaseDialog onClose={() => setAddingDatabase(false)} />
         )}
 
         {editing && (
@@ -536,10 +526,7 @@ export function DatabaseTree() {
 
       {menuTarget?.kind === "root" && (
         <ContextMenuContent className="w-52">
-          <ContextMenuItem
-            disabled={!projectId}
-            onClick={() => setAddingDatabase(true)}
-          >
+          <ContextMenuItem onClick={() => setAddingDatabase(true)}>
             <Plus />
             Add a database…
           </ContextMenuItem>

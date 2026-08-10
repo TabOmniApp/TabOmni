@@ -24,10 +24,10 @@ import { parseMail } from "./mime"
 
 /**
  * The two servers behind the Mail and Webhooks panels: an SMTP sink and a
- * catch-all HTTP endpoint, each bound to the loopback interface for one
- * project, and each started and stopped on its own — the panels are separate
- * and so are their switches. What they share is this manager, one capped list
- * of captures, and one file to keep it in.
+ * catch-all HTTP endpoint, each bound to the loopback interface and each
+ * started and stopped on its own — the panels are separate and so are their
+ * switches. What they share is this manager, one capped list of captures, and
+ * one file to keep it in.
  *
  * Written here rather than pulled in, for the same reason `search.ts` is not
  * ripgrep: a mail catcher the user has to `brew install` first is a panel that
@@ -53,7 +53,7 @@ const HOST = "127.0.0.1"
 const MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 /**
- * How many captures a project keeps.
+ * How many captures the workspace keeps.
  *
  * An inbox is read newest first and nobody scrolls to the four hundredth
  * webhook, while the whole list is held in memory and written to disk on every
@@ -72,17 +72,17 @@ const SMTP_IDLE_MS = 60_000
 
 type Emit = {
   message: (message: InboxMessage) => void
-  status: (projectId: string, status: InboxStatus) => void
+  status: (status: InboxStatus) => void
 }
 
 /** Where captures survive a restart. Injected rather than imported so this
  * file has no opinion about `~/.tabula`. */
 type Storage = {
-  load: (projectId: string) => Promise<InboxMessage[]>
-  save: (projectId: string, messages: InboxMessage[]) => Promise<void>
+  load: () => Promise<InboxMessage[]>
+  save: (messages: InboxMessage[]) => Promise<void>
 }
 
-type ProjectInbox = {
+type Inbox = {
   /** One entry per kind, each started and stopped on its own — the Mail and
    * Webhooks panels have a switch each. */
   servers: Record<InboxKind, TcpServer | HttpServer | null>
@@ -105,26 +105,27 @@ function idle(port: number): InboxServerStatus {
 }
 
 export class InboxServers {
-  private readonly projects = new Map<string, ProjectInbox>()
+  private readonly inbox: Inbox = {
+    servers: { mail: null, webhook: null },
+    sockets: new Set(),
+    status: { mail: idle(0), webhook: idle(0) },
+    messages: null,
+    loading: null,
+  }
   /** Writes are serialised so two captures landing together cannot both
    * read-modify-write the same file. */
   private queue: Promise<unknown> = Promise.resolve()
-  /** One chain per project, so a start and a stop cannot overlap — see
+  /** One chain for both servers, so a start and a stop cannot overlap — see
    * `serialise`. */
-  private readonly chains = new Map<string, Promise<unknown>>()
+  private chain: Promise<unknown> = Promise.resolve()
 
   constructor(
     private readonly emit: Emit,
     private readonly storage: Storage
   ) {}
 
-  status(projectId: string): InboxStatus {
-    return (
-      this.projects.get(projectId)?.status ?? {
-        mail: idle(0),
-        webhook: idle(0),
-      }
-    )
+  status(): InboxStatus {
+    return this.inbox.status
   }
 
   /**
@@ -133,189 +134,151 @@ export class InboxServers {
    * One at a time because the two panels have a switch each: stopping Mail to
    * free 1025 must leave the webhook catcher exactly where it was.
    */
-  start(
-    projectId: string,
-    server: InboxKind,
-    port: number
-  ): Promise<InboxStatus> {
-    return this.serialise(projectId, async () => {
-      await this.unbind(projectId, server)
-      const entry = this.entry(projectId)
+  start(server: InboxKind, port: number): Promise<InboxStatus> {
+    return this.serialise(async () => {
+      await this.unbind(server)
 
       const bound =
         server === "mail"
-          ? createTcpServer((socket) => this.serveSmtp(projectId, socket))
+          ? createTcpServer((socket) => this.serveSmtp(socket))
           : createHttpServer((request, response) =>
-              this.serveWebhook(projectId, request, response)
+              this.serveWebhook(request, response)
             )
 
       const status = await listen(bound, port)
-      entry.status = { ...entry.status, [server]: status }
-      entry.servers[server] = status.listening ? bound : null
+      this.inbox.status = { ...this.inbox.status, [server]: status }
+      this.inbox.servers[server] = status.listening ? bound : null
 
       // A server that falls over after it came up — the port taken from under
       // it by something else, a socket error with nowhere to go — must not
       // leave the panel claiming it is still listening.
-      bound.on("error", (error) => this.fail(projectId, server, error))
+      bound.on("error", (error) => this.fail(server, error))
 
-      this.emit.status(projectId, entry.status)
-      return entry.status
+      this.emit.status(this.inbox.status)
+      return this.inbox.status
     })
   }
 
-  stop(projectId: string, server: InboxKind): Promise<InboxStatus> {
-    return this.serialise(projectId, async () => {
-      await this.unbind(projectId, server)
-      const status = this.status(projectId)
-      this.emit.status(projectId, status)
-      return status
+  stop(server: InboxKind): Promise<InboxStatus> {
+    return this.serialise(async () => {
+      await this.unbind(server)
+      this.emit.status(this.inbox.status)
+      return this.inbox.status
     })
   }
 
   /**
-   * Runs one bind or unbind at a time per project.
+   * Runs one bind or unbind at a time.
    *
    * Both a panel and its own auto-start can ask for a start, and two of them
    * interleaving would have one server's `listen` land after the other's
    * `close` — leaving a port bound by a server nothing holds a reference to,
-   * and the panel reporting the one that failed. Per project rather than per
-   * server: two of these are cheap and never contend, and the pair sharing one
-   * chain is what makes "stop both" on quit a queue rather than a race.
+   * and the panel reporting the one that failed. One chain for both servers
+   * rather than one each: they never contend, and sharing it is what makes
+   * "stop both" on quit a queue rather than a race.
    */
-  private serialise<T>(projectId: string, task: () => Promise<T>): Promise<T> {
-    const previous = this.chains.get(projectId) ?? Promise.resolve()
-    const next = previous.then(task, task)
-    this.chains.set(
-      projectId,
-      next.catch(() => undefined)
-    )
+  private serialise<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.chain.then(task, task)
+    this.chain = next.catch(() => undefined)
     return next
   }
 
   /** Closes one kind's server, leaving the other and the captures alone. */
-  private async unbind(projectId: string, server: InboxKind): Promise<void> {
-    const entry = this.projects.get(projectId)
-    if (!entry) return
-
+  private async unbind(server: InboxKind): Promise<void> {
     // Only SMTP holds conversations this has to break; the HTTP side answers
     // and hangs up, and `closeAllConnections` in `close` covers keep-alive.
     if (server === "mail") {
-      for (const socket of entry.sockets) socket.destroy()
-      entry.sockets.clear()
+      for (const socket of this.inbox.sockets) socket.destroy()
+      this.inbox.sockets.clear()
     }
 
-    await close(entry.servers[server])
-    entry.servers[server] = null
-    entry.status = {
-      ...entry.status,
-      [server]: idle(entry.status[server].port),
+    await close(this.inbox.servers[server])
+    this.inbox.servers[server] = null
+    this.inbox.status = {
+      ...this.inbox.status,
+      [server]: idle(this.inbox.status[server].port),
     }
   }
 
-  /** Closes every project's servers, for a quit that leaves no port held. */
+  /** Closes both servers, for a quit that leaves no port held. */
   async stopAll(): Promise<void> {
-    await Promise.all(
-      [...this.projects.keys()].flatMap((id) => [
-        this.stop(id, "mail"),
-        this.stop(id, "webhook"),
-      ])
-    )
+    await Promise.all([this.stop("mail"), this.stop("webhook")])
   }
 
-  async messages(projectId: string): Promise<InboxMessage[]> {
-    const entry = this.entry(projectId)
-    if (entry.messages) return entry.messages
+  async messages(): Promise<InboxMessage[]> {
+    if (this.inbox.messages) return this.inbox.messages
 
     // An unreadable file reads as an empty inbox, the same way a missing one
     // does. This is awaited by a capture that has already been answered on the
     // wire, so a rejection here would be one nobody is in a position to catch.
-    entry.loading ??= this.storage.load(projectId).catch(() => [])
-    const loaded = await entry.loading
-    entry.messages ??= loaded
-    return entry.messages
+    this.inbox.loading ??= this.storage.load().catch(() => [])
+    const loaded = await this.inbox.loading
+    this.inbox.messages ??= loaded
+    return this.inbox.messages
   }
 
-  async markRead(projectId: string, id: string): Promise<void> {
-    const messages = await this.messages(projectId)
+  async markRead(id: string): Promise<void> {
+    const messages = await this.messages()
     const message = messages.find((candidate) => candidate.id === id)
     if (!message || !message.unread) return
     message.unread = false
-    this.write(projectId, messages)
+    this.write(messages)
   }
 
-  async remove(projectId: string, id: string): Promise<void> {
-    await this.messages(projectId)
-    const entry = this.entry(projectId)
-    entry.messages = (entry.messages ?? []).filter(
+  async remove(id: string): Promise<void> {
+    await this.messages()
+    this.inbox.messages = (this.inbox.messages ?? []).filter(
       (candidate) => candidate.id !== id
     )
-    this.write(projectId, entry.messages)
+    this.write(this.inbox.messages)
   }
 
   /** Empties one panel's half. The other keeps everything it caught — two
    * panels with one Clear between them would be a button that deleted
    * something the user could not see. */
-  async clear(projectId: string, server: InboxKind): Promise<void> {
-    await this.messages(projectId)
-    const entry = this.entry(projectId)
-    entry.messages = (entry.messages ?? []).filter(
+  async clear(server: InboxKind): Promise<void> {
+    await this.messages()
+    this.inbox.messages = (this.inbox.messages ?? []).filter(
       (message) => message.kind !== server
     )
-    this.write(projectId, entry.messages)
+    this.write(this.inbox.messages)
   }
 
-  private entry(projectId: string): ProjectInbox {
-    let entry = this.projects.get(projectId)
-    if (!entry) {
-      entry = {
-        servers: { mail: null, webhook: null },
-        sockets: new Set(),
-        status: { mail: idle(0), webhook: idle(0) },
-        messages: null,
-        loading: null,
-      }
-      this.projects.set(projectId, entry)
-    }
-    return entry
-  }
-
-  private fail(projectId: string, which: InboxKind, error: Error) {
-    const entry = this.entry(projectId)
-    entry.status = {
-      ...entry.status,
+  private fail(which: InboxKind, error: Error) {
+    this.inbox.status = {
+      ...this.inbox.status,
       [which]: {
         listening: false,
-        port: entry.status[which].port,
+        port: this.inbox.status[which].port,
         error: error.message,
       },
     }
-    this.emit.status(projectId, entry.status)
+    this.emit.status(this.inbox.status)
   }
 
   /** Files one capture: newest first, capped, persisted, announced. */
-  private async record(
-    projectId: string,
-    message: InboxMessage
-  ): Promise<void> {
+  private async record(message: InboxMessage): Promise<void> {
     // Awaited only to be sure the file has been read; the list is taken from
-    // the entry afterwards rather than from what this resolved with, so a
+    // the inbox afterwards rather than from what this resolved with, so a
     // second capture landing in between is not overwritten.
-    await this.messages(projectId)
+    await this.messages()
 
-    const entry = this.entry(projectId)
-    entry.messages = [message, ...(entry.messages ?? [])].slice(0, MAX_MESSAGES)
+    this.inbox.messages = [message, ...(this.inbox.messages ?? [])].slice(
+      0,
+      MAX_MESSAGES
+    )
 
-    this.write(projectId, entry.messages)
+    this.write(this.inbox.messages)
     this.emit.message(message)
   }
 
-  private write(projectId: string, messages: InboxMessage[]): void {
+  private write(messages: InboxMessage[]): void {
     // Not awaited by the caller: a capture is already answered on the wire by
     // the time this runs, and a slow disk must not hold the SMTP connection
     // open. Failures are swallowed for the same reason the panel keeps its
     // list in memory — the capture is still there to read.
     this.queue = this.queue
-      .then(() => this.storage.save(projectId, messages))
+      .then(() => this.storage.save(messages))
       .catch(() => undefined)
   }
 
@@ -334,7 +297,7 @@ export class InboxServers {
    * server that skipped ahead to `235` because it was never going to check
    * anything gets "invalid login sequence" from the client and no mail at all.
    */
-  private serveSmtp(projectId: string, socket: Socket): void {
+  private serveSmtp(socket: Socket): void {
     let buffer = Buffer.alloc(0)
     /** Non-null once `DATA` has been accepted: everything is message now. */
     let collecting = false
@@ -358,9 +321,8 @@ export class InboxServers {
       if (!socket.writableEnded) socket.write(`${line}\r\n`)
     }
 
-    const entry = this.entry(projectId)
-    entry.sockets.add(socket)
-    socket.on("close", () => entry.sockets.delete(socket))
+    this.inbox.sockets.add(socket)
+    socket.on("close", () => this.inbox.sockets.delete(socket))
 
     socket.setTimeout(SMTP_IDLE_MS, () => socket.destroy())
     // A mailer that hangs up mid-transaction is normal, not an error worth
@@ -397,10 +359,7 @@ export class InboxServers {
             write(`552 Message larger than ${MAX_MESSAGE_BYTES} bytes`)
           } else {
             const id = randomUUID()
-            void this.record(
-              projectId,
-              mailMessage(projectId, id, from, recipients, raw)
-            )
+            void this.record(mailMessage(id, from, recipients, raw))
             write(`250 2.0.0 Ok: queued as ${id}`)
           }
           refuse = false
@@ -519,7 +478,6 @@ export class InboxServers {
    * refused by a preflight the panel could have allowed.
    */
   private serveWebhook(
-    projectId: string,
     request: IncomingMessage,
     response: ServerResponse
   ): void {
@@ -555,10 +513,7 @@ export class InboxServers {
       if (refused) return
 
       const id = randomUUID()
-      void this.record(
-        projectId,
-        webhookMessage(projectId, id, request, Buffer.concat(chunks))
-      )
+      void this.record(webhookMessage(id, request, Buffer.concat(chunks)))
 
       response.writeHead(200, { ...cors, "Content-Type": "application/json" })
       response.end(JSON.stringify({ ok: true, id }))
@@ -658,7 +613,6 @@ function unstuff(raw: Buffer): Buffer {
 }
 
 function mailMessage(
-  projectId: string,
   id: string,
   from: string,
   recipients: string[],
@@ -669,7 +623,6 @@ function mailMessage(
 
   return {
     id,
-    projectId,
     kind: "mail",
     receivedAt: new Date().toISOString(),
     summary: parsed.subject || "(no subject)",
@@ -733,7 +686,6 @@ export function replayInput(webhook: InboxWebhook, url: string): HttpSendInput {
 }
 
 function webhookMessage(
-  projectId: string,
   id: string,
   request: IncomingMessage,
   body: Buffer
@@ -755,7 +707,6 @@ function webhookMessage(
 
   return {
     id,
-    projectId,
     kind: "webhook",
     receivedAt: new Date().toISOString(),
     summary: `${request.method ?? "GET"} ${target.pathname}`,

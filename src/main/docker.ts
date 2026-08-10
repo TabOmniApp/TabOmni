@@ -75,8 +75,9 @@ export class DockerRuntime {
    * and returns the host port its server was published on.
    */
   async ensureDatabase(
-    /** Whose network this database joins, so the project's app can reach it. */
-    projectId: string,
+    /** Whose network this database joins, so the workspace's own code can
+     * reach it. */
+    workspaceId: string,
     databaseId: string,
     engine: DbEngine,
     dataDir: string,
@@ -95,9 +96,9 @@ export class DockerRuntime {
         onProgress?.(`Starting database ${name}…`)
         await run("docker", ["start", name])
       }
-      // An existing container predates the network, or predates the project
+      // An existing container predates the network, or predates the workspace
       // having one; joining is enough, and cheaper than rebuilding a database.
-      await this.joinNetwork(projectId, name, credentials.database)
+      await this.joinNetwork(workspaceId, name, credentials.database)
       return this.databaseHostPort(databaseId, engine)
     }
 
@@ -116,21 +117,21 @@ export class DockerRuntime {
       if (!isNameConflict(error)) throw error
       await run("docker", ["start", name]).catch(() => {})
     }
-    await this.joinNetwork(projectId, name, credentials.database)
+    await this.joinNetwork(workspaceId, name, credentials.database)
     return this.databaseHostPort(databaseId, engine)
   }
 
   /**
-   * Puts a container on its project's network, creating the network first.
+   * Puts a container on the workspace's network, creating the network first.
    */
   private async joinNetwork(
-    projectId: string,
+    workspaceId: string,
     container: string,
     /** A second name to answer to, so a database is reachable as `shop`
      * rather than as `tabula-db-<uuid>`. */
     alias?: string
   ) {
-    const network = networkName(projectId)
+    const network = networkName(workspaceId)
     // Both of these are "already done" as often as not, and neither has a
     // failure worth stopping a start for.
     await run("docker", ["network", "create", network]).catch(() => {})
@@ -170,14 +171,14 @@ export class DockerRuntime {
 }
 
 /**
- * The network a project and its databases share.
+ * The network a workspace and its databases share.
  *
  * Published ports reach a database from the host, which is where the studio
- * itself connects from. Per project, so one project's database is not
- * reachable by guessing another project's network name.
+ * itself connects from. Keyed by workspace rather than fixed, so the day
+ * sign-in brings a second one its databases are not reachable by guessing.
  */
-function networkName(projectId: string): string {
-  return `tabula-net-${projectId}`
+function networkName(workspaceId: string): string {
+  return `tabula-net-${workspaceId}`
 }
 
 /**

@@ -29,13 +29,7 @@ const ENGINE_LABEL: Record<DbEngine, string> = {
 
 type Mode = "choose" | "create" | "connect"
 
-export function NewDatabaseDialog({
-  projectId,
-  onClose,
-}: {
-  projectId: string
-  onClose: () => void
-}) {
+export function NewDatabaseDialog({ onClose }: { onClose: () => void }) {
   const [mode, setMode] = useState<Mode>("choose")
 
   return (
@@ -49,17 +43,9 @@ export function NewDatabaseDialog({
         {mode === "choose" ? (
           <ChooseMode onClose={onClose} onPick={setMode} />
         ) : mode === "create" ? (
-          <CreateForm
-            projectId={projectId}
-            onBack={() => setMode("choose")}
-            onClose={onClose}
-          />
+          <CreateForm onBack={() => setMode("choose")} onClose={onClose} />
         ) : (
-          <ConnectForm
-            projectId={projectId}
-            onBack={() => setMode("choose")}
-            onClose={onClose}
-          />
+          <ConnectForm onBack={() => setMode("choose")} onClose={onClose} />
         )}
       </DialogContent>
     </Dialog>
@@ -157,11 +143,9 @@ function EngineChoice({
 }
 
 function CreateForm({
-  projectId,
   onBack,
   onClose,
 }: {
-  projectId: string
   onBack: () => void
   onClose: () => void
 }) {
@@ -178,7 +162,7 @@ function CreateForm({
     setBusy(true)
     setError(null)
     try {
-      await create({ projectId, name: name.trim(), engine, origin: "docker" })
+      await create({ name: name.trim(), engine, origin: "docker" })
       onClose()
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : String(problem))
@@ -247,11 +231,9 @@ function CreateForm({
 }
 
 function ConnectForm({
-  projectId,
   onBack,
   onClose,
 }: {
-  projectId: string
   onBack: () => void
   onClose: () => void
 }) {
@@ -311,7 +293,6 @@ function ConnectForm({
     setError(null)
     try {
       await create({
-        projectId,
         name: name.trim(),
         origin: "external",
         ...connection,

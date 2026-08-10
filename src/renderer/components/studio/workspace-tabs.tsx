@@ -1,24 +1,18 @@
 import { cn } from "@/lib/utils"
-import {
-  FileText,
-  Folder,
-  Mail,
-  Plus,
-  Settings2,
-  Terminal,
-  Webhook,
-} from "lucide-react"
+import { Folder, Mail, Plus, Settings2, Terminal, Webhook } from "lucide-react"
 
 import type { Relation } from "@/lib/db/engines/types"
 import { useExplorer, type OpenTab } from "@/lib/db/explorer-store"
 import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
 import { messagesOf, SETTINGS_TAB, useInbox } from "@/lib/inbox/store"
-import { specName } from "@/lib/spec/schema"
-import { draftOf, isDirty, useSpecs } from "@/lib/spec/store"
 import { useStudio, type Pane } from "@/lib/store"
 import { arrange, bare, kindOf, PREFIX } from "@/lib/tabs"
 import { SESSION_TYPES, sessionLabel } from "@/lib/terminal/catalog"
-import { activeSessionOf, sessionsOf, useTerminal } from "@/lib/terminal/store"
+import {
+  activeSessionOf,
+  liveSessions,
+  useTerminal,
+} from "@/lib/terminal/store"
 import { KIND_ICONS, KIND_LABELS } from "./db/database-tree"
 import { METHOD_TONES } from "./api/request-list"
 import { IconButton } from "./icon-button"
@@ -45,7 +39,6 @@ import { TabStrip, type TabStripItem } from "./tab-strip"
  * membership. `arrange` in `lib/tabs.ts` reconciles the two.
  */
 export function WorkspaceTabs({ pane }: { pane: Pane }) {
-  const projectId = useStudio((state) => state.projectId)
   const tabOrder = useStudio((state) => state.tabOrder)
   const setTabOrder = useStudio((state) => state.setTabOrder)
 
@@ -70,15 +63,6 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
   const closeOtherApi = useApi((state) => state.closeOthers)
   const closeAllApi = useApi((state) => state.closeAll)
   const reorderApi = useApi((state) => state.reorder)
-
-  const specPaths = useSpecs((state) => state.openPaths)
-  const specSelected = useSpecs((state) => state.selectedPath)
-  const specDrafts = useSpecs((state) => state.drafts)
-  const specSelect = useSpecs((state) => state.select)
-  const closeSpec = useSpecs((state) => state.close)
-  const closeOtherSpecs = useSpecs((state) => state.closeOthers)
-  const closeAllSpecs = useSpecs((state) => state.closeAll)
-  const reorderSpecs = useSpecs((state) => state.reorder)
 
   const inboxMessages = useInbox((state) => state.messages)
   const inboxOpenIds = useInbox((state) => state.openIds)
@@ -129,15 +113,20 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
       ]
     })
 
-  const sessions = useTerminal((state) => state.sessions)
+  // Filtered here rather than in the selector: `liveSessions` builds a new
+  // array, and a selector that never returns the same reference twice re-renders
+  // on every store write.
+  const allSessions = useTerminal((state) => state.sessions)
+  // The strip is the running sessions. A closed one is a row in the Terminal
+  // sidebar and nothing else — it has no pty, so there is no pane for a tab
+  // here to switch to.
+  const sessions = liveSessions(allSessions)
   const terminalActiveId = useTerminal((state) => state.activeId)
   const terminalSelect = useTerminal((state) => state.select)
   const closeTerminal = useTerminal((state) => state.close)
   const closeOtherTerminals = useTerminal((state) => state.closeOthers)
   const closeAllTerminals = useTerminal((state) => state.closeAll)
   const reorderTerminals = useTerminal((state) => state.reorder)
-
-  const ownSessions = sessionsOf(sessions, projectId)
 
   /** Every open tab, grouped by panel — the order a strip nobody has dragged
    * in is shown in, and the fallback `arrange` places new tabs against. */
@@ -189,18 +178,9 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
     }),
     ...captureItems("mail"),
     ...captureItems("webhook"),
-    ...specPaths.map((path) => ({
-      id: PREFIX.spec + path,
-      label: specName(path),
-      title: path,
-      copyText: path,
-      copyLabel: "Copy path",
-      dirty: isDirty(draftOf(specDrafts, path)),
-      icon: <FileText className="size-3.5 shrink-0" />,
-    })),
-    ...ownSessions.map((session, index) => {
+    ...sessions.map((session, index) => {
       const { icon: Icon } = SESSION_TYPES[session.kind]
-      const ordinal = ownSessions
+      const ordinal = sessions
         .slice(0, index + 1)
         .filter(
           (candidate) =>
@@ -239,25 +219,17 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
         ? apiSelectedId && openIds.includes(apiSelectedId)
           ? PREFIX.api + apiSelectedId
           : null
-        : pane === "spec"
-          ? specSelected && specPaths.includes(specSelected)
-            ? PREFIX.spec + specSelected
+        : pane === "mail" || pane === "webhook"
+          ? inboxSelectedId[pane] &&
+            inboxOpenIds[pane].includes(inboxSelectedId[pane]!)
+            ? PREFIX[pane] + inboxSelectedId[pane]
             : null
-          : pane === "mail" || pane === "webhook"
-            ? inboxSelectedId[pane] &&
-              inboxOpenIds[pane].includes(inboxSelectedId[pane]!)
-              ? PREFIX[pane] + inboxSelectedId[pane]
-              : null
-            : // Not `activeId` itself: with none set the panel falls back to the
-              // most recent session, and the strip has to mark the same one.
-              (() => {
-                const active = activeSessionOf(
-                  sessions,
-                  projectId,
-                  terminalActiveId
-                )
-                return active ? PREFIX.terminal + active.id : null
-              })()
+          : // Not `activeId` itself: with none set the panel falls back to the
+            // most recent session, and the strip has to mark the same one.
+            (() => {
+              const active = activeSessionOf(sessions, terminalActiveId)
+              return active ? PREFIX.terminal + active.id : null
+            })()
 
   // Nothing here switches the pane: each panel's own `select` does that, so a
   // table opened from the tree and one opened from this strip behave alike.
@@ -267,7 +239,6 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
     const own = bare(id, kind)
 
     if (kind === "api") apiSelect(own)
-    else if (kind === "spec") specSelect(own)
     else if (kind === "mail" || kind === "webhook") inboxSelect(kind, own)
     else if (kind === "terminal") terminalSelect(own)
     else {
@@ -285,7 +256,6 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
 
     if (kind === "database") closeDbTab(own)
     else if (kind === "api") closeApi(own)
-    else if (kind === "spec") closeSpec(own)
     else if (kind === "mail" || kind === "webhook") closeInbox(kind, own)
     else closeTerminal(own)
   }
@@ -293,10 +263,9 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
   function closeAll() {
     closeAllDbTabs()
     closeAllApi()
-    closeAllSpecs()
     closeAllInbox("mail")
     closeAllInbox("webhook")
-    if (projectId) closeAllTerminals(projectId)
+    closeAllTerminals()
   }
 
   function closeOthers(id: string) {
@@ -307,15 +276,13 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
     // the other panels lose all of theirs, and the tab's own panel keeps it.
     if (kind !== "database") closeAllDbTabs()
     if (kind !== "api") closeAllApi()
-    if (kind !== "spec") closeAllSpecs()
     if (kind !== "mail") closeAllInbox("mail")
     if (kind !== "webhook") closeAllInbox("webhook")
-    if (kind !== "terminal" && projectId) closeAllTerminals(projectId)
+    if (kind !== "terminal") closeAllTerminals()
 
     const own = bare(id, kind)
     if (kind === "database") closeOtherDbTabs(own)
     else if (kind === "api") closeOtherApi(own)
-    else if (kind === "spec") closeOtherSpecs(own)
     else if (kind === "mail" || kind === "webhook") closeOtherInbox(kind, own)
     else closeOtherTerminals(own)
   }
@@ -334,10 +301,9 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
 
     reorderDbTabs(of("database"))
     reorderApi(of("api"))
-    reorderSpecs(of("spec"))
     reorderInbox("mail", of("mail"))
     reorderInbox("webhook", of("webhook"))
-    if (projectId) reorderTerminals(projectId, of("terminal"))
+    reorderTerminals(of("terminal"))
   }
 
   return (
@@ -365,6 +331,32 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
       onCloseAll={closeAll}
       onReorder={reorder}
     />
+  )
+}
+
+/**
+ * Whether anything at all is open in the strip.
+ *
+ * Answered here rather than worked out again in `studio.tsx` because the four
+ * stores it takes are already this file's business — the strip is the one place
+ * that knows what counts as a tab, and a second count kept elsewhere is a second
+ * thing to hold in step with `grouped` above.
+ */
+export function useHasOpenTabs(): boolean {
+  const databaseId = useExplorer((state) => state.databaseId)
+  const dbTabs = useExplorer((state) => state.openTabs)
+  const apiOpenIds = useApi((state) => state.openIds)
+  const inboxOpenIds = useInbox((state) => state.openIds)
+  const sessions = useTerminal((state) => state.sessions)
+
+  return (
+    (databaseId !== null && dbTabs.length > 0) ||
+    apiOpenIds.length > 0 ||
+    inboxOpenIds.mail.length > 0 ||
+    inboxOpenIds.webhook.length > 0 ||
+    // A folder listing nothing but closed sessions has no tab in the strip,
+    // and the pane belongs to `NothingOpen`.
+    liveSessions(sessions).length > 0
   )
 }
 

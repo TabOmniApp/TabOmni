@@ -9,7 +9,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import { Separator } from "@/components/ui/separator"
 import {
   Tooltip,
   TooltipContent,
@@ -17,27 +16,18 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useEffect, useMemo, useState, type ComponentType } from "react"
-import {
-  Database,
-  FileText,
-  Mail,
-  Send,
-  SquareTerminal,
-  Webhook,
-} from "lucide-react"
+import { Database, Mail, Send, SquareTerminal, Webhook } from "lucide-react"
 
 import { unreadCount, useInbox } from "@/lib/inbox/store"
 import { useRail } from "@/lib/rail"
-import { ProjectSwitcher } from "./project-switcher"
 
 /** Top-level areas of the workbench. */
-export type Section =
-  "database" | "api" | "mail" | "webhook" | "spec" | "terminal"
+export type Section = "database" | "api" | "mail" | "webhook" | "terminal"
 
 /**
  * Ordered the way the work goes: the data and the endpoints behind it, then
- * what those endpoints send back out and what arrives unasked, then the specs
- * they are built against, then the terminal.
+ * what those endpoints send back out and what arrives unasked, then the
+ * terminal.
  *
  * Mail and Webhooks are two sections rather than one because they replace two
  * applications and are read in two different frames of mind — a rendered email
@@ -47,7 +37,7 @@ export type Section =
  * `Icon` is typed by the one prop the rail passes rather than as a Lucide icon,
  * so a hand-drawn mark could sit beside the glyphs.
  */
-const SECTIONS: {
+export const SECTIONS: {
   id: Section
   label: string
   Icon: ComponentType<{ className?: string }>
@@ -56,7 +46,6 @@ const SECTIONS: {
   { id: "api", label: "API", Icon: Send },
   { id: "mail", label: "Mail", Icon: Mail },
   { id: "webhook", label: "Webhooks", Icon: Webhook },
-  { id: "spec", label: "Specs", Icon: FileText },
   { id: "terminal", label: "Terminal", Icon: SquareTerminal },
 ]
 
@@ -71,7 +60,6 @@ export const SECTION_ACCENT: Record<Section, string> = {
   api: "var(--section-api)",
   mail: "var(--section-mail)",
   webhook: "var(--section-webhook)",
-  spec: "var(--section-spec)",
   terminal: "var(--section-terminal)",
 }
 
@@ -123,13 +111,9 @@ function moveSection(
 export function ActivityBar({
   section,
   onSelect,
-  onAddProject,
 }: {
   section: Section
   onSelect: (section: Section) => void
-  /** Passed through to the switcher above the rail, which offers it as a menu
-   * item. The dialog it opens belongs to the workbench, not to the rail. */
-  onAddProject: () => void
 }) {
   // The two sections with something to say while they are closed: mail and
   // callbacks arrive whether or not anybody is looking, and an inbox nobody is
@@ -213,11 +197,6 @@ export function ActivityBar({
           />
         }
       >
-        {/* Above the divider because it is not a section: it chooses what the
-            sections below are looking at. */}
-        <ProjectSwitcher onAddProject={onAddProject} />
-        <Separator className="my-1.5 w-6" />
-
         {visible.map((id, index) => {
           const { label, Icon } = SECTIONS.find((entry) => entry.id === id)!
           const active = section === id

@@ -13,11 +13,10 @@
  * disables still get some unused CSS from that import; harmless, since nothing
  * of theirs exists in that DOM to match it.
  *
- * Its own file because there are now two of these editors — the chat composer
- * and the Spec panel's prose sections — and only their *sizing* differs. Each
- * keeps its own stylesheet for that (`chat-composer.css`, `spec-prose.css`);
- * what they must not do is disagree about what a Milkdown editor is coloured
- * like, which is why the palette is here and not in either of them.
+ * Its own file rather than part of `chat-composer.css` because the palette and
+ * the sizing are answers to different questions: a second editor added later
+ * would want this one and a sizing stylesheet of its own, which is exactly how
+ * the Spec panel's prose sections used it before that panel was removed.
  */
 .milkdown {
   --crepe-color-background: var(--background);

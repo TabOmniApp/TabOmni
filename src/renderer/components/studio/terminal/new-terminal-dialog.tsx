@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -8,15 +8,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Download, Plus, RefreshCw } from "lucide-react"
 
 import type { AgentKind, AgentToolStatus } from "@shared/api"
 import { SESSION_TYPES } from "@/lib/terminal/catalog"
 import { useTerminal } from "@/lib/terminal/store"
+import { useStudio } from "@/lib/store"
 
 /**
- * The picker behind the Terminal panel's `+`: which kind of session to open.
+ * The picker behind the Terminal panel's `+`: which folder to run in, and
+ * which kind of session to open.
+ *
+ * The folder is asked because a pty's cwd is fixed the moment it starts — it
+ * cannot be moved afterwards, so this is the only place the choice can be
+ * made. It defaults to `preferredFolderId`, which is the folder the last
+ * session was opened in.
  *
  * A kind whose CLI is not on this machine offers to install it instead of to
  * start it — the alternative was a session that opens only to print
@@ -24,16 +38,21 @@ import { useTerminal } from "@/lib/terminal/store"
  * about it.
  */
 export function NewTerminalDialog({
-  projectId,
+  preferredFolderId,
   onClose,
 }: {
-  projectId: string
+  preferredFolderId: string | null
   onClose: () => void
 }) {
+  const folders = useStudio((state) => state.folders)
   const tools = useTerminal((state) => state.tools)
   const checking = useTerminal((state) => state.checkingTools)
   const refreshTools = useTerminal((state) => state.refreshTools)
   const open = useTerminal((state) => state.open)
+
+  const [folderId, setFolderId] = useState(
+    preferredFolderId ?? folders[0]?.id ?? ""
+  )
 
   // Asked every time the dialog opens: a CLI the user installed in a terminal
   // of their own, minutes ago, is exactly what a cached answer gets wrong.
@@ -42,7 +61,8 @@ export function NewTerminalDialog({
   }, [refreshTools])
 
   function start(kind: AgentKind, installing: boolean) {
-    open(projectId, kind, { installing })
+    if (!folderId) return
+    open(folderId, kind, { installing })
     onClose()
   }
 
@@ -57,9 +77,45 @@ export function NewTerminalDialog({
         <DialogHeader>
           <DialogTitle>New session</DialogTitle>
           <DialogDescription>
-            Runs on this machine, in the project&apos;s own directory.
+            Runs on this machine, in the folder&apos;s own directory.
           </DialogDescription>
         </DialogHeader>
+
+        {/* Only worth asking when there is a choice: one folder is the answer
+            already, and a select with a single option is a control that does
+            nothing. */}
+        {folders.length > 1 && (
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 text-xs text-muted-foreground">In</span>
+            <Select
+              items={folders.map((folder) => ({
+                value: folder.id,
+                label: folder.name,
+              }))}
+              value={folderId}
+              onValueChange={(value) => setFolderId(String(value))}
+            >
+              <SelectTrigger
+                size="sm"
+                aria-label="Folder to run in"
+                className="h-7 min-w-0 flex-1 text-xs"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent
+                align="start"
+                alignItemWithTrigger={false}
+                className="w-auto min-w-(--anchor-width)"
+              >
+                {folders.map((folder) => (
+                  <SelectItem key={folder.id} value={folder.id}>
+                    {folder.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         <div className="grid gap-2">
           {tools === null && checking && (

@@ -21,6 +21,23 @@ const lightTheme = {
   selectionBackground: "#e4e4e7",
 }
 
+/**
+ * A path as one word of a command line.
+ *
+ * A pasted `Screenshot 2026-08-10 at 10.37.38 AM.png` is three arguments to
+ * any shell reading it, and the system terminals answer that by quoting rather
+ * than by backslash-escaping — the `'…'` a pasted screenshot arrives wrapped
+ * in. Inside single quotes nothing needs escaping but a single quote itself,
+ * which has to leave and come back.
+ *
+ * Left alone when there is nothing to quote, so the common path stays
+ * something a person can read and edit.
+ */
+function shellWord(path: string): string {
+  if (/^[\w@%+=:,./-]+$/.test(path)) return path
+  return `'${path.replaceAll("'", `'\\''`)}'`
+}
+
 export type TerminalHandle = {
   write: (chunk: string) => void
   onData: (listener: (data: string) => void) => void
@@ -46,6 +63,7 @@ type TerminalViewProps = {
  */
 export function TerminalView({ onReady, onResize }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const { resolvedTheme } = useTheme()
   const terminalRef = useRef<Terminal | null>(null)
 
@@ -117,6 +135,43 @@ export function TerminalView({ onReady, onResize }: TerminalViewProps) {
       // Left on the default renderer.
     }
 
+    /*
+     * Shift+Enter, sent as ESC CR.
+     *
+     * A pty carries bytes, not modifiers: Enter is one byte whether or not
+     * Shift was down, which is why anything that takes a multi-line prompt has
+     * to be told about the modifier by some other sequence. ESC CR is the one
+     * both ends of this panel already read as a newline — zsh binds `\e^M` to
+     * `self-insert-unmeta`, so a shell tab gets a continuation line, and it is
+     * what `claude /terminal-setup` writes into iTerm2's and VS Code's keymaps
+     * for the agent CLIs. There is no user keymap to write here, so the
+     * terminal sends it itself and the key works without a setup step.
+     */
+    terminal.attachCustomKeyEventHandler((event) => {
+      const plainShiftEnter =
+        event.key === "Enter" &&
+        event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      if (!plainShiftEnter) return true
+
+      /*
+       * Every event for this key has to be claimed, not just the keydown.
+       * Refusing the keydown makes xterm return before it sets its own
+       * `_keyDownHandled`, so it never calls `preventDefault` and the browser
+       * goes on to fire `keypress` — where xterm reads Enter's char code and
+       * sends a bare CR. Letting that one through appends the newline and then
+       * submits the line, which on screen is indistinguishable from having
+       * pressed Enter, and is exactly what this key looked like it was doing.
+       */
+      if (event.type !== "keydown") return false
+
+      event.preventDefault()
+      terminal.input("\x1b\r")
+      return false
+    })
+
     terminalRef.current = terminal
 
     const refit = () => {
@@ -130,6 +185,131 @@ export function TerminalView({ onReady, onResize }: TerminalViewProps) {
     }
 
     let disposed = false
+
+    /*
+     * A pasted file, typed in as its path — any file, not only a picture.
+     *
+     * That substitution is the whole of what a terminal can do with a file on
+     * the clipboard: the process on the other end of the pty reads bytes, so a
+     * file is named to it rather than handed over. It is also all the system
+     * terminals do, and what someone pasting into this one is asking for.
+     *
+     * Two sources, one for each way a file reaches a clipboard: copied in
+     * Finder it has a real path already, and `getPathForFile` gives it without
+     * copying anything; a screenshot taken straight to the clipboard has no
+     * file behind it at all, says so with an empty string, and main has to
+     * write it out before there is anything to name.
+     *
+     * Capture phase, because xterm's own paste handler sits on the textarea
+     * inside this host and would otherwise get there first. Only a file is
+     * intercepted — a text paste is left to it untouched.
+     */
+    /**
+     * Types the paths in as one command line's worth of words.
+     *
+     * The trailing space is what a real terminal adds to a dragged-in file: it
+     * ends the path, so whatever is typed next is not read as part of it.
+     */
+    const insertPaths = (paths: (string | null)[]) => {
+      // The pane can be closed while a file is being written out, and `input`
+      // on a disposed terminal throws.
+      if (disposed) return
+
+      const line = paths
+        .filter((path): path is string => Boolean(path))
+        .map(shellWord)
+        .join(" ")
+      if (!line) return
+
+      terminal.input(`${line} `)
+    }
+
+    const onPaste = (event: ClipboardEvent) => {
+      const files = [...(event.clipboardData?.items ?? [])].filter(
+        (item) => item.kind === "file"
+      )
+      if (files.length === 0) return
+
+      event.preventDefault()
+      event.stopPropagation()
+
+      // `getAsFile` reads the event itself, so it cannot be left until the
+      // promises below have settled.
+      const resolving = files.map((item) => {
+        const file = item.getAsFile()
+        const onDisk = file ? window.desktop.getPathForFile(file) : ""
+        return onDisk
+          ? Promise.resolve<string | null>(onDisk)
+          : window.desktop.clipboardImagePath()
+      })
+
+      void Promise.all(resolving).then(insertPaths)
+    }
+    host.addEventListener("paste", onPaste, { capture: true })
+
+    /*
+     * Dropping a file types its path in, the same substitution the paste above
+     * makes, with the tint macOS Terminal draws while something is over it.
+     *
+     * The tint is toggled by hand on a sibling element rather than held in
+     * React state: a re-render of this component would tear the xterm instance
+     * down and take the session with it.
+     *
+     * `dragleave` fires every time the pointer crosses into a child element as
+     * well as when it finally leaves, so the depth is counted rather than
+     * trusted — otherwise the tint flickers off the moment the pointer moves
+     * over the terminal's own rows.
+     */
+    const overlay = overlayRef.current
+    const showDropTarget = (on: boolean) =>
+      overlay?.classList.toggle("hidden", !on)
+    let dragDepth = 0
+
+    const carriesFiles = (event: DragEvent) =>
+      [...(event.dataTransfer?.types ?? [])].includes("Files")
+
+    const onDragEnter = (event: DragEvent) => {
+      if (!carriesFiles(event)) return
+      event.preventDefault()
+      dragDepth += 1
+      showDropTarget(true)
+    }
+
+    const onDragOver = (event: DragEvent) => {
+      if (!carriesFiles(event)) return
+      // Without this the drop is refused, the cursor shows the "no" badge, and
+      // Chromium navigates the window to the dropped file instead.
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy"
+    }
+
+    const onDragLeave = (event: DragEvent) => {
+      if (!carriesFiles(event)) return
+      dragDepth = Math.max(0, dragDepth - 1)
+      if (dragDepth === 0) showDropTarget(false)
+    }
+
+    const onDrop = (event: DragEvent) => {
+      if (!carriesFiles(event)) return
+      event.preventDefault()
+      event.stopPropagation()
+      dragDepth = 0
+      showDropTarget(false)
+
+      // A dropped file always has a path — there is a real file behind it, so
+      // none of the clipboard's "bytes with nothing to name" case applies.
+      insertPaths(
+        [...(event.dataTransfer?.files ?? [])].map((file) =>
+          window.desktop.getPathForFile(file)
+        )
+      )
+    }
+
+    host.addEventListener("dragenter", onDragEnter)
+    host.addEventListener("dragover", onDragOver)
+    host.addEventListener("dragleave", onDragLeave)
+    host.addEventListener("drop", onDrop)
+
     let observer: ResizeObserver | undefined
     let disposeResize: { dispose: () => void } | undefined
     let teardown: (() => void) | undefined
@@ -180,6 +360,11 @@ export function TerminalView({ onReady, onResize }: TerminalViewProps) {
       // harmless no-op.
       cancelAnimationFrame(outerRafId)
       cancelAnimationFrame(innerRafId)
+      host.removeEventListener("paste", onPaste, { capture: true })
+      host.removeEventListener("dragenter", onDragEnter)
+      host.removeEventListener("dragover", onDragOver)
+      host.removeEventListener("dragleave", onDragLeave)
+      host.removeEventListener("drop", onDrop)
       teardown?.()
       disposeResize?.dispose()
       observer?.disconnect()
@@ -194,5 +379,16 @@ export function TerminalView({ onReady, onResize }: TerminalViewProps) {
     terminal.options.theme = resolvedTheme === "dark" ? darkTheme : lightTheme
   }, [resolvedTheme])
 
-  return <div ref={hostRef} className="h-full w-full" />
+  return (
+    <div className="relative h-full w-full">
+      <div ref={hostRef} className="h-full w-full" />
+      {/* Shown only while a file is being dragged over, by the effect above
+          rather than by a render — see the drag handlers for why. Inert, so it
+          cannot become the `dragleave` the drop is waiting on. */}
+      <div
+        ref={overlayRef}
+        className="pointer-events-none absolute inset-0 hidden bg-primary/10 ring-2 ring-primary/50 ring-inset"
+      />
+    </div>
+  )
 }

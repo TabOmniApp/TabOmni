@@ -12,10 +12,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { FolderOpen } from "lucide-react"
 
-import * as repo from "@/lib/db/projects"
+import * as repo from "@/lib/workspace"
 import { useStudio } from "@/lib/store"
 
-/** The folder's own name, as a starting point for the project name. */
+/** The directory's own name, as a starting point for the folder's name. */
 function basename(target: string): string {
   return (
     target
@@ -26,20 +26,27 @@ function basename(target: string): string {
 }
 
 /**
- * Adds a folder that already exists on this machine as a project.
+ * Points the workspace at a folder that already exists on this machine.
  *
- * The folder is opened where it is, not copied: edits made to it elsewhere are
- * edits to their repository, and their git sees them. That is stated in the
- * dialog because it is the one thing about this that could surprise someone.
+ * The folder is worked on where it is, not copied: edits made to it elsewhere
+ * are edits to the same repository, and their git sees them. That is stated in
+ * the dialog because it is the one thing about this that could surprise
+ * someone.
+ *
+ * A failure — a path that is not there, a folder already added — is shown here
+ * and leaves the dialog open, since the field holding the bad value is the only
+ * place it can be corrected.
  */
-export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
-  const importProject = useStudio((state) => state.importProject)
+export function AddFolderDialog({ onClose }: { onClose: () => void }) {
+  const addFolder = useStudio((state) => state.addFolder)
 
   const nameId = useId()
   const pathId = useId()
 
   const [path, setPath] = useState("")
   const [name, setName] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
 
   async function browse() {
     const chosen = await repo.pickDirectory()
@@ -49,12 +56,20 @@ export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  function submit(event: React.FormEvent) {
+  async function submit(event: React.FormEvent) {
     event.preventDefault()
-    if (!path) return
+    if (!path || adding) return
 
-    void importProject({ path, name: name.trim() || basename(path) })
-    onClose()
+    setAdding(true)
+    setError(null)
+    try {
+      await addFolder({ path, name: name.trim() || basename(path) })
+      onClose()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setAdding(false)
+    }
   }
 
   return (
@@ -66,15 +81,15 @@ export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
     >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Import a project</DialogTitle>
+          <DialogTitle>Add a folder</DialogTitle>
           <DialogDescription>
             The folder is opened where it is. Files in it stay in that folder —
-            nothing is copied, and deleting the project later leaves it
-            untouched.
+            nothing is copied, and removing it from the workspace later leaves
+            it untouched.
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={(event) => void submit(event)} className="space-y-4">
           <div>
             <Label htmlFor={pathId} className="text-xs font-medium">
               Folder
@@ -115,12 +130,14 @@ export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
             />
           </div>
 
+          {error && <p className="text-xs text-destructive">{error}</p>}
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!path}>
-              Import
+            <Button type="submit" disabled={!path || adding}>
+              Add
             </Button>
           </DialogFooter>
         </form>

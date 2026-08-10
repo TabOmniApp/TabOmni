@@ -6,44 +6,37 @@
  * frontend reaches it through the `@shared` alias.
  */
 
-/** A project's source tree, flattened: `"src/App.tsx" -> contents`. */
-export type FileMap = Record<string, string>
-
 /**
- * One file in a project, without its contents.
+ * One folder the workspace has been pointed at — a repository on this machine,
+ * edited and run where it already is.
  *
- * The tree is listed separately from what the editor holds, because an imported
- * project can be a real repository: reading every file to show a sidebar would
- * mean megabytes over IPC, and reading images or archives as text would corrupt
- * them the moment the editor saved. Contents are fetched per file instead.
+ * Timestamps cross IPC as ISO strings: structured clone can carry a `Date`, but
+ * keeping the wire format explicit means the renderer is never guessing whether
+ * it holds a string or a `Date`.
  */
-export type FileEntry = {
+export type WorkspaceFolder = {
+  id: string
+  /** What the UI calls it. Defaults to the directory's own name. */
+  name: string
+  /** The absolute host path. Nothing is ever copied out of it: the studio adds
+   * a record and reads the files where they are. */
   path: string
-  size: number
-  /** False for a file the editor must not open: binary, or too large. */
-  editable: boolean
+  addedAt: string
 }
 
 /**
- * Timestamps cross IPC as ISO strings: structured clone can carry a `Date`,
- * but keeping the wire format explicit means the renderer is never guessing
- * whether it holds a string or a `Date`.
+ * The one workspace everything in the studio belongs to.
+ *
+ * There is deliberately no second one and no switching between them: two
+ * folders open at once is what a person working across a frontend and its API
+ * actually has, and a switch would take one of them — and every tab, session
+ * and connection opened against it — off the screen. Sign-in will bring more
+ * than one workspace, and until then the studio always holds this one.
  */
-export type ProjectRecord = {
+export type WorkspaceRecord = {
   id: string
   name: string
-  createdAt: string
-  updatedAt: string
-  /**
-   * The absolute host path of the imported folder the project's files live
-   * in.
-   *
-   * An imported project is edited in place — that is the point of importing
-   * one — so deleting it must take the studio's own directory and nothing
-   * else. Nullable for a project scaffolded before importing became the only
-   * way in, whose files still live under `~/.tabula`.
-   */
-  sourcePath: string | null
+  folders: WorkspaceFolder[]
 }
 
 /** Which SQL engine a database speaks. */
@@ -59,13 +52,16 @@ export type DbEngine = "postgres" | "mysql"
 export type DbOrigin = "docker" | "external"
 
 /**
- * A database or connection attached to a project. Never carries a password —
- * that stays inside the main process (see `electron/store.ts`'s
- * `connectionInfoOf`) and is never sent over IPC.
+ * A database or connection in the workspace. Never carries a password — that
+ * stays inside the main process (see `electron/store.ts`'s `connectionInfoOf`)
+ * and is never sent over IPC.
+ *
+ * Not tied to any one folder: a project's database is generally the same
+ * database its frontend and its API both talk to, and filing it under one of
+ * the two would only mean picking which panel is allowed to see it.
  */
 export type DatabaseRecord = {
   id: string
-  projectId: string
   name: string
   engine: DbEngine
   origin: DbOrigin
@@ -119,7 +115,7 @@ export type AiFilterColumn = {
   type: string
 }
 
-/** One endpoint the agent found while reading a project's own source. */
+/** One endpoint the agent found while reading a folder's own source. */
 export type ApiImportRequest = {
   name: string
   method: string
@@ -135,7 +131,7 @@ export type ApiImportRequest = {
 
 /**
  * A resource/controller-shaped group of endpoints, found by reading the
- * project rather than a fixed spec parser.
+ * folder rather than a fixed spec parser.
  *
  * Flat, not nested: `HttpFolder.parentId` could nest arbitrarily deep, but an
  * import groups by "what file/controller this came from", which has no
@@ -147,7 +143,7 @@ export type ApiImportFolder = {
 }
 
 /**
- * What "AI import" proposes after reading a project. Nothing here is trusted
+ * What "AI import" proposes after reading a folder. Nothing here is trusted
  * yet — see `aiImportApi`'s doc comment — and nothing is saved until the user
  * confirms in the dialog that shows this.
  */
@@ -170,9 +166,8 @@ export type UpdateDatabaseInput = {
 }
 
 export type NewDatabaseInput =
-  | { projectId: string; name: string; engine: DbEngine; origin: "docker" }
+  | { name: string; engine: DbEngine; origin: "docker" }
   | {
-      projectId: string
       name: string
       engine: DbEngine
       origin: "external"
@@ -216,8 +211,8 @@ export type ProcessExit = {
 }
 
 /**
- * What a session in the Terminal panel runs, all of it on the host and in the
- * project's real directory.
+ * What a session in the Terminal panel runs, all of it on the host and in one
+ * of the workspace's folders.
  *
  * `terminal` is the user's own shell; `claude` is a coding CLI installed on the
  * machine, which is the reason this is a union at all — that CLI being absent
@@ -275,26 +270,24 @@ export type ClaudeModel =
 export type ClaudePermissionMode = "default" | "plan" | "acceptEdits" | "auto"
 
 /**
- * Where a project's choice of the two above is kept.
+ * Where the workspace's choice of the two above is kept.
  *
- * Per project, and in the same settings store as everything else, so the
- * renderer that writes them and the main process that turns them into CLI
- * flags cannot disagree about the key.
+ * Spelled out here rather than in each side's own file, so the renderer that
+ * writes them and the main process that turns them into CLI flags cannot
+ * disagree about the key. One choice for the workspace rather than one per
+ * folder: it is a preference about how you like to work, not something a
+ * repository has an opinion on.
  */
-export function claudeModelKey(projectId: string): string {
-  return `claude.model:${projectId}`
-}
+export const CLAUDE_MODEL_KEY = "claude.model"
 
-export function claudePermissionModeKey(projectId: string): string {
-  return `claude.permissionMode:${projectId}`
-}
+export const CLAUDE_PERMISSION_MODE_KEY = "claude.permissionMode"
 
 /**
  * Where one entry in the composer's `/` menu came from.
  *
  * Kept on the entry rather than resolved away, because the menu says it: two
  * rows can otherwise look identical and behave differently, and "is this
- * mine or the project's?" is the first question about a command you did not
+ * mine or the repository's?" is the first question about a command you did not
  * expect to see.
  */
 export type ClaudeSlashSource =
@@ -455,7 +448,7 @@ export type TranscriptEventBody = {
  */
 export type TranscriptEvent = { mirrorId: string } & TranscriptEventBody
 
-/** A conversation the CLI has on disk for a project's directory. */
+/** A conversation the CLI has on disk for a folder's directory. */
 export type TranscriptSessionSummary = {
   /** The CLI's own session id — what `--session-id` set and the transcript
    * file is named after. */
@@ -503,9 +496,9 @@ export type SqlResult = {
 /**
  * One saved HTTP request.
  *
- * Kept beside the project — in the studio's own directory for it, not in the
- * repository — so trying an endpoint never writes a file into someone's
- * working tree.
+ * Kept in the studio's own directory rather than in any of the workspace's
+ * folders, so trying an endpoint never writes a file into someone's working
+ * tree.
  */
 export type HttpRequestRecord = {
   id: string
@@ -589,7 +582,7 @@ export type HttpVariable = {
 }
 
 /**
- * One cookie in a project's jar.
+ * One cookie in the workspace's jar.
  *
  * Enough of RFC 6265 to be useful against a dev server, and no more: domain
  * and path matching, expiry, and `secure`. There is no browsing context here,
@@ -646,7 +639,7 @@ export type HttpResponseResult = {
  * Which of the Inbox panel's two servers caught something.
  *
  * One panel rather than two because they are the same job seen from both
- * sides: what the project sends out that never leaves the machine (mail), and
+ * sides: what the code sends out that never leaves the machine (mail), and
  * what someone else sends in that has nowhere to arrive (a webhook). The API
  * panel makes requests; this catches them.
  */
@@ -658,7 +651,7 @@ export type InboxKind = "mail" | "webhook"
  * `dataUrl` is the bytes, and null for anything past the inline ceiling — a
  * preview is what this is for, and holding a 40MB video in the message list to
  * be able to show its name is not worth the memory. There is deliberately no
- * "save to disk": the attachment came from the project's own code, which
+ * "save to disk": the attachment came from the sender's own code, which
  * already has the file it attached.
  */
 export type InboxAttachment = {
@@ -707,7 +700,6 @@ export type InboxWebhook = {
 
 type InboxCapture = {
   id: string
-  projectId: string
   /** ISO-8601, so the renderer decides how to say it. */
   receivedAt: string
   /** The one line the list shows: a subject, or a method and path. */
@@ -752,12 +744,10 @@ export type InboxServerStatus = {
  */
 export type InboxStatus = Record<InboxKind, InboxServerStatus>
 
-/** Where a project's ports and auto-start choices are kept — see
- * `claudeModelKey` for why this is a function shared by both sides rather than
- * a key spelled out twice. */
-export function inboxConfigKey(projectId: string): string {
-  return `inbox.config:${projectId}`
-}
+/** Where the two servers' ports and auto-start choices are kept — see
+ * `CLAUDE_MODEL_KEY` for why this is shared by both sides rather than a key
+ * spelled out twice. */
+export const INBOX_CONFIG_KEY = "inbox.config"
 
 /** Mailpit's SMTP port, and one beside it for the webhook catcher. What each
  * panel's settings tab starts from. */
@@ -766,12 +756,11 @@ export const INBOX_DEFAULT_PORTS: Record<InboxKind, number> = {
   webhook: 1026,
 }
 
-/** A captured message, tagged so the renderer can drop one for a project it is
- * no longer showing. */
+/** A message either server has just caught. */
 export type InboxEvent = { message: InboxMessage }
 
 /** Sent whenever either server starts, stops, or falls over on its own. */
-export type InboxStatusEvent = { projectId: string; status: InboxStatus }
+export type InboxStatusEvent = { status: InboxStatus }
 
 /**
  * The machine's headroom, and this app's share of it, over the interval since
@@ -815,13 +804,23 @@ export type DesktopApi = {
    * window's title bar being one. */
   platform: "darwin" | "win32" | "linux"
 
-  listProjects: () => Promise<ProjectRecord[]>
-  renameProject: (id: string, name: string) => Promise<void>
+  /** The workspace and the folders in it. Always resolves: a first run gets
+   * an empty default workspace rather than nothing. */
+  getWorkspace: () => Promise<WorkspaceRecord>
   /**
-   * Deletes a project. An imported project loses only what the studio added —
-   * its database, its manifest entry — never the folder itself.
+   * Points the workspace at an existing folder, worked on where it already is.
+   *
+   * Nothing is copied and nothing is written into it. Resolves with the whole
+   * workspace rather than the new folder alone, so the renderer never has to
+   * splice a list the main process just rewrote.
    */
-  deleteProject: (id: string) => Promise<void>
+  addFolder: (input: { path: string; name: string }) => Promise<WorkspaceRecord>
+  renameFolder: (id: string, name: string) => Promise<WorkspaceRecord>
+  /**
+   * Drops a folder from the workspace. The directory itself is untouched —
+   * what goes is the studio's record of it, which is all the studio ever had.
+   */
+  removeFolder: (id: string) => Promise<WorkspaceRecord>
 
   /** Opens a folder picker and resolves with the chosen path, or null. */
   pickDirectory: () => Promise<string | null>
@@ -847,109 +846,42 @@ export type DesktopApi = {
    */
   readImageDataUrl: (path: string) => Promise<string>
   /**
-   * Adds an existing folder as a project, edited and run where it already is.
+   * The image on the system clipboard, written to a temp file, as a path —
+   * or null when the clipboard holds no image.
+   *
+   * For pasting a screenshot into a terminal, where the pty is a byte stream
+   * in another process and a path is the only thing an image can be said in.
+   * A file copied in Finder needs none of this: it has a path already, and
+   * `getPathForFile` hands it over without a copy. This is the other case,
+   * where the bytes exist nowhere but the clipboard.
    */
-  importProject: (input: {
-    path: string
-    name: string
-  }) => Promise<ProjectRecord>
+  clipboardImagePath: () => Promise<string | null>
 
   /** Subscribes to the File menu. Returns an unsubscribe function. */
   onMenuCommand: (listener: (command: MenuCommand) => void) => () => void
-  /** Tells the menu what the window is showing, so items that need a project
-   * grey out when there is none. */
-  setMenuState: (state: MenuState) => Promise<void>
 
   /** Whether Docker is available, and why not when it is not — used when
    * creating a Docker-managed database. */
   dockerStatus: () => Promise<DockerStatus>
 
-  /** A project's file tree, without contents. */
-  listFiles: (projectId: string) => Promise<FileEntry[]>
-  /** One file's contents. Rejects for a file that is not editable text. */
-  readFile: (projectId: string, path: string) => Promise<string>
-  /**
-   * Writes one file, creating the directories above it.
-   *
-   * The counterpart to `readFile` and guarded by the same resolver, so a path
-   * that would escape the project is refused here too. The Spec panel is the
-   * only caller today — the file editor is still read-only — which is why the
-   * extension is checked against the same "is this editable text" rule the read
-   * side uses rather than left open: this writes into the user's own
-   * repository, and a binary clobbered through here would be their file.
-   */
-  writeFile: (projectId: string, path: string, content: string) => Promise<void>
-  /**
-   * Copies a file from anywhere on disk into `directory` inside the project,
-   * resolving with the project-relative path it landed at.
-   *
-   * Its own call rather than `writeFile` with the bytes: the Spec panel imports
-   * screenshots, and a PNG round-tripped through a UTF-8 string would arrive
-   * corrupt — which is also why `writeFile` refuses binary extensions outright.
-   * The name is deduplicated rather than overwritten, so importing a second
-   * `screen.png` cannot silently replace an earlier one.
-   */
-  importProjectFile: (
-    projectId: string,
-    sourcePath: string,
-    directory: string
-  ) => Promise<string>
-  /**
-   * An image inside the project, as a data URL.
-   *
-   * The project-relative counterpart to `readImageDataUrl`, and needed for the
-   * same reason: the renderer's origin is not `file://`, so an `<img src>`
-   * pointing into the user's repository would simply not load. The renderer
-   * never learns the project's absolute path, which is what keeps the
-   * imported-versus-scaffolded distinction inside the main process.
-   */
-  readProjectImage: (projectId: string, path: string) => Promise<string>
-  /**
-   * Deletes one of a project's paths — a file, or a directory and everything
-   * under it.
-   *
-   * Recursive because the things this deletes come in pairs: a spec and the
-   * `<name>.assets/` folder holding its screenshots are one document as far as
-   * anyone reading the repository is concerned, and leaving the pictures behind
-   * would leave a folder nothing points at.
-   */
-  deletePath: (projectId: string, path: string) => Promise<void>
-  /**
-   * Creates a directory inside the project, and every directory above it.
-   *
-   * Its own call because nothing else makes an *empty* one: `writeFile` makes
-   * the directories a file needs on its way to writing the file. A folder made
-   * here holds nothing yet, and git does not track an empty directory — so it
-   * is real on this machine and invisible to everyone else until a spec is put
-   * in it.
-   */
-  createDirectory: (projectId: string, path: string) => Promise<void>
-  /** Moves one of a project's paths. Rejects rather than overwriting: the
-   * callers are rename and duplicate, where landing on an existing name means
-   * replacing somebody's file. */
-  movePath: (projectId: string, from: string, to: string) => Promise<void>
-  /** Copies a file, or a directory and everything under it. Rejects on an
-   * existing destination for the same reason. */
-  copyPath: (projectId: string, from: string, to: string) => Promise<void>
-
-  /** The branch checked out in a project's directory, or null when it is not
-   * a git repository. */
-  gitBranch: (projectId: string) => Promise<string | null>
+  /** The branch checked out in a folder, or null when it is not a git
+   * repository. */
+  gitBranch: (folderId: string) => Promise<string | null>
 
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
 
-  /** Every database or connection attached to a project. */
-  listDatabases: (projectId: string) => Promise<DatabaseRecord[]>
+  /** Every database or connection in the workspace. */
+  listDatabases: () => Promise<DatabaseRecord[]>
   /**
-   * Adds a database to a project: either a new one in a Docker container, or
-   * a connection to one that already exists.
+   * Adds a database: either a new one in a Docker container, or a connection
+   * to one that already exists.
    */
   createDatabase: (input: NewDatabaseInput) => Promise<DatabaseRecord>
   /**
-   * Removes a database from a project. For a Docker-managed one, this also
-   * removes its container and data directory; for a connection, only the
-   * record goes — the server itself is untouched.
+   * Removes a database. For a Docker-managed one, this also removes its
+   * container and data directory; for a connection, only the record goes — the
+   * server itself is untouched.
    */
   /**
    * Changes a connection's details. Only for one the studio did not create:
@@ -1003,42 +935,33 @@ export type DesktopApi = {
    * machine. The result is a proposal: nothing is applied until the user says
    * so, and anything naming a column that does not exist is dropped.
    */
-  aiFilter: (
-    projectId: string,
-    request: string,
-    columns: AiFilterColumn[]
-  ) => Promise<FilterSet>
+  aiFilter: (request: string, columns: AiFilterColumn[]) => Promise<FilterSet>
 
   /**
-   * Reads a project's own source with the Claude Code CLI and proposes API
+   * Reads one folder's own source with the Claude Code CLI and proposes API
    * folders/requests to import — routes, controllers, OpenAPI/Swagger specs,
    * GraphQL schemas, whatever it finds. A proposal only: nothing is saved
    * until the user confirms in the import dialog.
    */
-  aiImportApi: (projectId: string) => Promise<ApiImportResult>
+  aiImportApi: (folderId: string) => Promise<ApiImportResult>
 
-  /** A project's saved requests, oldest first. */
-  listRequests: (projectId: string) => Promise<HttpRequestRecord[]>
+  /** The workspace's saved requests, oldest first. */
+  listRequests: () => Promise<HttpRequestRecord[]>
   /** Replaces the whole collection: the renderer owns the list, and one write
    * per change keeps the file and the panel from drifting apart. */
-  saveRequests: (
-    projectId: string,
-    requests: HttpRequestRecord[]
-  ) => Promise<void>
-  /** A project's environments. */
-  listEnvironments: (projectId: string) => Promise<HttpEnvironment[]>
-  saveEnvironments: (
-    projectId: string,
-    environments: HttpEnvironment[]
-  ) => Promise<void>
+  saveRequests: (requests: HttpRequestRecord[]) => Promise<void>
+  /** The workspace's environments. */
+  listEnvironments: () => Promise<HttpEnvironment[]>
+  saveEnvironments: (environments: HttpEnvironment[]) => Promise<void>
 
-  /** A project's request folders. */
-  listFolders: (projectId: string) => Promise<HttpFolder[]>
-  saveFolders: (projectId: string, folders: HttpFolder[]) => Promise<void>
+  /** The groups those requests are filed under — not to be confused with the
+   * workspace's own folders, which are directories on disk. */
+  listRequestFolders: () => Promise<HttpFolder[]>
+  saveRequestFolders: (folders: HttpFolder[]) => Promise<void>
 
-  /** A project's cookie jar. */
-  listCookies: (projectId: string) => Promise<HttpCookie[]>
-  saveCookies: (projectId: string, cookies: HttpCookie[]) => Promise<void>
+  /** The workspace's cookie jar. */
+  listCookies: () => Promise<HttpCookie[]>
+  saveCookies: (cookies: HttpCookie[]) => Promise<void>
 
   /**
    * Sends one request from the main process rather than the renderer, which
@@ -1048,8 +971,7 @@ export type DesktopApi = {
   httpSend: (input: HttpSendInput) => Promise<HttpResponseResult>
 
   /**
-   * Binds one of a project's two capture servers and resolves with the state
-   * of both.
+   * Binds one of the two capture servers and resolves with the state of both.
    *
    * One at a time, because Mail and Webhooks are separate panels with separate
    * switches: the webhook catcher is worth leaving up all day, and the SMTP
@@ -1057,14 +979,10 @@ export type DesktopApi = {
    * rejects — a port already in use comes back as `error` on that server,
    * since the fix is to pick another number rather than to try again.
    */
-  inboxStart: (
-    projectId: string,
-    server: InboxKind,
-    port: number
-  ) => Promise<InboxStatus>
+  inboxStart: (server: InboxKind, port: number) => Promise<InboxStatus>
   /** Closes one, keeping what it caught. */
-  inboxStop: (projectId: string, server: InboxKind) => Promise<InboxStatus>
-  inboxStatus: (projectId: string) => Promise<InboxStatus>
+  inboxStop: (server: InboxKind) => Promise<InboxStatus>
+  inboxStatus: () => Promise<InboxStatus>
 
   /**
    * Everything both servers have caught, newest first.
@@ -1073,12 +991,12 @@ export type DesktopApi = {
    * a file and a cap, and two calls that each had to be told about the other's
    * half would be one more thing to keep in step.
    */
-  inboxMessages: (projectId: string) => Promise<InboxMessage[]>
+  inboxMessages: () => Promise<InboxMessage[]>
   /** Marks one message as having been opened. */
-  inboxMarkRead: (projectId: string, id: string) => Promise<void>
-  inboxDelete: (projectId: string, id: string) => Promise<void>
+  inboxMarkRead: (id: string) => Promise<void>
+  inboxDelete: (id: string) => Promise<void>
   /** Deletes one kind's captures, leaving the other panel's alone. */
-  inboxClear: (projectId: string, server: InboxKind) => Promise<void>
+  inboxClear: (server: InboxKind) => Promise<void>
   /**
    * Sends a captured webhook on to `url`, verbatim — same method, body and
    * headers, minus the hop-by-hop ones the new connection has to write for
@@ -1088,21 +1006,17 @@ export type DesktopApi = {
    * and the handler that mishandled it can be run against that exact request
    * as many times as it takes. Rejects for a mail, which is not a request.
    */
-  inboxReplay: (
-    projectId: string,
-    id: string,
-    url: string
-  ) => Promise<HttpResponseResult>
+  inboxReplay: (id: string, url: string) => Promise<HttpResponseResult>
 
-  /** Subscribes to captures from every project's servers. Returns an
-   * unsubscribe function. */
+  /** Subscribes to captures from either server. Returns an unsubscribe
+   * function. */
   onInboxMessage: (listener: (event: InboxEvent) => void) => () => void
   /** Subscribes to either server going up or down. */
   onInboxStatus: (listener: (event: InboxStatusEvent) => void) => () => void
 
-  /** Runs a command in a project's directory; resolves with its process id. */
+  /** Runs a command in one of the folders; resolves with its process id. */
   startProcess: (
-    projectId: string,
+    folderId: string,
     command: string,
     args: string[]
   ) => Promise<string>
@@ -1127,14 +1041,14 @@ export type DesktopApi = {
   agentInstall: (cols: number, rows: number, kind: AgentKind) => Promise<string>
 
   /**
-   * What Claude Code's `/` menu would offer for a session in this project —
+   * What Claude Code's `/` menu would offer for a session in this folder —
    * the composer's own menu is built from it. Re-read per call rather than
    * cached, since a command file can be added while the app is open.
    */
-  claudeCommands: (projectId: string) => Promise<ClaudeSlashCommand[]>
+  claudeCommands: (folderId: string) => Promise<ClaudeSlashCommand[]>
 
   /**
-   * Opens a session of `kind` in a project's directory and resolves with the
+   * Opens a session of `kind` in one of the folders and resolves with the
    * id its events are tagged with.
    *
    * `claudeSessionId` is generated by the caller and passed to the CLI as
@@ -1145,7 +1059,7 @@ export type DesktopApi = {
    * Ignored for every kind but `claude`.
    */
   terminalCreate: (
-    projectId: string,
+    folderId: string,
     cols: number,
     rows: number,
     kind: AgentKind,
@@ -1176,15 +1090,15 @@ export type DesktopApi = {
    */
   transcriptWatch: (
     mirrorId: string,
-    projectId: string,
+    folderId: string,
     claudeSessionId: string
   ) => Promise<void>
   transcriptUnwatch: (mirrorId: string) => Promise<void>
 
-  /** Conversations the CLI has on disk for this project, most recent first —
+  /** Conversations the CLI has on disk for this folder, most recent first —
    * not sessions this app started, necessarily; any `claude` run from that
-   * project's directory writes to the same place. */
-  claudeListSessions: (projectId: string) => Promise<TranscriptSessionSummary[]>
+   * directory writes to the same place. */
+  claudeListSessions: (folderId: string) => Promise<TranscriptSessionSummary[]>
 
   /** The account's five-hour and weekly allowance, or null when the CLI has
    * never cached one. Read from `~/.claude.json`, never fetched — see
@@ -1213,25 +1127,19 @@ export type DesktopApi = {
  * than a second implementation of them: the main process names the intent and
  * the renderer opens the same dialog a button used to.
  */
-export type MenuCommand = "import-project" | "close-project"
-
-/** What the menu needs to know about the window to draw itself. */
-export type MenuState = {
-  /** False before the first project is created, and after the last is closed. */
-  projectOpen: boolean
-}
+export type MenuCommand = "add-folder"
 
 /** IPC channel names, shared so main and preload cannot drift apart. */
 export const IPC = {
-  listProjects: "projects:list",
-  renameProject: "projects:rename",
-  deleteProject: "projects:delete",
-  pickDirectory: "projects:pick-directory",
-  pickImages: "projects:pick-images",
+  getWorkspace: "workspace:get",
+  addFolder: "workspace:add-folder",
+  renameFolder: "workspace:rename-folder",
+  removeFolder: "workspace:remove-folder",
+  pickDirectory: "workspace:pick-directory",
+  pickImages: "workspace:pick-images",
   readImageDataUrl: "files:read-image-data-url",
-  importProject: "projects:import",
+  clipboardImagePath: "files:clipboard-image-path",
   menuCommand: "menu:command",
-  menuState: "menu:state",
   dockerStatus: "docker:status",
   aiFilter: "db:ai-filter",
   aiImportApi: "api:ai-import",
@@ -1240,15 +1148,6 @@ export const IPC = {
   updateDatabase: "databases:update",
   deleteDatabase: "databases:delete",
   testDatabaseConnection: "databases:test-connection",
-  listFiles: "files:list",
-  readFile: "files:read",
-  writeFile: "files:write",
-  importProjectFile: "files:import",
-  readProjectImage: "files:read-project-image",
-  deletePath: "files:delete",
-  createDirectory: "files:mkdir",
-  movePath: "files:move",
-  copyPath: "files:copy",
   gitBranch: "git:branch",
   getSetting: "settings:get",
   setSetting: "settings:set",
@@ -1259,8 +1158,8 @@ export const IPC = {
   saveRequests: "http:save",
   listEnvironments: "http:list-environments",
   saveEnvironments: "http:save-environments",
-  listFolders: "http:list-folders",
-  saveFolders: "http:save-folders",
+  listRequestFolders: "http:list-folders",
+  saveRequestFolders: "http:save-folders",
   listCookies: "http:list-cookies",
   saveCookies: "http:save-cookies",
   httpSend: "http:send",

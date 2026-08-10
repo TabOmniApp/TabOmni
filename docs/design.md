@@ -1,9 +1,9 @@
 # desktop
 
-The studio as an Electron app: projects are real directories on disk rather
-than rows in a browser database, and every tool over them — database, API,
-specs, terminal, agent — is a tab in one window rather than an application of
-its own.
+The studio as an Electron app: a workspace points at real directories on disk
+rather than rows in a browser database, and every tool over them — database,
+API, mail, webhooks, terminal, agent — is a tab in one window rather than an
+application of its own.
 
 ## Layout
 
@@ -15,36 +15,194 @@ its own.
 | `src/renderer/` | Renderer: the Vite + React studio.                            |
 | `test/`         | Plain `bun` scripts, no test framework.                       |
 
-## Projects
+## The workspace
 
-Project data lives in `~/.tabula`: `manifest.json` for the project list,
-its databases, and settings, and one directory per project under `projects/`.
+There is exactly one workspace, and it holds any number of **folders** —
+directories already on this machine, worked on where they are. Nothing is
+copied into the studio and nothing is written into them that you did not ask
+for; the manifest records an absolute path and the files stay yours.
 
 ```
 ~/.tabula/
-  manifest.json
-  projects/<id>/
-    source/       the project's own files, for a project scaffolded here
-    db/<db-id>/   one Docker-managed database's own data, if it has any
+  manifest.json     the workspace, its folders, its databases, settings
+  workspace/
+    requests.json   the API panel's collection
+    environments.json
+    folders.json    the groups those requests are filed under
+    cookies.json
+    inbox.json      what the two capture servers caught
+    db/<db-id>/     one Docker-managed database's own data
 ```
 
-A project is either imported — an existing folder on disk, edited where it
-is — or scaffolded into `source/` here. Either way, opening a project only
-reads its file tree; there is no install step and nothing else is spawned.
+**There is no switching.** That is the point of the design rather than a
+missing feature: someone working on a frontend and the API behind it has two
+folders open, not two applications to alternate between, and a switch would
+take one of them — along with every tab, session and connection opened against
+it — off the screen. Adding a folder brings its files into view; removing one
+takes its sessions with it and leaves the directory untouched.
+
+Everything else belongs to the workspace rather than to a folder: the
+databases, the saved requests, the cookie jar, the two capture servers. A
+project's database is generally the same database its frontend and its API both
+talk to, and filing it under one of the two would only decide which panel is
+allowed to see it. What _is_ per folder is what is genuinely per repository — a
+session's working directory and a branch name.
+
+Sign-in is what will bring a second workspace. Until then the studio always
+holds this one, which is why its id is a constant rather than something the
+manifest has to be read to learn.
+
+## The tab strip
+
+One strip for the whole workbench, above whichever panel is showing, rather
+than one per panel: a table, a request, a captured email and a session sit side
+by side, and clicking any of them goes to the panel that shows it. Leaving
+Database for API used to take the tables off the screen — still open, but
+nothing said so. `components/studio/workspace-tabs.tsx` assembles it from the
+four panel stores; the order across panels is `tabOrder` on the studio store,
+since a request between two tables is a position none of those four has
+anywhere to record.
+
+**The strip comes back on a reload.** It used not to: Terminal remembered its
+sessions and no other panel remembered anything, so a reload left one strip
+intact and emptied four. Each panel writes its own record under a settings key
+of its own — `http.tabs`, `inbox.tabs`, `db.tabs`, plus `workbench.strip` for the
+cross-panel order and the pane on screen — because what identifies a tab is the
+panel's business: a schema-qualified table name here, a capture id there.
+`lib/tab-memory.ts` is only the reading and writing, which was the same four
+times over.
+
+Every record is reconciled against what actually exists, never trusted: a
+request deleted since, a capture that has aged out of the capped list, a table
+that has been dropped. For the API and capture panels that happens as they are
+restored, in the first `refresh()` — the moment those panels know what their ids
+mean. Each panel restores once, so a later refresh cannot reopen what has been
+closed since.
+
+The Database panel restores earlier than that, and deliberately: **nothing reads
+a database until its branch in the tree is opened**, so restoring from its
+`refresh()` left the strip empty on launch and filled it in only once a table was
+clicked. Its tabs go back the moment a database becomes the open one, from the
+record alone — a remembered tab carries the whole `Relation`, which is all a tab
+needs — and the reconcile against the live schema happens whenever that schema is
+eventually read, by the same filter that handles a table dropped while the app is
+running.
+
+Its tabs are kept per database (`db.selected` remembers which one was open, or
+they would have nothing to be restored into), and a query tab keeps its SQL but
+not its results: a restored console with an empty buffer would be worse than no
+tab, and a result belongs to a connection that has since closed. The one
+statement a restored strip sends on its own is the page of the table that was on
+screen, since an empty grid under a table's own tab reads as a table with no
+rows.
+
+Because the strip belongs to the workbench, so does an empty one. With nothing
+open anywhere, the pane shows a single notice (`nothing-open.tsx`) rather than
+whichever panel would otherwise be there. The panels each answering for
+themselves meant the Database panel's "No table selected" spoke for all five,
+since `database` is the pane a fresh launch starts on — somebody who opened the
+studio to read captured mail was told to pick a table. The notice follows the
+**rail**, not the pane: the pane is where the last tab was, and with no tabs
+there is no last one, so the sidebar on screen is the only thing that could be
+acted on. The terminal steps aside for it too, which is what stops closing the
+last session from leaving its own "start a session" line saying the same thing
+in one panel's words.
 
 ## Terminal sessions
 
-The Terminal panel holds as many sessions as you open, each in the project's
-real directory: a plain shell, or `claude`. `+` asks which — and for a CLI that
-is not on this machine it offers to install it instead of to start it,
-running the install in a session of its own so the output and any password
-prompt are yours to read. What each kind runs, how it installs, and whether it
-is there is decided in `src/main/agent-tools.ts`, so the picker cannot offer
-something that would not start.
+The Terminal panel holds as many sessions as you open, each in one folder's
+real directory: a plain shell, or `claude`. `+` asks which folder and which
+kind — and for a CLI that is not on this machine it offers to install it
+instead of to start it, running the install in a session of its own so the
+output and any password prompt are yours to read. What each kind runs, how it
+installs, and whether it is there is decided in `src/main/agent-tools.ts`, so
+the picker cannot offer something that would not start.
 
-Sessions run on the host, outside any container, and belong to the project they
-were opened in — a pty's directory is fixed when it starts, so switching
-projects hides them rather than moving them.
+Sessions run on the host, outside any container. The folder is asked for rather
+than assumed because a pty's directory is fixed the moment it starts and cannot
+be moved afterwards — the picker is the only place that choice can be made.
+
+The sidebar is the workspace's folders, with each folder's sessions under it. A
+folder is listed whether or not it has a session, so the panel says what the
+workspace is pointed at and not merely what is running, and its branch sits on
+its own row — one line in the window header could not say which of three
+repositories it meant. Right-clicking a folder starts a session in it, renames
+it, or removes it from the workspace; the heading's `Add folder` is the other
+end of the last pair.
+
+Renaming a folder is the one rename in the studio that does not touch the thing
+it names. The manifest records an absolute path and a name beside it, and only
+the name changes — the directory keeps whatever it is called on disk, and every
+session already running in it keeps running. The dialog says so rather than
+leaving it to be discovered from Finder, which is what the `description` on
+`RenameDialog` is for.
+
+A folder folds away, and the fold is in the store rather than in the panel: the
+rail unmounts a sidebar it is not showing, and a fold that undoes itself every
+time you look at a database is not a fold. Collapsed ids are what is kept, so a
+folder added later opens rather than arriving shut, and a folder removed from
+the workspace takes its fold with it. Nothing about it reaches disk — a launch
+showing every folder open says what the workspace is pointed at, which is the
+one thing a first look wants. A shut folder still says how many sessions are
+running under it, and starting one in it opens it: a session on screen with
+nothing in the sidebar selecting it is how a session gets forgotten about.
+
+### Closing a session
+
+**Closing a tab ends the pty; it does not end the session.** The row stays in
+the sidebar under its folder, dimmed and marked `closed`, below whatever is
+still running. Clicking it runs it again — `restart` and "reopen" are the same
+act, because a pty cannot be resumed, only started over.
+
+This is about `claude` in particular. The conversation was never the studio's to
+delete: the CLI wrote it to `~/.claude/projects/…/<session-id>.jsonl` and it is
+still there after the tab goes. What closing used to do was drop the only handle
+onto it, leaving the Past sessions drawer inside a _running_ session as the way
+back — start a session, switch to Chat, open the drawer, find it. A closed row
+is that handle, and reopening one passes its `claudeSessionId` back to
+`terminalCreate`, which resumes it if `hasTranscript` finds the file.
+
+A closed shell is honest about offering less: there is no transcript and no
+saved scrollback, so running it again is a fresh pty in the same directory.
+`Forget` is how a row goes for good — named for what it does, since the
+transcript on disk is the CLI's file and is left alone.
+
+Two things are dropped rather than closed: an install run, because a closed one
+would offer to replay an installer, and a session whose pty never started,
+because there is nothing behind the row. `closed` is a separate flag from
+`exited`, which is the process ending on its own while the tab carries on.
+
+Closed rows are remembered across a launch along with the open ones, and come
+back closed. Everywhere outside the sidebar wants `liveSessions` rather than
+`sessions`: a closed session is not a tab in the strip, is not mounted in the
+pane — unmounting the pane is what kills the pty — and is not a conversation
+another tab is holding open.
+
+Which session was on screen is remembered too, and reopening happens in the
+background: `open` normally puts the pane on the terminal and makes the new
+session active, which is right when a person started it and wrong when five are
+being put back at launch. It left the last one restored active and the pane on
+the terminal, and since taking the pane also writes it down, the remembered pane
+was overwritten every launch — the whole strip appeared to forget which tab was
+selected, whichever panel it belonged to.
+
+Folder management lives here rather than in a menu above the rail because this
+is the only panel that works _in_ a folder: the databases, the saved requests
+and the captures are the workspace's, and the API panel's AI import is the one
+other thing that reads the list — it scans a repository for endpoints, which is
+reading a folder, not owning one. The File menu opens the same Add folder
+dialog, so a rail with this section hidden is not a rail with no way to add
+one.
+
+That is also why an empty workspace has no screen of its own. The studio used
+to be held shut behind a full-window "No folders yet" until one was added,
+which was right when a folder was what the whole app was about; it is not, and
+holding four panels that never needed one behind a fifth that does is a gate
+charging everybody for one panel's requirement. The sidebar simply draws an
+empty list — no notice saying it is empty, because Add folder is in the header
+directly above it, and a panel that announces its own emptiness announces it
+again every time the section is opened. `New session` is disabled until there
+is a folder to start one in, since a pty's cwd has to be some directory.
 
 ### The chat view
 
@@ -61,7 +219,7 @@ The chat reads the transcript the CLI writes for itself, at
 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, and tails it as it
 grows (`src/main/transcript.ts`). Every session is started with
 `--session-id`, so the file belonging to a tab is known rather than guessed
-at — two tabs open on one project follow their own conversations.
+at — two tabs open on one folder follow their own conversations.
 
 Reading a file rather than driving the CLI is what makes the chat a view of
 the running session instead of a second one, and it is also the whole of what
@@ -91,7 +249,7 @@ it loads.
   the point in a transcript where what was asked is worth reading.
 - **`/clear` at the prompt** starts a conversation under a new id, which the
   pinned file cannot follow. The sessions drawer is the way back: it lists
-  every conversation on disk for the project, and the new one is the top of
+  every conversation on disk for the folder, and the new one is the top of
   that list.
 
 The drawer switches which conversation the tab is _having_, not just which one
@@ -105,7 +263,7 @@ way to say so.
 
 What it costs is the process: a turn in flight ends, the same as any other
 restart. The conversation does not — it is on disk, and the drawer is the way
-back to it. A conversation another tab of the project already has open is
+back to it. A conversation another tab of the folder already has open is
 listed but not offered, since two `claude` processes resumed onto one
 transcript would both be appending to it.
 
@@ -114,8 +272,9 @@ own prompt, which is the terminal's, and the chat is the view for reading the
 conversation rather than adding to it. The mode is the one setting
 that still waits for a restart, and deliberately: the CLI would take
 `/config permissionMode=…` live, but that writes `permissions.defaultMode` into
-your own `~/.claude/settings.json`, where a per-project choice would become the
-default for every other project and every `claude` you run yourself. Restarting
+your own `~/.claude/settings.json`, where the workspace's choice would become
+the default for every other repository and every `claude` you run yourself.
+Restarting
 resumes the same conversation — `--resume` writes on into the same transcript —
 so it costs the process and nothing else. A mode cycled with Shift+Tab at the
 CLI's own prompt moves the control too, from two sources with different
@@ -192,14 +351,18 @@ a related reason: the transcript records the tokens sent but never the
 ceiling, and the 1M window is a beta header rather than a model of its own,
 so 200k is assumed until a request is seen to exceed it.
 
-## A project's own databases
+## The workspace's databases
 
-A project can have any number of databases, each either Postgres or MySQL:
+The workspace can have any number of databases, each either Postgres or MySQL:
 created here, in a Docker container of its own, or a connection to a server
-that already exists elsewhere. A Docker-managed database's data goes with
-it, and deleting it (or the project it belongs to) removes its container
-and data too; a connection only ever removes the record — the database itself
-is someone else's to manage.
+that already exists elsewhere. They belong to the workspace rather than to any
+one folder — a frontend and its API talk to the same database, and there is no
+version of "whose is it" that helps. A Docker-managed database's data goes with
+it, and deleting it removes its container and data too; a connection only ever
+removes the record — the database itself is someone else's to manage.
+
+Removing a folder from the workspace leaves every database exactly where it
+is. That is the whole reason they are not filed under one.
 
 The studio connects to a database from the main process, on the host, at
 `127.0.0.1:<published port>`.
@@ -278,10 +441,12 @@ character typed.
 
 ## API requests
 
-The API panel calls whatever endpoints the project exposes. Requests are
-saved per project in `requests.json`, beside its database rather than inside
-its repository, so trying an endpoint never writes a file into someone's
-working tree.
+The API panel calls whatever endpoints the workspace's code exposes. Requests
+are saved in `requests.json` under the studio's own directory rather than in
+any of the folders, so trying an endpoint never writes a file into someone's
+working tree. One collection for the workspace: an endpoint is called from the
+frontend and served by the API, and which of the two folders it "belongs to" is
+not a question worth making anyone answer.
 
 An environment is a named set of variables, kept in `environments.json` beside
 the requests and chosen one at a time. `{{name}}` is substituted anywhere in a
@@ -297,7 +462,7 @@ studio's own cookies, and headers a renderer is forbidden to set go out as
 typed.
 
 The jar in `cookies.json` is the panel's own, not Chromium's: responses' cookies
-are kept per project and sent back on requests they match by domain and path,
+are kept for the workspace and sent back on requests they match by domain and path,
 which is enough for a login route to be followed by a request that is logged in.
 A request carrying its own `Cookie` header sends that instead — the more
 specific instruction wins, and a header the user can read should say what is
@@ -334,7 +499,7 @@ charset a part declares is applied to those bytes afterwards, per part — the
 only order that works when one message carries a UTF-8 body and a Shift_JIS
 attachment name.
 
-Captures are kept in `inbox.json` beside the project, newest first and capped at
+Captures are kept in `inbox.json` under the studio's own directory, newest first and capped at
 200, so an inbox survives a restart without becoming the slowest thing the panel
 does. A mail's HTML is rendered in an iframe with `sandbox=""` and a CSP that
 allows only `data:` URIs — a template with a script in it must not run inside
@@ -362,201 +527,12 @@ sidebars drift a pixel apart. Each panel starts, stops and clears only its own
 half; `inboxClear` takes a kind, because a Clear that deleted something the user
 could not see would be a poor button.
 
-The ports are per project, in `manifest.json` settings under
-`inbox.config:<projectId>`, along with whether to bind each one when the project
-is opened. Nothing sent while a server is down can be caught afterwards, which
-is what that switch is for.
-
-## Screen specs
-
-The Spec panel writes screen specifications — the document that says what a
-screen shows, what each control on it is, and what happens when it is used. A
-spec is a `*.spec.json` file **in the project's own repository**, which is the
-one decision the rest of the panel follows from: it is committed beside the code
-it describes, and reviewed in the same pull request, like any other file. This is the opposite of where API requests live, and
-deliberately so — trying an endpoint is a private experiment, agreeing on what a
-screen does is not.
-
-A spec **opens as a page, not a form**: it is read far more often than it is
-changed — by whoever is building the screen, by whoever is testing it — and a
-wall of input boxes is a worse thing to read than a document. `Edit` in the
-toolbar swaps in the form, which edits the same page in place rather than
-sitting beside a live preview, so the two views are recognisably one document
-with the boxes turned on. The mode is per visit rather than remembered: leaving
-a tab and coming back is a fresh look at the spec.
-
-There is no JSON view in either. The file underneath stays JSON because it has
-to diff in a pull request, but nobody has to look at it. Edits are written back
-on a timer, and ⌘S skips the wait.
-
-Status is a `Select` and the date is shadcn's date-picker — a `Popover` around a
-`Calendar` — rather than free text and a native `<input type="date">`, so both
-are drawn by the app rather than half of one by the OS. Neither closes its
-field: `status` stays a string and a document that already says something
-outside `SPEC_STATUSES` keeps its word, offered at the bottom of the menu; the
-date stays a string in `yyyy-mm-dd`, and `asDateInput` is what lets a document
-written as "07/08/2026" open in the picker without being silently rewritten.
-
-The overview holds a **canvas** — one figure, however many pictures are on it.
-Screenshots are dropped onto it and moved and resized freely; markers are
-dragged in from a palette beside it. The numbers run 1, 2, 3 across the whole
-canvas rather than per picture, because what a reader sees is one drawing and
-what the item table joins to is one sequence. Four kinds of marker: a plain
-numbered circle, a square that reads better over dense UI, an arrow for
-something too small to sit a label on (drag its tip separately), and a box that
-frames a region rather than a point.
-
-Every measurement on the canvas — positions, sizes, and the canvas's own height
-— is a percentage of the canvas _width_, the way a CSS percentage padding is.
-That is what makes it behave as one picture: the panel can be any width and
-everything scales together, and dragging the handle under the canvas to make it
-taller adds room at the bottom without moving or stretching anything already on
-it. A percentage of the height would do neither. An image stores only its
-width; the height follows the picture's own proportions, because a squashed
-screenshot is never what anyone meant.
-
-Pictures are **copied into the repository**, into `<spec-name>.assets/` beside
-the spec, and the canvas records the relative path. Not embedded as data URLs:
-a 300 KB screenshot inlined into the JSON is a file no diff can show. The copy
-never overwrites — a second `screen.png` becomes `screen-1.png` — so two specs
-in one folder cannot quietly replace each other's illustrations. Displaying one
-needs `readProjectImage`, because the renderer's origin is not `file://` and
-Chromium will not load a `file://` subresource from any other origin.
-
-`CanvasMarker` draws the markers for both the editor and the preview, so a spec
-looks the same either side of the Edit button — the editor puts grips over what
-it draws rather than drawing its own version.
-
-The panel is the one place in this app that uses colour. Everything else is
-monochrome on purpose — `--primary` is a neutral grey — but a spec is _scanned_
-rather than operated, and three of its vocabularies answer a question before
-their words are read: the status says whether the document is settled, the
-control column says which rows the user types into, and a screen state says
-which one is the failing case. `lib/spec/tones.ts` holds those three lookups and
-nothing else is tinted; the numbered badges keep the red they share with the
-markers on the canvas, which is what ties a row to the mark pointing at it. Each
-vocabulary is open, so an unrecognised word falls back to neutral rather than to
-a guess, the same as `METHOD_TONES` in the API panel.
-
-The sidebar is a **folder tree**, and its folders are real directories rather
-than records of their own. The API panel keeps its folders in `folders.json`
-with a `parentId` on each; a spec cannot, because a spec is a file in the
-repository — a second opinion about where one lives would be a second thing to
-keep in step with `git mv`. So `lib/spec/tree.ts` _derives_ the tree from the
-paths — one row per directory, nested, the same shape the API panel's folders
-take.
-
-An earlier version compacted a chain of folders holding nothing but one more
-folder into a single row, so `docs` containing only `specs` read as
-`docs/specs`. It saved a line and cost far more: the folder that was swallowed
-had no row of its own, so it could not be renamed, deleted or dropped onto, and
-the row that remained carried both names while acting on only the inner one —
-which reads, correctly, as a delete that will take both. A row is a
-directory.
-
-The menu has three targets rather than two. A folder offers **New spec here**,
-**New folder inside**, **Rename** and **Delete**; a spec offers **Rename or
-move**, **Duplicate**, **Copy path** and **Delete**; and the empty part of the
-list — which is the list itself, not nothing — offers **New spec** and **New
-folder** at the top level, the same two the header's buttons do. Showing the
-spec menu greyed out there said only that nothing could be done. Specs and folders both **drag between folders**, with a drop zone at
-the bottom for moving something back to the top level. A folder cannot be
-dropped into itself or into anything under it — on disk that is a rename of a
-directory into its own child, a move whose destination travels with the source
-— and `canMoveInto` in `lib/spec/tree.ts` is what refuses it. Renaming a folder
-moves it on disk and carries what is under it — the open tabs, the selection and
-the drafts all name paths that just changed, and a draft that kept the old one
-would write itself back into a directory that no longer exists.
-
-One thing to know: **git does not track an empty directory.** A folder made here
-is real on this machine and invisible to everyone else until a spec is put in
-it, which is why the panel remembers it in `emptyFolders` — deliberately in
-memory only, so that on the next launch the truth is whatever is committed.
-
-Right-clicking a spec offers **Rename or move**, **Duplicate**, **Copy path**
-and **Delete**. The first two take a folder as well as a name, which is what
-makes renaming a spec and moving it between folders one operation. Each of the first three has to move `<name>.assets/` as
-well: a spec and its screenshots are one document to anyone reading the
-repository, and every image `src` on the canvas is a path into that folder, so
-`withAssetsAt` rewrites them to match. A path that was never in the old folder
-is left alone, because it was pointing somewhere else on purpose. Rename moves
-the pictures first, writes the rewritten document under the new name, and only
-then removes the old file, so a failure part-way leaves a spec that still opens.
-Delete takes the folder with it — the pictures are of no use to anything else,
-and both are in the repository, so git is the way back.
-
-The item table is six columns — No, Item name, Control, API, Constraints,
-Description — and was eleven. The two that went are worth recording, because the
-reasoning applies to anything else the table grows. `logicName` sat beside
-`itemName` and held the same words in every document written so far; the
-distinction it comes from, internal name versus displayed name, is real, but a
-column filled by copying the one next to it is not recording it. `defaultValue`,
-`length`, `required`, `attribute` and `inOutField` are all properties of an
-_input_, and most of what a screen shows is not one — on a scanner with a camera
-and a dialog, all five read "-". Five always-present columns for a minority of
-rows is what makes a table nobody can read without scrolling, so they are now
-one free-text `constraints` ("required, max 32"). That costs the ability to diff
-"required" on its own and buys a table that fits.
-
-Documents written against the old columns lose nothing: a filled-in property
-becomes a labelled part of `constraints` (`required: ○, length: 1-128`), a
-property holding "-" is dropped rather than carried across as noise, and a row
-that named itself only in `logicName` keeps that as its item name.
-
-Two things a screen spec is otherwise missing have sections of their own.
-**Navigates to**, in the overview beside Pre-data condition, is the symmetric
-half of it: that says how you arrive, this says where you leave for and on what
-condition. It used to be reachable only by reading four levels into the event
-prose — "then move to FR_002" — which meant nobody could draw the project's
-screen map, or check that FR_002 exists, without reading every spec end to end.
-**Screen states** (section 5) lists loading, empty, error and not-allowed. A
-spec that omits these does not lack them; the screen still has them, they are
-just decided later and separately by whoever builds it, which is how a project
-ends up with a different empty state on every screen. The list starts empty
-rather than pre-filled, because four named states with nothing written against
-them would look answered while saying nothing — the buttons offer them instead.
-
-Status and an item's Control are both `OpenSelect`: a suggested list, but the
-value stays a string and a document already saying something else keeps its
-word, offered at the bottom of the menu. Typed by hand these fields collect
-"Approved"/"approved"/"APPROVED" and "Input"/"input"/"TextBox", which nothing
-can group; a closed list would instead have this panel quietly correcting a
-team's own vocabulary.
-
-Detail processing is **two fixed sections** — 3.1 Check authority and 3.2 Event
-behavior handling — rather than a list the author adds to. Every screen has both
-answers, who is allowed in and what each thing on it does when used, and a spec
-that simply omits one has not decided it, it has forgotten it. A free list lets
-that happen quietly; two named fields show the gap as an empty section.
-
-`parseSpec` is total by design: the panel writes the file back as you type, so a
-file half-written by hand has to load as a document with gaps rather than take
-the panel down. It also carries a one-way migration. This panel first shipped
-with `processing` as nested `{no, title, type, content}` sections, `api` as
-`{required, description}`, the mockup as a flat `hotspots` list, and then as a
-list of screenshots each with pins positioned as a percentage of _itself_.
-Documents in every one of those shapes still open. The old sections become
-markdown (trees become nested lists, `<code>` becomes backticks) and are routed
-into the two fixed ones by their own titles. Hotspots become markers down the
-middle of an empty canvas, with each one's label becoming the item name of the
-row its number points at, since a marker no longer carries text. Separate
-screenshots are stacked down the canvas and their pins mapped into the slot each
-picture now occupies — approximate in the vertical, unavoidably, because a
-picture's height is not knowable without reading the file, which `parseSpec`
-cannot do. Every number and kind survives exactly; what may need nudging is
-where a mark sits.
-
-A section whose title matches neither fixed one — the old "Screen
-initialization" is the case — is kept, with its heading, under Check authority.
-That placement is arbitrary and deliberately so: a paragraph in the wrong
-section is one someone can see and move, while a dropped one is one nobody knows
-to look for.
-
-The file is written back in the new shape the first time it is saved, and
-nothing converts back. No tag survives the trip either — what comes out goes
-straight into a markdown editor, so the one thing that must not happen is a tag
-becoming a tag again. `test/spec.ts` is mostly about that migration and about
-files that are not specs at all.
+The ports are the workspace's, in `manifest.json` settings under
+`inbox.config`, along with whether to bind each one at launch. One pair of
+servers rather than one per folder: a port can only be bound once, and the code
+that sends the mail and the code that receives the callback are usually two
+folders of the same project anyway. Nothing sent while a server is down can be
+caught afterwards, which is what that switch is for.
 
 ## The system bar
 
@@ -588,6 +564,43 @@ The app's share is every process Electron runs, added up. Terminal panel session
 it would make the studio look responsible for work the user started
 deliberately.
 
+## The launch screen
+
+`src/renderer/components/studio/splash.tsx` is what the app opens on, and the
+only screen before the workbench. There used to be two — the suspense fallback
+while the studio's chunk loaded and a second one while `manifest.json` was read,
+each a line of grey text — and the handover between them was a flicker. It is
+one component now, timed from one module-level timestamp, so crossing from the
+first mount to the second continues the animation instead of restarting it.
+
+It draws the studio in miniature — the rail with its six sections in their own
+hues, a strip of tabs, a sidebar, a panel — assembling in the order the eye
+reads them, then sweeping for as long as the app is still opening. The workbench
+is held back until the sequence has run (`SPLASH_ASSEMBLE_MS`), which is usually
+longer than opening the manifest takes: a splash cut off a third of the way
+through does not read as a fast app, it reads as a glitch. It then crossfades
+rather than cuts — the workbench mounts when the fade starts and is on screen
+behind the last of it.
+
+The easings and keyframes are in `src/renderer/styles/motion.css` and used
+through Tailwind's `animate-*` utilities. No animation library: what is wanted
+is a few hundred milliseconds of easing, and a runtime re-rendering every frame
+to produce it would be competing with a pty and a data grid for the same main
+thread. The file is written to three rules, and is the place for an animation
+added anywhere else:
+
+- **A movement says where the thing came from**, so nothing travels in a
+  direction the layout does not already imply.
+- **Anything a click waits on is over in 250ms.** The launch screen is the one
+  exception, because nothing else is waiting on it.
+- **Opacity and transform only** — the two the compositor animates without
+  laying the page out again.
+
+Under `prefers-reduced-motion` the entrances become `none` and the screen
+assembles in one frame. The two loops are left running deliberately: they are
+the only thing saying the launch has not stalled, and a spinner that does not
+spin is not a calmer app, it is one that looks hung.
+
 ## Development
 
 ```sh
@@ -606,9 +619,8 @@ Plain `bun` scripts under `test/`, with no test framework behind them — see
 adding one is dropping a file in.
 
 They cover the places where being wrong is expensive and noticing would
-otherwise be slow: the chat view's tail, the two capture servers, the spec
-schema and its migration. Those run against the real thing rather than a
-fixture — `test/transcript.ts` appends to a file while the mirror watches it,
+otherwise be slow: the chat view's tail, the two capture servers, the tab
+strip's ordering. Those run against the real thing rather than a fixture — `test/transcript.ts` appends to a file while the mirror watches it,
 `test/inbox.ts` holds an SMTP conversation over a socket — because a
 hand-written sample would only check the parser against my memory of the
 format.

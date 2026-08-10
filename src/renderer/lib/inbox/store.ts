@@ -2,13 +2,14 @@ import { create } from "zustand"
 
 import {
   INBOX_DEFAULT_PORTS,
-  inboxConfigKey,
+  INBOX_CONFIG_KEY,
   type HttpResponseResult,
   type InboxKind,
   type InboxMessage,
   type InboxStatus,
 } from "@shared/api"
 import { useStudio } from "@/lib/store"
+import { isStringArray, recall, remember } from "@/lib/tab-memory"
 
 /**
  * One store behind two panels.
@@ -52,8 +53,26 @@ const DEFAULT_SETTINGS: InboxSettings = {
 
 /** Where the replay target is remembered, per project. Typed once, then it is
  * the same handler for every event from the same provider. */
-function replayUrlKey(projectId: string): string {
-  return `inbox.replayUrl:${projectId}`
+const REPLAY_URL_KEY = "inbox.replayUrl"
+
+/** Which captures each panel had open, and which one was on screen. */
+const OPEN_TABS_KEY = "inbox.tabs"
+
+type RememberedPanels = {
+  openIds: Record<InboxKind, string[]>
+  selectedId: Record<InboxKind, string | null>
+}
+
+function isRememberedPanels(value: unknown): value is RememberedPanels {
+  const record = value as Partial<RememberedPanels> | null
+  if (!record?.openIds || !record.selectedId) return false
+  return (["mail", "webhook"] as const).every((server) => {
+    const selected = record.selectedId?.[server]
+    return (
+      isStringArray(record.openIds?.[server]) &&
+      (selected === null || typeof selected === "string")
+    )
+  })
 }
 
 /** A replay in flight, or what came back from one. */
@@ -71,7 +90,6 @@ function idleStatus(settings: InboxSettings): InboxStatus {
 }
 
 type InboxState = {
-  projectId: string | null
   /** Both kinds, newest first. Each panel filters with `messagesOf`. */
   messages: InboxMessage[]
   status: InboxStatus
@@ -110,8 +128,8 @@ type InboxState = {
   reorder: (server: InboxKind, ids: string[]) => void
 }
 
-async function readSettings(projectId: string): Promise<InboxSettings> {
-  const raw = await window.desktop.getSetting(inboxConfigKey(projectId))
+async function readSettings(): Promise<InboxSettings> {
+  const raw = await window.desktop.getSetting(INBOX_CONFIG_KEY)
   if (!raw) return DEFAULT_SETTINGS
 
   try {
@@ -139,34 +157,23 @@ async function readSettings(projectId: string): Promise<InboxSettings> {
 }
 
 export const useInbox = create<InboxState>((set, get) => {
-  // Follows the open project, the same way the API panel's store does.
-  useStudio.subscribe((studio) => {
-    if (studio.projectId === get().projectId) return
-    set({
-      projectId: studio.projectId,
-      messages: [],
-      status: idleStatus(DEFAULT_SETTINGS),
-      replays: {},
-      openIds: { mail: [], webhook: [] },
-      selectedId: { mail: null, webhook: null },
-    })
-    if (studio.projectId) void get().refresh()
-  })
+  /** Whether the strip has already been put back — see `refresh`. */
+  let restored = false
 
   // Subscribed once for the window rather than per component: a capture that
   // arrived while both panels were closed still belongs in the list, and the
   // unread counts on the rail are the reason to know about it.
   window.desktop.onInboxMessage(({ message }) => {
-    if (message.projectId !== get().projectId) return
     set((state) => ({ messages: [message, ...state.messages] }))
   })
 
-  window.desktop.onInboxStatus(({ projectId, status }) => {
-    if (projectId !== get().projectId) return
+  window.desktop.onInboxStatus(({ status }) => {
     set({ status })
   })
 
-  /** Both panels' tab lists change the same way; only one kind's is touched. */
+  /** Both panels' tab lists change the same way; only one kind's is touched.
+   * Every tab change goes through here, which is why remembering the strip is
+   * one call rather than one per action. */
   function setPanel(
     server: InboxKind,
     openIds: string[],
@@ -176,10 +183,45 @@ export const useInbox = create<InboxState>((set, get) => {
       openIds: { ...state.openIds, [server]: openIds },
       selectedId: { ...state.selectedId, [server]: selectedId },
     }))
+    const { openIds: open, selectedId: selected } = get()
+    remember(OPEN_TABS_KEY, { openIds: open, selectedId: selected })
+  }
+
+  /**
+   * Reopens what the last launch had open. A capture is only kept while it is
+   * in the capped list, so an id that has since aged out — or been cleared —
+   * names nothing and is dropped; the two settings tabs always resolve.
+   */
+  function restoreTabs(messages: InboxMessage[]) {
+    void recall(OPEN_TABS_KEY, isRememberedPanels).then((stored) => {
+      if (!stored) return
+
+      for (const server of ["mail", "webhook"] as const) {
+        // Anything opened while this read was in flight wins.
+        if (get().openIds[server].length > 0) continue
+
+        const openIds = stored.openIds[server].filter(
+          (id) =>
+            id === SETTINGS_TAB[server] ||
+            messages.some(
+              (message) => message.id === id && message.kind === server
+            )
+        )
+        if (openIds.length === 0) continue
+
+        const selected = stored.selectedId[server]
+        setPanel(
+          server,
+          openIds,
+          selected && openIds.includes(selected)
+            ? selected
+            : (openIds[0] ?? null)
+        )
+      }
+    })
   }
 
   return {
-    projectId: useStudio.getState().projectId,
     messages: [],
     status: idleStatus(DEFAULT_SETTINGS),
     settings: DEFAULT_SETTINGS,
@@ -189,17 +231,12 @@ export const useInbox = create<InboxState>((set, get) => {
     selectedId: { mail: null, webhook: null },
 
     async refresh() {
-      const { projectId } = get()
-      if (!projectId) return
-
       const [messages, settings, status, replayUrl] = await Promise.all([
-        window.desktop.inboxMessages(projectId),
-        readSettings(projectId),
-        window.desktop.inboxStatus(projectId),
-        window.desktop.getSetting(replayUrlKey(projectId)),
+        window.desktop.inboxMessages(),
+        readSettings(),
+        window.desktop.inboxStatus(),
+        window.desktop.getSetting(REPLAY_URL_KEY),
       ])
-      // Discarded if the user switched projects while this was in flight.
-      if (get().projectId !== projectId) return
 
       set({
         messages,
@@ -215,34 +252,33 @@ export const useInbox = create<InboxState>((set, get) => {
           void get().start(server)
         }
       }
+
+      // Only on the first read: a later refresh must not reopen what has been
+      // closed since.
+      if (!restored) {
+        restored = true
+        restoreTabs(messages)
+      }
     },
 
     async start(server) {
-      const { projectId, settings } = get()
-      if (!projectId) return
+      const { settings } = get()
       set({
-        status: await window.desktop.inboxStart(
-          projectId,
-          server,
-          settings[server].port
-        ),
+        status: await window.desktop.inboxStart(server, settings[server].port),
       })
     },
 
     async stop(server) {
-      const { projectId } = get()
-      if (!projectId) return
-      set({ status: await window.desktop.inboxStop(projectId, server) })
+      set({ status: await window.desktop.inboxStop(server) })
     },
 
     async saveSettings(server, next) {
-      const { projectId, status } = get()
-      if (!projectId) return
+      const { status } = get()
 
       const settings = { ...get().settings, [server]: next }
       set({ settings })
       await window.desktop.setSetting(
-        inboxConfigKey(projectId),
+        INBOX_CONFIG_KEY,
         JSON.stringify(settings)
       )
 
@@ -254,27 +290,20 @@ export const useInbox = create<InboxState>((set, get) => {
     },
 
     setReplayUrl(url) {
-      const { projectId } = get()
       set({ replayUrl: url })
-      if (projectId) {
-        void window.desktop.setSetting(replayUrlKey(projectId), url)
-      }
+      void window.desktop.setSetting(REPLAY_URL_KEY, url)
     },
 
     async replay(id) {
-      const { projectId, replayUrl } = get()
-      if (!projectId || !replayUrl.trim()) return
+      const { replayUrl } = get()
+      if (!replayUrl.trim()) return
 
       const put = (outcome: ReplayOutcome) =>
         set((state) => ({ replays: { ...state.replays, [id]: outcome } }))
 
       put({ sending: true, response: null, error: null })
       try {
-        const response = await window.desktop.inboxReplay(
-          projectId,
-          id,
-          replayUrl.trim()
-        )
+        const response = await window.desktop.inboxReplay(id, replayUrl.trim())
         put({ sending: false, response, error: null })
       } catch (error) {
         put({
@@ -286,29 +315,27 @@ export const useInbox = create<InboxState>((set, get) => {
     },
 
     async remove(id) {
-      const { projectId, messages } = get()
-      if (!projectId) return
+      const { messages } = get()
 
       const message = messages.find((candidate) => candidate.id === id)
       if (message) get().close(message.kind, id)
       set({ messages: messages.filter((candidate) => candidate.id !== id) })
-      await window.desktop.inboxDelete(projectId, id)
+      await window.desktop.inboxDelete(id)
     },
 
     async clear(server) {
-      const { projectId, messages, openIds } = get()
-      if (!projectId) return
+      const { messages, openIds } = get()
 
       set({ messages: messages.filter((message) => message.kind !== server) })
       // The settings tab is not a capture and survives the list going.
       const kept = openIds[server].filter((id) => id === SETTINGS_TAB[server])
       setPanel(server, kept, kept[0] ?? null)
 
-      await window.desktop.inboxClear(projectId, server)
+      await window.desktop.inboxClear(server)
     },
 
     select(server, id) {
-      const { projectId, openIds, messages } = get()
+      const { openIds, messages } = get()
       useStudio.getState().showPane(server)
 
       setPanel(
@@ -323,13 +350,13 @@ export const useInbox = create<InboxState>((set, get) => {
       // the same thing, and a separate "mark as read" would be a button for
       // something the user has already done.
       const message = messages.find((candidate) => candidate.id === id)
-      if (!projectId || !message?.unread) return
+      if (!message?.unread) return
       set({
         messages: messages.map((candidate) =>
           candidate.id === id ? { ...candidate, unread: false } : candidate
         ),
       })
-      void window.desktop.inboxMarkRead(projectId, id)
+      void window.desktop.inboxMarkRead(id)
     },
 
     openSettings(server) {

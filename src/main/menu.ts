@@ -5,19 +5,19 @@ import {
   type MenuItemConstructorOptions,
 } from "electron"
 
-import { IPC, type MenuCommand, type MenuState } from "../shared/api"
+import { IPC, type MenuCommand } from "../shared/api"
 
 const IS_MAC = process.platform === "darwin"
 
 /**
  * The application menu.
  *
- * There was none until the project actions outgrew the header: on macOS the
- * menu bar is there whether the app uses it or not, and a window whose only
- * chrome is a row of unlabelled icons hides "import a folder" from anyone who
- * has not hovered one. Everything here also exists as a dialog in the
- * renderer — the menu sends the intent and the renderer opens it, so there is
- * one implementation rather than two.
+ * There was none until adding a folder outgrew the header: on macOS the menu
+ * bar is there whether the app uses it or not, and a window whose only chrome
+ * is a row of unlabelled icons hides "add a folder" from anyone who has not
+ * hovered one. Everything here also exists as a dialog in the renderer — the
+ * menu sends the intent and the renderer opens it, so there is one
+ * implementation rather than two.
  *
  * Replacing Electron's default menu means the editing and window roles it
  * provided have to be restated: without them ⌘C and ⌘V stop working in the
@@ -33,15 +33,9 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
   function build(): void {
     const fileItems: MenuItemConstructorOptions[] = [
       {
-        label: "Import project…",
+        label: "Add folder…",
         accelerator: "Shift+CmdOrCtrl+O",
-        click: () => send("import-project"),
-      },
-      { type: "separator" },
-      {
-        label: "Close project",
-        enabled: state.projectOpen,
-        click: () => send("close-project"),
+        click: () => send("add-folder"),
       },
     ]
 
@@ -114,28 +108,5 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
     Menu.setApplicationMenu(Menu.buildFromTemplate(template))
   }
 
-  rebuild = build
   build()
-}
-
-/**
- * What the renderer last said about itself.
- *
- * Module state rather than something threaded through `registerIpc`, because
- * the two sides of it start at different times: the menu is built once the app
- * is ready, and the state arrives from the renderer whenever the project list
- * changes.
- */
-let state: MenuState = { projectOpen: false }
-
-let rebuild: (() => void) | null = null
-
-/** Called from the IPC handler as the renderer's project changes. */
-export function setMenuState(next: MenuState): void {
-  // Rebuilt rather than mutated: `MenuItem.enabled` is settable, but finding
-  // the item again means matching on its label, which is the kind of coupling
-  // a rebuild avoids for a menu this small.
-  if (next.projectOpen === state.projectOpen) return
-  state = next
-  rebuild?.()
 }

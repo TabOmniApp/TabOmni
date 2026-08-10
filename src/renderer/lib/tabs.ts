@@ -11,7 +11,6 @@ import type { Pane } from "./store"
 export const PREFIX: Record<Pane, string> = {
   database: "db:",
   api: "api:",
-  spec: "spec:",
   mail: "mail:",
   webhook: "hook:",
   terminal: "term:",
@@ -20,7 +19,6 @@ export const PREFIX: Record<Pane, string> = {
 export function kindOf(id: string): Pane | null {
   if (id.startsWith(PREFIX.database)) return "database"
   if (id.startsWith(PREFIX.api)) return "api"
-  if (id.startsWith(PREFIX.spec)) return "spec"
   if (id.startsWith(PREFIX.mail)) return "mail"
   if (id.startsWith(PREFIX.webhook)) return "webhook"
   if (id.startsWith(PREFIX.terminal)) return "terminal"

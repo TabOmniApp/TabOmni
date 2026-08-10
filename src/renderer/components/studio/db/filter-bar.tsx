@@ -23,7 +23,6 @@ import type {
   FilterOperator,
   FilterSet,
 } from "@/lib/db/engines"
-import { useStudio } from "@/lib/store"
 import { IconButton } from "../icon-button"
 
 /**
@@ -101,7 +100,6 @@ export function FilterBar({
   const [applied, setApplied] = useState(filters)
   const [draft, setDraft] = useState(filters)
 
-  const projectId = useStudio((state) => state.projectId)
   const [request, setRequest] = useState("")
   const [asking, setAsking] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
@@ -136,13 +134,12 @@ export function FilterBar({
   /** Asks the agent for conditions and puts them in the draft. */
   async function describe() {
     const question = request.trim()
-    if (!question || !projectId) return
+    if (!question) return
 
     setAsking(true)
     setAiError(null)
     try {
       const proposed = await window.desktop.aiFilter(
-        projectId,
         question,
         columns.map((column) => ({ name: column.name, type: column.type }))
       )

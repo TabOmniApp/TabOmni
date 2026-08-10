@@ -14,16 +14,14 @@ export type {
   UpdateDatabaseInput,
 }
 
-/** Every database or connection attached to a project. */
-export async function listDatabases(
-  projectId: string
-): Promise<DatabaseRecord[]> {
-  return window.desktop.listDatabases(projectId)
+/** Every database or connection in the workspace. */
+export async function listDatabases(): Promise<DatabaseRecord[]> {
+  return window.desktop.listDatabases()
 }
 
 /**
- * Adds a database to a project: either a new one in a Docker container, or a
- * connection to one that already exists.
+ * Adds a database: either a new one in a Docker container, or a connection to
+ * one that already exists.
  */
 export async function createDatabase(
   input: NewDatabaseInput
@@ -32,8 +30,8 @@ export async function createDatabase(
 }
 
 /**
- * Removes a database from a project. For a Docker-managed one, this also
- * removes its container and data; for a connection, only the record goes.
+ * Removes a database. For a Docker-managed one, this also removes its
+ * container and data; for a connection, only the record goes.
  */
 /** Rewrites a connection's details. Only for `external` records. */
 export async function updateDatabase(

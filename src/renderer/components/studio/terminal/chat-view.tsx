@@ -50,7 +50,7 @@ import { MarkdownView } from "./markdown-view"
 import "./slash-command.css"
 
 /** Whether tool calls show up in the transcript at all, remembered across
- * runs — not per project, since it is a taste about how busy the transcript
+ * runs — not per folder, since it is a taste about how busy the transcript
  * looks rather than something tied to what a session is working on.
  *
  * The stored key still says `claudeGui`, which this app no longer has: it is
@@ -155,7 +155,7 @@ function applyEntries(current: Entry[], incoming: TranscriptEntry[]): Entry[] {
  * above whichever pane happens to be on screen.
  */
 export function useTranscript(session: TerminalSession) {
-  const { id, projectId, claudeSessionId } = session
+  const { id, folderId, claudeSessionId } = session
 
   /**
    * The conversation on screen, which is always the one the tab's pty is
@@ -258,13 +258,13 @@ export function useTranscript(session: TerminalSession) {
       })
     })
 
-    void window.desktop.transcriptWatch(id, projectId, target)
+    void window.desktop.transcriptWatch(id, folderId, target)
 
     return () => {
       unsubscribe()
       void window.desktop.transcriptUnwatch(id)
     }
-  }, [id, projectId, target])
+  }, [id, folderId, target])
 
   /**
    * Whether the agent is mid-turn.
@@ -326,17 +326,17 @@ export type Transcript = ReturnType<typeof useTranscript>
  * the CLI's own prompt — in the terminal view — rather than in a dialog here.
  */
 export function ChatView({
-  projectId,
+  folderId,
   transcript,
   visible,
   onResume,
 }: {
-  projectId: string
+  folderId: string
   transcript: Transcript
   /** Whether the chat is the view on screen, for the pane that has to follow
    * the conversation only while someone is reading it. */
   visible: boolean
-  /** Puts the tab on another of the project's conversations, restarting its
+  /** Puts the tab on another of the folder's conversations, restarting its
    * pty onto it — which is what makes the drawer's pick something you can
    * then talk to rather than only read. */
   onResume: (claudeSessionId: string) => void
@@ -375,7 +375,7 @@ export function ChatView({
       <Header
         working={working}
         claudeSessionId={target}
-        projectId={projectId}
+        folderId={folderId}
         onResume={onResume}
         showToolCalls={showToolCalls}
         onShowToolCallsChange={setShowToolCalls}
@@ -608,7 +608,7 @@ function fetchedText(fetchedAt: number | null): string {
 function Header({
   working,
   claudeSessionId,
-  projectId,
+  folderId,
   onResume,
   showToolCalls,
   onShowToolCallsChange,
@@ -617,7 +617,7 @@ function Header({
 }: {
   working: boolean
   claudeSessionId: string | null
-  projectId: string
+  folderId: string
   onResume: (claudeSessionId: string) => void
   showToolCalls: boolean
   onShowToolCallsChange: (next: boolean) => void
@@ -653,7 +653,7 @@ function Header({
 
       <div className="ml-auto flex items-center gap-1">
         <SessionsButton
-          projectId={projectId}
+          folderId={folderId}
           currentSessionId={claudeSessionId}
           onResume={onResume}
         />
@@ -724,7 +724,7 @@ function relativeTime(updatedAt: number): string {
 
 /**
  * The drawer of past sessions: every conversation the CLI has on disk for
- * this project, not just the one this tab is running.
+ * this folder, not just the one this tab is running.
  *
  * Picking one puts the tab on it — the pty restarts and resumes it, so the
  * conversation read is the conversation talked to. It is also the way back
@@ -732,15 +732,15 @@ function relativeTime(updatedAt: number): string {
  * has no way to be told about: the new session is simply the top of this list.
  *
  * Reading the list is deferred to the drawer opening rather than done on
- * mount — a project can have years of these, and most sessions never look at
+ * mount — a repository can have years of these, and most sessions never look at
  * them.
  */
 function SessionsButton({
-  projectId,
+  folderId,
   currentSessionId,
   onResume,
 }: {
-  projectId: string
+  folderId: string
   /** What this tab is already running, which there is nothing to restart onto. */
   currentSessionId: string | null
   onResume: (claudeSessionId: string) => void
@@ -751,7 +751,7 @@ function SessionsButton({
   )
 
   /**
-   * Conversations another tab of this project already has open.
+   * Conversations another tab of this folder already has open.
    *
    * Two `claude` processes resumed onto one conversation would both append to
    * the same transcript, and neither would be reading the other's lines. Those
@@ -762,7 +762,10 @@ function SessionsButton({
   const taken = useMemo(() => {
     const ids = new Set<string>()
     for (const session of openSessions) {
-      if (session.projectId !== projectId) continue
+      // A closed row holds nothing: its pty is gone, so the conversation it
+      // was having is free to be picked up here.
+      if (session.closed) continue
+      if (session.folderId !== folderId) continue
       if (
         session.claudeSessionId &&
         session.claudeSessionId !== currentSessionId
@@ -770,13 +773,13 @@ function SessionsButton({
         ids.add(session.claudeSessionId)
     }
     return ids
-  }, [openSessions, projectId, currentSessionId])
+  }, [openSessions, folderId, currentSessionId])
 
   function onOpenChange(next: boolean) {
     setOpen(next)
     if (!next) return
     setSessions(null)
-    void window.desktop.claudeListSessions(projectId).then(setSessions)
+    void window.desktop.claudeListSessions(folderId).then(setSessions)
   }
 
   return (
@@ -807,7 +810,7 @@ function SessionsButton({
             </div>
           ) : sessions.length === 0 ? (
             <p className="px-2 py-4 text-xs text-muted-foreground">
-              No past sessions found for this project.
+              No past sessions found for this folder.
             </p>
           ) : (
             <ul className="flex flex-col gap-0.5">

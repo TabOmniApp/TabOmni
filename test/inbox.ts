@@ -17,8 +17,6 @@ import { InboxServers, replayInput } from "../src/main/inbox"
 import { decodeWords, parseMail, parseParameters } from "../src/main/mime"
 import { check, finish, section } from "./harness"
 
-const PROJECT = "test-project"
-
 /** Two ports well clear of anything a development machine runs. */
 const MAIL_PORT = 34_025
 const WEBHOOK_PORT = 34_026
@@ -94,14 +92,14 @@ async function main() {
     },
     {
       load: async () => saved,
-      save: async (_projectId, messages) => {
+      save: async (messages) => {
         saved = messages
       },
     }
   )
 
-  await inbox.start(PROJECT, "mail", MAIL_PORT)
-  const status = await inbox.start(PROJECT, "webhook", WEBHOOK_PORT)
+  await inbox.start("mail", MAIL_PORT)
+  const status = await inbox.start("webhook", WEBHOOK_PORT)
 
   section("servers")
   check("SMTP is listening", status.mail.listening, status.mail.error)
@@ -129,8 +127,8 @@ async function main() {
 
   // Two panels with one Clear between them would be a button that deleted
   // something the user could not see.
-  await inbox.clear(PROJECT, "mail")
-  const left = await inbox.messages(PROJECT)
+  await inbox.clear("mail")
+  const left = await inbox.messages()
   check(
     "clearing Mail leaves the captured requests alone",
     left.length > 0 && left.every((message) => message.kind === "webhook"),
@@ -450,7 +448,7 @@ async function webhookSession(captured: InboxMessage[]) {
 async function ports(inbox: InboxServers) {
   section("one server at a time")
 
-  const stopped = await inbox.stop(PROJECT, "mail")
+  const stopped = await inbox.stop("mail")
   check(
     "stopping Mail leaves the webhook catcher up",
     !stopped.mail.listening && stopped.webhook.listening,
@@ -462,10 +460,10 @@ async function ports(inbox: InboxServers) {
     { message: () => undefined, status: () => undefined },
     { load: async () => [], save: async () => undefined }
   )
-  const borrowed = await rival.start("other", "mail", MAIL_PORT)
+  const borrowed = await rival.start("mail", MAIL_PORT)
   check("and really releases its port", borrowed.mail.listening, borrowed.mail)
 
-  const clash = await rival.start("other", "webhook", WEBHOOK_PORT)
+  const clash = await rival.start("webhook", WEBHOOK_PORT)
   check(
     "a port still held is reported rather than thrown",
     !clash.webhook.listening && Boolean(clash.webhook.error),
@@ -473,7 +471,7 @@ async function ports(inbox: InboxServers) {
   )
   await rival.stopAll()
 
-  const again = await inbox.start(PROJECT, "mail", MAIL_PORT)
+  const again = await inbox.start("mail", MAIL_PORT)
   check(
     "Mail comes back on the port it let go of",
     again.mail.listening && again.webhook.listening,

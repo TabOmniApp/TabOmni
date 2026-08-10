@@ -45,7 +45,7 @@ type Started = {
  * it happened to be started with.
  */
 async function createSession(
-  projectId: string,
+  folderId: string,
   cols: number,
   rows: number,
   kind: AgentKind,
@@ -54,7 +54,7 @@ async function createSession(
   const claudeSessionId =
     known ?? (kind === "claude" ? crypto.randomUUID() : null)
   const id = await window.desktop.terminalCreate(
-    projectId,
+    folderId,
     cols,
     rows,
     kind,
@@ -111,12 +111,12 @@ function readModeLine(
 }
 
 /**
- * One session in the Terminal panel, on the host and in the open project's
+ * One session in the Terminal panel, on the host and in its folder's
  * directory.
  *
  * Deliberately outside the sandbox: a shell — and the CLIs run from one — edit
  * the very files shown in the editor, and they are installed on the machine
- * rather than in the project's container. That also means toggling the sandbox
+ * rather than in a container. That also means toggling the sandbox
  * leaves a session alone — unlike a container's shell, it is not keyed on the
  * runtime.
  */
@@ -144,7 +144,7 @@ export function TerminalSessionView({
 
   const setView = useTerminal((state) => state.setView)
 
-  const { id, projectId, kind, installing, claudeSessionId } = session
+  const { id, folderId, kind, installing, claudeSessionId } = session
 
   // An install run is a pty whatever kind asked for it — it is the CLI's own
   // installer, printing to a pane the user can read and answer — so only a
@@ -195,7 +195,7 @@ export function TerminalSessionView({
               claudeSessionId: null,
             }))
         : createSession(
-            projectId,
+            folderId,
             terminal.cols,
             terminal.rows,
             kind,
@@ -262,7 +262,7 @@ export function TerminalSessionView({
     },
     [
       id,
-      projectId,
+      folderId,
       kind,
       installing,
       claudeSessionId,
@@ -331,7 +331,7 @@ export function TerminalSessionView({
       </div>
       <div className={cn("absolute inset-0", !chat && "invisible")}>
         <ChatView
-          projectId={projectId}
+          folderId={folderId}
           transcript={transcript}
           visible={visible && chat}
           // Restarts this tab's pty onto the picked conversation, which is
@@ -407,7 +407,7 @@ export function TerminalSessionView({
                   onInterrupt={claudeSession ? interruptTerminal : undefined}
                   // Only Claude Code: the `/` menu is built from that CLI's own
                   // commands and skills, which a plain shell has none of.
-                  claudeProjectId={kind === "claude" ? projectId : null}
+                  claudeFolderId={kind === "claude" ? folderId : null}
                   // This composer writes into the CLI's own prompt, so a `/…`
                   // line it sends is run as a command rather than read as text.
                   runsSlashCommands={kind === "claude"}
@@ -460,7 +460,7 @@ export function TerminalSessionView({
 /**
  * Terminal or chat, for a Claude Code session.
  *
- * Deliberately not a per-project setting: which one is useful changes within a
+ * Deliberately not a per-folder setting: which one is useful changes within a
  * single session — the chat to read what happened, the terminal to answer a
  * permission prompt — so it is a control on the pane rather than a preference
  * buried in settings.

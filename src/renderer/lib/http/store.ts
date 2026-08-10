@@ -10,6 +10,7 @@ import type {
   HttpResponseResult,
 } from "@shared/api"
 import { useStudio } from "../store"
+import { isRememberedTabs, recall, remember } from "../tab-memory"
 import { cookieHeader, cookiesFor, mergeCookies } from "./cookies"
 import {
   descendantFolderIds,
@@ -77,14 +78,13 @@ const IDLE: RequestOutcome = {
   script: null,
 }
 
-/** Where the chosen environment is remembered, per project. */
-function activeEnvironmentKey(projectId: string): string {
-  return `http.environment.${projectId}`
-}
+/** Where the chosen environment is remembered. */
+const ACTIVE_ENVIRONMENT_KEY = "http.environment"
+
+/** Which requests were open in the strip, and which was on screen. */
+const OPEN_TABS_KEY = "http.tabs"
 
 type ApiState = {
-  /** Whose requests these are; cleared and reloaded when the project changes. */
-  projectId: string | null
   requests: HttpRequestRecord[]
   loading: boolean
   /** Requests with a tab open, oldest first. */
@@ -266,20 +266,53 @@ export const useApi = create<ApiState>((set, get) => {
   let pendingSave: ReturnType<typeof setTimeout> | undefined
   let pendingEnvironmentSave: ReturnType<typeof setTimeout> | undefined
   let pendingFolderSave: ReturnType<typeof setTimeout> | undefined
+  /** Whether the strip has already been put back — see `refresh`. */
+  let restored = false
 
-  /** Writes the whole collection back, for the project it belonged to when
-   * the change was made — a write in flight must not land on the next one. */
-  function persist(projectId: string, requests: HttpRequestRecord[]) {
-    void window.desktop.saveRequests(projectId, requests).catch((error) => {
+  function rememberTabs() {
+    const { openIds, selectedId } = get()
+    remember(OPEN_TABS_KEY, { openIds, selectedId })
+  }
+
+  /**
+   * Reopens what the last launch had open, dropping anything that no longer
+   * resolves: a request or folder deleted since is an id that names nothing,
+   * and reopening it would put a tab in the strip with no panel behind it.
+   */
+  function restoreTabs(requests: HttpRequestRecord[], folders: HttpFolder[]) {
+    void recall(OPEN_TABS_KEY, isRememberedTabs).then((stored) => {
+      if (!stored) return
+      // Anything opened while this read was in flight wins: the user is here
+      // now, and a stored strip is only a starting point.
+      if (get().openIds.length > 0) return
+
+      const exists = (id: string) =>
+        id === SETTINGS_TAB_ID ||
+        requests.some((request) => request.id === id) ||
+        folders.some((folder) => folder.id === id)
+
+      const openIds = stored.openIds.filter(exists)
+      if (openIds.length === 0) return
+      set({
+        openIds,
+        selectedId:
+          stored.selectedId && openIds.includes(stored.selectedId)
+            ? stored.selectedId
+            : (openIds[0] ?? null),
+      })
+    })
+  }
+
+  /** Writes the whole collection back. */
+  function persist(requests: HttpRequestRecord[]) {
+    void window.desktop.saveRequests(requests).catch((error) => {
       console.error("Could not save requests", error)
     })
   }
 
   function commitCookies(next: HttpCookie[]) {
-    const { projectId } = get()
     set({ cookies: next })
-    if (!projectId) return
-    void window.desktop.saveCookies(projectId, next).catch((error) => {
+    void window.desktop.saveCookies(next).catch((error) => {
       console.error("Could not save cookies", error)
     })
   }
@@ -319,31 +352,24 @@ export const useApi = create<ApiState>((set, get) => {
     }))
   }
 
-  function persistEnvironments(
-    projectId: string,
-    environments: HttpEnvironment[]
-  ) {
-    void window.desktop
-      .saveEnvironments(projectId, environments)
-      .catch((error) => {
-        console.error("Could not save environments", error)
-      })
+  function persistEnvironments(environments: HttpEnvironment[]) {
+    void window.desktop.saveEnvironments(environments).catch((error) => {
+      console.error("Could not save environments", error)
+    })
   }
 
   /** Applies a change to the environments and writes it. Variables are typed
    * a keystroke at a time like everything else, so this shares the delay. */
   function commitEnvironments(next: HttpEnvironment[], immediate = true) {
-    const { projectId } = get()
     set({ environments: next })
-    if (!projectId) return
 
     clearTimeout(pendingEnvironmentSave)
     if (immediate) {
-      persistEnvironments(projectId, next)
+      persistEnvironments(next)
       return
     }
     pendingEnvironmentSave = setTimeout(
-      () => persistEnvironments(projectId, next),
+      () => persistEnvironments(next),
       SAVE_DELAY_MS
     )
   }
@@ -357,20 +383,18 @@ export const useApi = create<ApiState>((set, get) => {
    * the kind of change a crash a second later should not undo.
    */
   function commit(next: HttpRequestRecord[], immediate = true) {
-    const { projectId } = get()
     set({ requests: next })
-    if (!projectId) return
 
     clearTimeout(pendingSave)
     if (immediate) {
-      persist(projectId, next)
+      persist(next)
       return
     }
-    pendingSave = setTimeout(() => persist(projectId, next), SAVE_DELAY_MS)
+    pendingSave = setTimeout(() => persist(next), SAVE_DELAY_MS)
   }
 
-  function persistFolders(projectId: string, folders: HttpFolder[]) {
-    void window.desktop.saveFolders(projectId, folders).catch((error) => {
+  function persistFolders(folders: HttpFolder[]) {
+    void window.desktop.saveRequestFolders(folders).catch((error) => {
       console.error("Could not save folders", error)
     })
   }
@@ -378,41 +402,17 @@ export const useApi = create<ApiState>((set, get) => {
   /** Same shape as `commitEnvironments` — structural changes (a folder added,
    * renamed, moved, removed) write at once; header/param keystrokes debounce. */
   function commitFolders(next: HttpFolder[], immediate = true) {
-    const { projectId } = get()
     set({ folders: next })
-    if (!projectId) return
 
     clearTimeout(pendingFolderSave)
     if (immediate) {
-      persistFolders(projectId, next)
+      persistFolders(next)
       return
     }
-    pendingFolderSave = setTimeout(
-      () => persistFolders(projectId, next),
-      SAVE_DELAY_MS
-    )
+    pendingFolderSave = setTimeout(() => persistFolders(next), SAVE_DELAY_MS)
   }
 
-  // Follows the open project, the same way the databases store does: another
-  // project's requests are not this one's.
-  useStudio.subscribe((studio) => {
-    if (studio.projectId === get().projectId) return
-    set({
-      projectId: studio.projectId,
-      requests: [],
-      openIds: [],
-      selectedId: null,
-      outcomes: {},
-      environments: [],
-      activeEnvironmentId: null,
-      cookies: [],
-      folders: [],
-    })
-    if (studio.projectId) void get().refresh()
-  })
-
   return {
-    projectId: useStudio.getState().projectId,
     requests: [],
     loading: false,
     openIds: [],
@@ -424,18 +424,15 @@ export const useApi = create<ApiState>((set, get) => {
     folders: [],
 
     async refresh() {
-      const { projectId } = get()
-      if (!projectId) return
       set({ loading: true })
       const [requests, environments, folders, cookies, active] =
         await Promise.all([
-          window.desktop.listRequests(projectId),
-          window.desktop.listEnvironments(projectId),
-          window.desktop.listFolders(projectId),
-          window.desktop.listCookies(projectId),
-          window.desktop.getSetting(activeEnvironmentKey(projectId)),
+          window.desktop.listRequests(),
+          window.desktop.listEnvironments(),
+          window.desktop.listRequestFolders(),
+          window.desktop.listCookies(),
+          window.desktop.getSetting(ACTIVE_ENVIRONMENT_KEY),
         ])
-      if (get().projectId !== projectId) return
       set({
         requests,
         environments,
@@ -449,6 +446,13 @@ export const useApi = create<ApiState>((set, get) => {
             : null,
         loading: false,
       })
+
+      // Only on the first read: a later refresh — an import, a folder
+      // deleted — must not reopen what has been closed since.
+      if (!restored) {
+        restored = true
+        restoreTabs(requests, folders)
+      }
     },
 
     async create(folderId = null) {
@@ -501,6 +505,7 @@ export const useApi = create<ApiState>((set, get) => {
         selectedId: id,
         openIds: openIds.includes(id) ? openIds : [...openIds, id],
       })
+      rememberTabs()
     },
 
     close(id) {
@@ -515,14 +520,17 @@ export const useApi = create<ApiState>((set, get) => {
             ? (remaining[index] ?? remaining[index - 1] ?? null)
             : selectedId,
       })
+      rememberTabs()
     },
 
     closeOthers(id) {
       set({ openIds: [id], selectedId: id })
+      rememberTabs()
     },
 
     closeAll() {
       set({ openIds: [], selectedId: null })
+      rememberTabs()
     },
 
     reorder(ids) {
@@ -530,6 +538,7 @@ export const useApi = create<ApiState>((set, get) => {
       const reordered = ids.filter((id) => openIds.includes(id))
       if (reordered.length !== openIds.length) return
       set({ openIds: reordered })
+      rememberTabs()
     },
 
     async send(id) {
@@ -682,10 +691,8 @@ export const useApi = create<ApiState>((set, get) => {
     },
 
     selectEnvironment(id) {
-      const { projectId } = get()
       set({ activeEnvironmentId: id })
-      if (!projectId) return
-      void window.desktop.setSetting(activeEnvironmentKey(projectId), id ?? "")
+      void window.desktop.setSetting(ACTIVE_ENVIRONMENT_KEY, id ?? "")
     },
 
     createFolder(parentId) {

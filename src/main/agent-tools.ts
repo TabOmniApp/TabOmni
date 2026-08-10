@@ -4,7 +4,7 @@ import type {
   ClaudeModel,
   ClaudePermissionMode,
 } from "../shared/api"
-import { locate, quote, shellPath } from "./shell-env"
+import { locate, quote, shellPath, withoutAgentSession } from "./shell-env"
 
 type AgentTool = {
   /**
@@ -71,7 +71,12 @@ export async function claudeExec(): Promise<{
     // terminal), and if it does not, the caller's "check that it is installed"
     // is the message to end on anyway.
     command: resolved ?? CLAUDE_COMMAND,
-    env: { ...process.env, ...(path ? { PATH: path } : {}) },
+    // Same inheritance as a pty's: the AI features shell out to this CLI too,
+    // and a `claude` that thinks it is nested behaves differently.
+    env: withoutAgentSession({
+      ...process.env,
+      ...(path ? { PATH: path } : {}),
+    }),
   }
 }
 

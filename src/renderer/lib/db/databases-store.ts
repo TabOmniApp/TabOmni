@@ -1,14 +1,21 @@
 import { create } from "zustand"
 
-import { useStudio } from "../store"
+import { recall, remember } from "../tab-memory"
 import * as repo from "./databases"
 import type { DatabaseRecord, NewDatabaseInput } from "./databases"
 
+/** Which database the panel was last browsing. Without this the panel comes
+ * back on the first of the list, and the tabs remembered against the one that
+ * was actually open have nothing to be restored into. */
+const SELECTED_KEY = "db.selected"
+
+function isDatabaseId(value: unknown): value is string | null {
+  return value === null || typeof value === "string"
+}
+
 type DatabasesState = {
-  /** Whose databases these are; cleared and reloaded when the project changes. */
-  projectId: string | null
   databases: DatabaseRecord[]
-  /** Which of the project's databases the Database panel is showing. */
+  /** Which of the workspace's databases the Database panel is showing. */
   selectedId: string | null
   loading: boolean
   error: string | null
@@ -22,49 +29,44 @@ type DatabasesState = {
 }
 
 export const useDatabases = create<DatabasesState>((set, get) => {
-  // Follows the open project, the same way `explorer-store` follows this
-  // store: switching projects means switching to a different list of
-  // databases, and whatever was selected belonged to the project that just
-  // closed.
-  useStudio.subscribe((studio) => {
-    if (studio.projectId === get().projectId) return
-
-    set({
-      projectId: studio.projectId,
-      databases: [],
-      selectedId: null,
-      error: null,
-    })
-    if (studio.projectId) void get().refresh()
-  })
+  /** Whether the stored selection has been consulted — see `refresh`. A flag
+   * rather than a null check on the value, since "nothing was stored" is an
+   * answer and re-asking for it on every refresh is a read per refresh. */
+  let consulted = false
 
   return {
-    projectId: useStudio.getState().projectId,
     databases: [],
     selectedId: null,
     loading: false,
     error: null,
 
     async refresh() {
-      const { projectId } = get()
-      if (!projectId) return
-
       set({ loading: true })
       try {
-        const databases = await repo.listDatabases(projectId)
-        set((state) => ({
-          databases,
-          loading: false,
-          error: null,
-          // The selection follows the list rather than being reset outright: a
-          // database that is still there stays selected, and the first one
-          // stands in the moment there is nothing selected yet.
-          selectedId: databases.some(
-            (database) => database.id === state.selectedId
-          )
-            ? state.selectedId
-            : (databases[0]?.id ?? null),
-        }))
+        const databases = await repo.listDatabases()
+        // Only the first read consults it: after that the selection on screen
+        // is the truth, and a database removed since is one the fallback below
+        // handles like any other missing id.
+        let last: string | null = null
+        if (!consulted) {
+          consulted = true
+          last = await recall(SELECTED_KEY, isDatabaseId)
+        }
+
+        set((state) => {
+          const wanted = state.selectedId ?? last ?? null
+          return {
+            databases,
+            loading: false,
+            error: null,
+            // The selection follows the list rather than being reset outright: a
+            // database that is still there stays selected, and the first one
+            // stands in the moment there is nothing selected yet.
+            selectedId: databases.some((database) => database.id === wanted)
+              ? wanted
+              : (databases[0]?.id ?? null),
+          }
+        })
       } catch (error) {
         set({ loading: false, error: message(error) })
       }
@@ -102,6 +104,7 @@ export const useDatabases = create<DatabasesState>((set, get) => {
 
     select(id) {
       set({ selectedId: id })
+      remember(SELECTED_KEY, id)
     },
   }
 })

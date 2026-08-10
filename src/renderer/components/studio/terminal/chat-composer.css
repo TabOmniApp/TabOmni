@@ -1,7 +1,7 @@
 /*
  * How the composer's Crepe editor is *sized*. What it is coloured like is in
- * `milkdown-theme.css`, shared with the Spec panel's prose sections — the two
- * differ only in sizing, and this file is the composer's half of that.
+ * `milkdown-theme.css`, which is the theme on its own so that sizing and
+ * colour can be changed apart.
  */
 
 /*

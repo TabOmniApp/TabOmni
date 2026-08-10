@@ -19,7 +19,6 @@ const t2 = `${PREFIX.database}public.orders`
 const t3 = `${PREFIX.database}public.items`
 const a1 = `${PREFIX.api}req-1`
 const a2 = `${PREFIX.api}req-2`
-const s1 = `${PREFIX.spec}docs/FR_008.spec.json`
 const x1 = `${PREFIX.terminal}sess-1`
 
 const tab = (id: string) => ({ id })
@@ -104,14 +103,13 @@ section("ids carry their panel")
 
 check("a table id names the database panel", kindOf(t1) === "database")
 check("a request id names the api panel", kindOf(a1) === "api")
-check("a spec id names the spec panel", kindOf(s1) === "spec")
 check("a session id names the terminal panel", kindOf(x1) === "terminal")
 check("an unprefixed id names none", kindOf("public.users") === null)
 
 check("the prefix comes back off", bare(t1, "database") === "public.users")
 check(
-  "a spec's path survives the round trip",
-  bare(s1, "spec") === "docs/FR_008.spec.json"
+  "an id carrying a colon of its own survives the round trip",
+  bare(`${PREFIX.mail}a:b`, "mail") === "a:b"
 )
 
 /**

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "./motion.css";
 
 @custom-variant dark (&:is(.dark *));
 @source "../**/*.{ts,tsx}";
@@ -107,15 +108,12 @@
      */
   --section-database: oklch(0.55 0.17 250);
   --section-api: oklch(0.58 0.21 320);
-  /* Mail takes the widest gap left on the wheel — 45 from Specs on one side
-       and Terminal on the other. Webhooks is the awkward one: with eight
-       sections nothing is more than 30 from its nearest neighbour, so it is
-       placed by *rail adjacency* instead, which is what the eye actually
-       compares. At 350 it sits 125 from Mail above it and 80 from Specs below;
-       its nearest hue overall is API at 320, which is three rows away. */
+  /* Webhooks is the awkward one: it is placed by *rail adjacency* rather than
+       by distance on the wheel, which is what the eye actually compares. At
+       350 it sits 125 from Mail above it and 190 from Terminal below; its
+       nearest hue overall is API at 320, which is two rows away. */
   --section-mail: oklch(0.6 0.16 115);
   --section-webhook: oklch(0.58 0.2 350);
-  --section-spec: oklch(0.62 0.15 70);
   --section-terminal: oklch(0.56 0.14 160);
 
   --chart-1: oklch(0.55 0.22 285);
@@ -170,7 +168,6 @@
   --section-api: oklch(0.72 0.18 320);
   --section-mail: oklch(0.76 0.16 115);
   --section-webhook: oklch(0.72 0.18 350);
-  --section-spec: oklch(0.78 0.14 70);
   --section-terminal: oklch(0.74 0.14 160);
 
   --chart-1: oklch(0.7 0.19 285);

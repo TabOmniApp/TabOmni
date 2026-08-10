@@ -5,19 +5,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 **Tabula**: an Electron studio that collapses a project's tooling into one tab
-strip — its file tree, its databases, its HTTP endpoints, its specs, and the
-agent and shell sessions run against it. The premise is that those are four or
+strip — its folders, its databases, its HTTP endpoints, its mail and webhooks,
+and the agent and shell sessions run against them. The premise is that those are four or
 five separate applications today, each with a window layout of its own, and
 that switching between them costs more than any one of them saves.
+
+There is one **workspace**, holding any number of **folders** — directories
+already on this machine, worked on where they are. It is deliberately not
+switchable: someone working across a frontend and its API has two folders open
+at once, and a switch would take one of them, and every tab and session opened
+against it, off the screen. Databases, requests, cookies and the two capture
+servers belong to the workspace; what is per folder is what is genuinely per
+repository — a session's cwd and a branch name. Sign-in will bring a
+second workspace; until then `DEFAULT_WORKSPACE_ID` is a constant.
 
 One package, no workspaces. `src/main/` is the Electron main process,
 `src/preload/` the one bridge script, `src/renderer/` the React app, and
 `src/shared/` the contract between the two. The shadcn/ui components live in
 `src/renderer/components/ui/` like any other component.
 
-`docs/design.md` is the design document for the app itself — how a
-project's data lives on disk, how the Claude Code chat view works, how the
-filter builder and the spec canvas behave. Read it before changing those areas.
+`docs/design.md` is the design document for the app itself — how the
+workspace's data lives on disk, how the Claude Code chat view works, how the
+filter builder and the capture servers behave. Read it before changing those
+areas.
 
 ## Commands
 
@@ -81,10 +91,12 @@ reaches the contract through the `@shared/*` alias (`@/*` is `src/renderer`).
 handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
 `ProcessManager`, `TerminalManager`, `ClaudeGuiManager`). Notable pieces:
 
-- **`store.ts`** — all project state on disk under `~/.tabula`: `manifest.json`
-  for projects/databases/settings, `projects/<id>/` for a scaffolded project's
-  `source/` and per-database data. Database passwords are encrypted in the
-  manifest and stripped field-by-field before a record crosses to the renderer.
+- **`store.ts`** — all state on disk under `~/.tabula`: `manifest.json` for the
+  workspace/databases/settings, and `workspace/` for the panels' own files
+  (requests, cookies, captures, per-database Docker data). A folder's own files
+  are never under here — the manifest records an absolute path and they are read
+  where they are. Database passwords are encrypted in the manifest and stripped
+  field-by-field before a record crosses to the renderer.
 - **`daemon.ts` + `daemon-client.ts`** — ptys live in a detached, per-machine
   daemon spoken to over a Unix socket/named pipe with newline-delimited JSON.
   They no longer outlive the app: `TerminalManager.killAll()` is awaited on
@@ -101,9 +113,6 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   Reading a file, not driving the CLI, is what makes Chat and Terminal two
   views of one conversation — and is why replies arrive a message at a time and
   permission prompts are answered in the terminal view.
-- **`project-files.ts`** — the single definition of what belongs to a project
-  (skipped dirs, binary extensions, size ceiling), imported by `store.ts`
-  rather than restated where a project's tree is walked.
 - **`http.ts`** — API requests are sent from the main process, so there is no
   page origin, no CORS preflight, and forbidden headers go out as typed. The
   cookie jar in `cookies.json` is the panel's own, not Chromium's.
@@ -121,20 +130,39 @@ yields one fewer condition rather than a broken clause.
 ## Renderer (`src/renderer/`)
 
 React 19 + Vite + Tailwind v4. `components/studio/` is split by panel
-(`terminal`, `api`, `db`, `spec`, `inbox`), and each panel's logic and zustand
+(`terminal`, `api`, `db`, `inbox`), and each panel's logic and zustand
 store live in the matching `lib/` directory (`lib/terminal/store.ts`,
 `lib/db/explorer-store.ts`, …) with `lib/store.ts` holding the studio-wide
-state — all relative to `src/renderer/`. Editors are CodeMirror 6; terminals
-are xterm.
+state and `lib/workspace.ts` the thin repo over the workspace calls — all
+relative to `src/renderer/`. No panel store clears itself any more: there is no
+switch to clear for, and the only one that follows the folders at all is the
+Terminal store, which drops a removed folder's sessions. Editors are
+CodeMirror 6; terminals are xterm.
+
+`components/studio/splash.tsx` is the launch screen — the studio drawn in
+miniature, assembling — and the workbench is held back until it has finished,
+then crossfaded in. Its easings and keyframes are CSS rather than a library, in
+`styles/motion.css`, which is where an animation added anywhere else should go
+too. Nothing else in the studio animates beyond what shadcn's own components
+bring. See the Motion section of `docs/design.md`.
 
 `components/ui/` is shadcn/ui. Add to it with the CLI rather than by hand:
 `bunx shadcn@latest add dialog`. Vite's root is `src/renderer`, so `index.html`
 and `public/` are there too.
 
-The activity rail is Database, API, Mail, Webhooks, Specs and Terminal, and
+The activity rail is Database, API, Mail, Webhooks and Terminal, and
 `components/studio/activity-bar.tsx` is the one list that says so. There is no
-git panel and no code search: both were removed rather than left hidden, and
-the only thing git is still asked is the branch name in the system bar.
+git panel, no code search and no specs panel: all three were removed rather
+than left hidden, and the only thing git is still asked is each folder's branch
+name, shown beside the folder in the Terminal sidebar.
+
+The workspace's folders are listed, added and removed in that same sidebar
+(`components/studio/terminal/terminal-sidebar.tsx`), rather than in a menu of
+their own above the rail. Terminal is the only panel that works _in_ a folder —
+a session is a pty in its directory — while the databases, requests and
+captures belong to the workspace as a whole, so folder management sits beside
+the one thing it changes. The File menu's `add-folder` command opens the same
+dialog, which is what a rail with the Terminal section hidden falls back to.
 
 Mail and Webhooks are the other end of the API panel: two servers on loopback —
 an SMTP sink and a catch-all HTTP endpoint — catching the mail the project sends
@@ -151,19 +179,6 @@ and the file holding it are one of each, and two stores would mean two
 subscriptions to the same event. `CaptureList` and `ServerSettings` take a
 `server` prop; each panel starts, stops and clears only its own. See
 `docs/design.md`.
-
-The Specs panel (`src/renderer/components/studio/spec/`, `lib/spec/`) edits `*.spec.json`
-files in the project's own repository rather than state under `~/.tabula`.
-It opens as a read-only page (`spec-preview.tsx`) with an Edit button that swaps
-in the form — never a JSON editor. The overview holds a canvas
-(`spec-canvas.tsx`): one figure with any number of screenshots on it, and
-numbered markers dragged in from a palette, measured throughout in percentages
-of the canvas _width_ so it scales as one picture. In the form the header and
-item table are typed fields, while Detail processing and Link API are markdown
-edited with Crepe — the same Milkdown editor as the chat composer, sharing
-`components/studio/milkdown-theme.css` and keeping its own sizing stylesheet.
-`lib/spec/schema.ts` also migrates the panel's older structured shape to
-markdown on open; see `docs/design.md`.
 
 ## Conventions
 

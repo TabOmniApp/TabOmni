@@ -35,7 +35,6 @@ import {
 
 import type { InboxKind, InboxMessage } from "@shared/api"
 import { messagesOf, receivedLabel, useInbox } from "@/lib/inbox/store"
-import { useStudio } from "@/lib/store"
 import { SECTION_ACCENT } from "../activity-bar"
 import { METHOD_TONES } from "../api/request-list"
 import { IconButton } from "../icon-button"
@@ -87,8 +86,6 @@ const PANEL: Record<
 }
 
 export function CaptureList({ server }: { server: InboxKind }) {
-  const projectId = useStudio((state) => state.projectId)
-
   const messages = useInbox((state) => state.messages)
   const status = useInbox((state) => state.status[server])
   const selectedId = useInbox((state) => state.selectedId[server])
@@ -104,9 +101,11 @@ export function CaptureList({ server }: { server: InboxKind }) {
   const panel = PANEL[server]
   const accent = SECTION_ACCENT[server]
 
+  // Once for the window: the captures are the workspace's, and there is no
+  // longer anything they can be re-read in response to.
   useEffect(() => {
-    if (projectId) void refresh()
-  }, [projectId, refresh])
+    void refresh()
+  }, [refresh])
 
   const own = messagesOf(messages, server)
 
@@ -119,7 +118,6 @@ export function CaptureList({ server }: { server: InboxKind }) {
               ? `Stop the ${panel.server}`
               : `Start the ${panel.server}`
           }
-          disabled={!projectId}
           onClick={() => void (status.listening ? stop(server) : start(server))}
           className={status.listening ? "hover:text-current" : undefined}
           style={status.listening ? { color: accent } : undefined}
@@ -135,7 +133,6 @@ export function CaptureList({ server }: { server: InboxKind }) {
         </IconButton>
         <IconButton
           label="Port and endpoint"
-          disabled={!projectId}
           onClick={() => openSettings(server)}
         >
           <Settings2 />
@@ -148,8 +145,7 @@ export function CaptureList({ server }: { server: InboxKind }) {
       <button
         type="button"
         onClick={() => openSettings(server)}
-        disabled={!projectId}
-        className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-left text-[0.65rem] text-muted-foreground hover:bg-muted/60 disabled:pointer-events-none"
+        className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-left text-[0.65rem] text-muted-foreground hover:bg-muted/60"
       >
         <span
           aria-hidden
@@ -169,11 +165,7 @@ export function CaptureList({ server }: { server: InboxKind }) {
 
       <div className="min-h-0 flex-1 overflow-auto py-1">
         {own.length === 0 ? (
-          <Nothing
-            server={server}
-            hasProject={Boolean(projectId)}
-            running={status.listening}
-          />
+          <Nothing server={server} running={status.listening} />
         ) : (
           own.map((message) => (
             <ContextMenu key={message.id}>
@@ -313,15 +305,7 @@ function MessageRow({
   )
 }
 
-function Nothing({
-  server,
-  hasProject,
-  running,
-}: {
-  server: InboxKind
-  hasProject: boolean
-  running: boolean
-}) {
+function Nothing({ server, running }: { server: InboxKind; running: boolean }) {
   const panel = PANEL[server]
   return (
     <Empty className="p-4">
@@ -329,19 +313,9 @@ function Nothing({
         <EmptyMedia variant="icon">
           <panel.Icon />
         </EmptyMedia>
-        <EmptyTitle>
-          {!hasProject
-            ? "No project open"
-            : running
-              ? "Waiting"
-              : "Not listening"}
-        </EmptyTitle>
+        <EmptyTitle>{running ? "Waiting" : "Not listening"}</EmptyTitle>
         <EmptyDescription className="text-xs">
-          {!hasProject
-            ? "The server binds per project."
-            : running
-              ? panel.waiting
-              : panel.stopped}
+          {running ? panel.waiting : panel.stopped}
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
