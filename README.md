@@ -1,25 +1,30 @@
 <div align="center">
 
-<img src="src/renderer/public/logo-with-text.png" alt="Tabula" width="360">
+<img src="resources/icon.png" alt="Tabula" width="120">
 
-**One window for the four applications a project already needs.**
+# Tabula
+
+**One window for the applications a project already needs.**
 
 [![CI](https://github.com/tabulapp/tabula/actions/workflows/ci.yml/badge.svg)](https://github.com/tabulapp/tabula/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F.svg)](https://electronjs.org)
 
+<img src="docs/screenshots/database.png" alt="The Database panel: a table's rows in the data browser, and the tab strip every panel shares" width="900">
+
 </div>
 
 ---
 
-Working on a project normally means four applications and four window layouts:
-a database client, an HTTP client, a terminal, and wherever the agent runs.
-Switching between them costs more than any one of them saves.
+Working on a project normally means half a dozen applications and half a dozen
+window layouts: a database client, an HTTP client, a mail catcher, a request
+bin, a terminal, and wherever the agent runs. Switching between them costs more
+than any one of them saves.
 
 Tabula makes each of them a tab in one window, the way an editor makes files
-tabs. The database explorer, the API panel, the specs, the terminal and the
-agent's chat open, switch and close the same way, and none of them is a
-separate app to arrange on screen.
+tabs. The database explorer, the API panel, the captures, the notes, the
+terminal and the agent's chat open, switch and close the same way, and none of
+them is a separate app to arrange on screen.
 
 ## What's in it
 
@@ -28,18 +33,64 @@ separate app to arrange on screen.
 | **Database**            | A SQL client. Postgres and MySQL — schema tree, a data browser with a filter builder, a query console. Docker-managed databases a project owns, or ones you connect to.                                        |
 | **API**                 | An HTTP client. Requests are sent from the main process, so there is no page origin, no CORS preflight, and forbidden headers go out as typed.                                                                 |
 | **Mail** & **Webhooks** | Mailhog and a request-bin service. An SMTP sink and a catch-all HTTP endpoint on loopback, catching the mail the project sends and the callbacks fired at it. Any capture can be replayed verbatim at any URL. |
-| **Specs**               | A screen-spec document, edited as a form rather than JSON, living in the project's own repository. Its overview is a canvas: screenshots with numbered markers dragged onto them.                              |
 | **Terminal**            | A terminal, plus the agent. A `claude` session is one pty with two views — the terminal, and a chat reading the transcript the CLI writes.                                                                     |
+| **Notes**               | A scratchpad. Markdown files filed in folders, edited in a WYSIWYG editor, left on disk as plain `.md`. `/drawing` opens an Excalidraw canvas and leaves the result in the note as an SVG.                     |
 
 Some things are deliberately not what you'd expect. The Mail parser is not a
 MIME library — the studio would otherwise behave differently depending on what
 you happened to have installed. The AI features shell out to `claude -p` — the
 CLI already installed for the Terminal panel — rather than an API needing a key.
 
-There is no git panel and no code search: your editor and your shell already do
-both, and a studio that did them worse would only be one more place to look.
-The one thing Tabula keeps of git is the branch name in the system bar, so you
-can see at a glance which branch the panels are pointed at.
+There is one **workspace**, holding any number of **folders** — directories
+already on this machine, worked on where they are. It is deliberately not
+switchable: someone working across a frontend and its API has both open at
+once, and a switch would take one of them, and every tab and session opened
+against it, off the screen.
+
+There is no git panel, no code search and no specs panel — all three were
+removed rather than left hidden. Your editor and your shell already do the
+first two, and a studio that did them worse would only be one more place to
+look. The one thing Tabula still asks git is each folder's branch name, shown
+beside the folder in the Terminal sidebar.
+
+## A look at it
+
+Every panel shares the strip along the top, so whatever you opened stays open
+while you work somewhere else — a query you are half way through does not close
+because you went to look at a webhook.
+
+**Database.** Postgres and MySQL. The schema tree on the left, a table's rows
+browsed and edited in place, and the query console as a tab like any other.
+
+<img src="docs/screenshots/query-console.png" alt="The query console: a SQL editor above its result grid" width="900">
+
+**API.** Requests are filed in folders that cascade headers and params onto
+what they hold, and `{{variables}}` resolve against the environment picked in
+the corner. Sent from the main process, so there is no page origin and no
+preflight in the way.
+
+<img src="docs/screenshots/api.png" alt="The API panel: a request with its query parameters, and the URL its {{variables}} resolve to" width="900">
+
+**Mail and Webhooks.** Two servers on loopback and one implementation. Mail is
+shown as the recipient would see it — rendered HTML, plain text, the raw
+source, its attachments — and a captured webhook keeps every header it arrived
+with, ready to be replayed at any URL.
+
+<img src="docs/screenshots/mail.png" alt="The Mail panel: a captured message with its envelope, and its text alternative" width="900">
+
+<img src="docs/screenshots/webhooks.png" alt="The Webhooks panel: a captured POST with its body, headers and a Replay control" width="900">
+
+**Terminal.** A session is a pty in a folder's own directory. The folders are
+listed, added and removed here — beside the one thing they change — each with
+the branch it is on. Pick `claude` instead of a shell and the same session
+gains a chat view, reading the transcript the CLI writes.
+
+<img src="docs/screenshots/terminal.png" alt="The Terminal panel: a shell session in a folder, with each folder's branch beside it" width="900">
+
+**Notes.** Markdown, filed the way the API panel's requests are, and left on
+disk as plain `.md` that grep and git can read without this app.
+
+<img src="docs/screenshots/notes.png" alt="The Notes panel: a markdown note in the Crepe editor" width="900">
 
 ## Requirements
 
@@ -72,7 +123,7 @@ quitting a running copy first. It is short and does nothing clever — reading i
 before running it is a reasonable habit. Pin a version by passing one:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tabulapp/tabula/main/install.sh | bash -s 0.1.0
+curl -fsSL https://raw.githubusercontent.com/tabulapp/tabula/main/install.sh | bash -s 0.0.3
 ```
 
 The `.dmg` builds are on the
@@ -105,8 +156,8 @@ The AppImage from the
 install — there is nothing to unpack:
 
 ```bash
-chmod +x Tabula-0.1.0-x64.AppImage
-./Tabula-0.1.0-x64.AppImage
+chmod +x Tabula-0.0.3-x64.AppImage
+./Tabula-0.0.3-x64.AppImage
 ```
 
 An AppImage needs FUSE, which some distributions no longer ship by default
@@ -154,7 +205,7 @@ One package, no workspaces.
 src/
   main/        Electron main process — IPC handlers, store, daemon, servers
   preload/     the one bridge script, sandboxed
-  renderer/    React 19, Vite, Tailwind v4, CodeMirror, xterm
+  renderer/    React 19, Vite, Tailwind v4, CodeMirror, xterm, Milkdown
     components/ui/   shadcn/ui
   shared/      the contract between main and renderer, types only
 test/          plain bun scripts, no test framework
@@ -170,10 +221,13 @@ channel name in the `IPC` map at the bottom of that file, wired through
 four, which is deliberate: the alternative is two sides that disagree about
 what a call returns.
 
-A project's state lives under `~/.tabula` — `manifest.json` for projects,
-databases and settings, `projects/<id>/` for a scaffolded project's files and
-per-database data. Database passwords are encrypted with the OS keystore and
-stripped field by field before a record crosses to the renderer.
+The workspace's state lives under `~/.tabula` — `manifest.json` for the
+workspace, its folders, its databases and settings, and `workspace/` for the
+panels' own files: saved requests, cookies, captures, notes and per-database
+Docker data. A folder's own files are never copied under there; the manifest
+records an absolute path and they are read where they are. Database passwords
+are encrypted in the manifest and stripped field by field before a record
+crosses to the renderer.
 
 ## Documentation
 
