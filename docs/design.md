@@ -657,6 +657,29 @@ the page cannot be scrolled past; and a diagram wants more room than a column of
 prose has. What sits in the note is the finished drawing, exported to SVG —
 click it, or Edit, and the canvas opens over the note.
 
+**Shapes come out straight, not sketched.** Excalidraw is a whiteboard and its
+defaults say so: an outline that wobbles off true and a hand-drawn font, which
+reads as charm on a whiteboard and as a badly drawn rectangle on a diagram of an
+API — which is what a drawing in an engineering note mostly is. So the canvas
+opens on roughness 0 and Nunito (`PLAIN_DEFAULTS`), forced over whatever the
+scene was saved with in the same way `theme` is. The cost is that changing the
+sloppiness or the font lasts as long as that drawing is open and no longer; a
+default that applied only to a canvas nobody had saved yet would leave every
+drawing made before the change sketched, which is the thing being fixed.
+Elements already on a canvas keep the look they were drawn with — select all and
+change it in Excalidraw's own panel.
+
+**The font has to be one Excalidraw's own picker offers**, and that is not a
+matter of taste. Liberation Sans was the first choice here, being the plainest
+thing in the package, and it is the one font in it that is not meant for a
+browser: `serverSide: true`, filtered out of the picker, shipped to render an
+export on a server. Nothing preloads it — `loadSceneFonts` loads only the
+families a scene already contains — so text typed in it was measured against
+whatever the browser substituted, and when the real file arrived `Fonts.onLoaded`
+dropped the caches and re-fitted every bound label, moving boxes that had already
+been put down. The canvas felt unlike excalidraw.com because it was doing
+something excalidraw.com never does.
+
 **A drawing is a file, and the note keeps only its id**, in a fenced block:
 
 ````markdown
@@ -705,6 +728,56 @@ block leaves its scene behind on purpose: that has to be undoable, and a delete
 that had already removed the file would come back as an empty drawing.
 `test/drawings.ts` covers the reading, since both directions are destructive
 when it is wrong.
+
+**Numbered badges** — the ①②③ of an annotated screenshot — are the one thing
+added to Excalidraw's own set of tools, and the button for them is **in its
+toolbar**, after a divider, where a tool belongs. Excalidraw has no slot there:
+`renderTopRightUI` is beside the island and `Footer` is under the canvas, so the
+button is a **portal into Excalidraw's own DOM**, a `MutationObserver` waiting
+for `.App-toolbar > .Stack_horizontal` to appear and React rendering into it.
+That is a query against class names that are Excalidraw's rather than this
+app's, and the first thing to look at if the button goes missing after an
+upgrade; it is safe in the other direction, since the portal appends after
+everything Excalidraw's React put there and React removes only its own children.
+The observer keeps watching rather than stopping at the first hit, because view
+mode unmounts that toolbar and brings it back. The button wears Excalidraw's
+`ToolIcon` classes and a 20-box icon stroked at 1.25 like the shapes beside it —
+anything else would read as another application's button dropped into the row.
+
+A badge is stamped rather than drawn: the click drops the next number into the
+middle of the view, already selected and with the pointer back on the selection
+tool, so the gesture is stamp-and-drag rather than stamp, then go and find it. It
+takes the background colour chosen in Excalidraw's own panel with the digit inked
+black or white by the luma of that colour — white on pale yellow is a badge with
+nothing legible in it — and its roughness is 0 rather than Excalidraw's sketchy
+default, which on a circle that small reads as a badly drawn one.
+
+**A circle and a digit in a group, not an ellipse with a bound label**, and that
+one decision is most of how a badge behaves. A bound label does not scale with
+what holds it: Excalidraw resizes the container and then re-fits the label to it,
+growing the container's height and its width in two separate branches when the
+text no longer fits — one axis at a time, which on a circle means an oval, and a
+digit that stays its original size however small the circle gets. A group goes
+through `resizeMultipleElements` instead, where `keepAspectRatio` is forced the
+moment a selection holds a text element or anything grouped, and `fontSize` is
+scaled along with the geometry. So a badge resizes as one object, round, without
+holding Shift. It gives up nothing for it: a standalone text that is centred and
+middle-aligned re-centres itself on edit — `getAdjustedDimensions` offsets it by
+half of what it grew — so 9 becoming 10 stays over the circle.
+
+The stamp still positions the digit by hand rather than trusting where a fresh
+text element lands, and the button selects the **group** as well as its two
+halves: selecting only the elements leaves the badge without the group's handles,
+which are the ones that resize it as a unit rather than sliding the circle out
+from under its number.
+
+The number itself lives in the element's `customData`, Excalidraw's own field
+for a third party's data, and the next one is read back out of the scene rather
+than counted in React: that is what lets a drawing reopened tomorrow carry on at
+4, and deleting the last badge hand its number back. `lib/note/badges.ts` holds
+all of it, and takes `convertToExcalidrawElements` as an argument rather than
+importing it — an import at the top of that file would pull the megabyte back
+out of its lazy chunk and into the studio's own bundle.
 
 ## The system bar
 
