@@ -5,6 +5,7 @@ import { useStudio } from "../store"
 import { isRememberedTabs, recall, remember } from "../tab-memory"
 import { descendantFolderIds, isDescendant } from "../tree"
 import { cloneDrawingsIn, deleteDrawings, drawingIdsIn } from "./drawings"
+import { useNoteTemplates } from "./templates"
 
 /** How long typing settles before a note is written back. */
 const SAVE_DELAY_MS = 400
@@ -36,6 +37,14 @@ type NoteState = {
   refresh: () => Promise<void>
 
   create: (folderId?: string | null) => Promise<void>
+  /** A new note starting from a template's text, named after it. */
+  createFromTemplate: (
+    templateId: string,
+    folderId?: string | null
+  ) => Promise<void>
+  /** Files this note's text away as a template. Returns the new template's id
+   * so the caller can open the manage dialog on it. */
+  saveAsTemplate: (id: string) => Promise<string | null>
   rename: (id: string, name: string) => void
   duplicate: (id: string) => Promise<void>
   remove: (id: string) => void
@@ -64,14 +73,8 @@ function now(): string {
   return new Date().toISOString()
 }
 
-function blankNote(index: number, folderId: string | null): NoteRecord {
-  return {
-    id: crypto.randomUUID(),
-    name: index === 0 ? "New note" : `New note ${index + 1}`,
-    folderId,
-    createdAt: now(),
-    updatedAt: now(),
-  }
+function blankNoteName(index: number): string {
+  return index === 0 ? "New note" : `New note ${index + 1}`
 }
 
 function blankFolder(parentId: string | null): NoteFolder {
@@ -132,6 +135,41 @@ export const useNotes = create<NoteState>((set, get) => {
     void window.desktop.saveNoteFolders(next).catch((error) => {
       console.error("Could not save note folders", error)
     })
+  }
+
+  /**
+   * Adds a note with the text it starts with, and opens it.
+   *
+   * Blank and from-a-template differ only in that text and that name, so the
+   * ordering both depend on lives here once: the body is cached before the
+   * listing is committed, so the editor that the `select` below mounts finds
+   * the text already there rather than reading a file still being written.
+   * `duplicate` keeps its own copy of this because it inserts beside the note
+   * it copied rather than at the end.
+   */
+  async function addNote(
+    name: string,
+    folderId: string | null,
+    markdown: string
+  ) {
+    const note: NoteRecord = {
+      id: crypto.randomUUID(),
+      name,
+      folderId,
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    // The body file is written even when empty rather than left absent, so the
+    // note exists on disk as soon as it exists in the list — a note created and
+    // never typed into is still a note.
+    set((state) => ({ bodies: { ...state.bodies, [note.id]: markdown } }))
+    loaded.add(note.id)
+    commitNotes([...get().notes, note])
+    await window.desktop.writeNote(note.id, markdown).catch((error) => {
+      console.error("Could not create the note", error)
+    })
+    get().select(note.id)
   }
 
   /** Writes a note's body now, cancelling any save still waiting for it. */
@@ -229,18 +267,44 @@ export const useNotes = create<NoteState>((set, get) => {
     },
 
     async create(folderId = null) {
-      const { notes } = get()
-      const note = blankNote(notes.length, folderId)
-      // The body file is written empty rather than left absent, so the note
-      // exists on disk as soon as it exists in the list — a note created and
-      // never typed into is still a note.
-      set((state) => ({ bodies: { ...state.bodies, [note.id]: "" } }))
-      loaded.add(note.id)
-      commitNotes([...notes, note])
-      void window.desktop.writeNote(note.id, "").catch((error) => {
-        console.error("Could not create the note", error)
+      await addNote(blankNoteName(get().notes.length), folderId, "")
+    },
+
+    async createFromTemplate(templateId, folderId = null) {
+      // Read through the store rather than the disk so a template being edited
+      // in the manage dialog right now is taken as it stands on screen.
+      const templates = useNoteTemplates.getState()
+      const template = templates.templates.find(
+        (candidate) => candidate.id === templateId
+      )
+      if (!template) return
+
+      // Each drawing in the template is copied and the new note pointed at the
+      // copy — the same reason `duplicate` does it. Sharing them would mean
+      // every note made from this template drew on one canvas, and deleting any
+      // of them took that canvas from all the others.
+      const markdown = await cloneDrawingsIn(
+        await templates.loadBody(templateId)
+      )
+      await addNote(template.name, folderId, markdown)
+    },
+
+    async saveAsTemplate(id) {
+      const note = get().notes.find((candidate) => candidate.id === id)
+      if (!note) return null
+
+      // The list is re-read first: `create` appends to what the store holds and
+      // writes the whole thing back, so adding to a list that was never loaded
+      // would write this template over every other one.
+      const templates = useNoteTemplates.getState()
+      await templates.refresh()
+
+      const markdown = await cloneDrawingsIn(await get().loadBody(id))
+      const template = await templates.create({
+        name: note.name,
+        markdown,
       })
-      get().select(note.id)
+      return template.id
     },
 
     rename(id, name) {

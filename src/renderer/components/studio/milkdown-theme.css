@@ -63,3 +63,71 @@
 .dark .milkdown {
   --crepe-color-primary: oklch(0.72 0.17 260);
 }
+
+/*
+ * Crepe draws cell borders at `color-mix(..., transparent 80%)` of the outline
+ * color — a fifth of a border that is already low-contrast by design, which
+ * leaves a table's grid barely visible and its cells hard to tell apart. The
+ * outline variable is `--border` already, so the fix is to spend it at full
+ * strength: the same line the rest of the app separates things with.
+ */
+.milkdown .milkdown-table-block :is(th, td) {
+  border: 1px solid var(--border);
+}
+
+/*
+ * The same mistake one level in. Crepe paints the table's own controls (the
+ * drag grips beside a row and a column, and the + that adds one) with
+ * `--crepe-color-outline`: a border token spent as a fill and a text colour.
+ * A border is meant to be barely there, so the controls are too. In the dark
+ * theme `--border` is 14% alpha, which composites over the handle's own
+ * surface to about L 0.29 against L 0.21 behind it; in the light theme it is
+ * L 0.92 on white. These are controls meant to be found, so they get the
+ * token the app gives every other secondary icon.
+ */
+.milkdown .milkdown-table-block svg {
+  fill: var(--muted-foreground);
+}
+
+/* `:is()` counts its most specific branch, matching the four classes Crepe
+ * reaches the add button through; this file is imported after its stylesheet,
+ * so the tie falls here. */
+.milkdown .milkdown-table-block :is(.cell-handle, .line-handle .add-button) {
+  color: var(--muted-foreground);
+}
+
+/*
+ * And the same mistake a third time, on every list marker.
+ *
+ * Crepe renders a list item's marker into a `.label-wrapper` and paints the
+ * whole wrapper with `--crepe-color-outline` — `color` for an ordered list's
+ * number, which is text, and `fill` for a bullet and a checkbox, which are
+ * SVGs. So the one border token decides all three, and a marker at border
+ * strength against body text at full strength is a list whose items are
+ * easier to count than to see.
+ *
+ * `--muted-foreground` rather than a value of its own, so this follows the
+ * theme toggle with no second palette: it is the token every other secondary
+ * mark in the studio already uses, and it is defined on both sides of the
+ * light/dark pair.
+ *
+ * The `li` is in the selector to match the specificity of the rule being
+ * overridden (Crepe nests these inside one), not because it narrows anything.
+ */
+.milkdown .milkdown-list-item-block li .label-wrapper {
+  color: var(--muted-foreground);
+}
+
+.milkdown .milkdown-list-item-block li .label-wrapper svg {
+  fill: var(--muted-foreground);
+}
+
+/*
+ * A ticked box is the one marker that is a statement rather than punctuation,
+ * so it gets body text's own colour and reads as deliberately on. That is also
+ * what keeps done and not-done apart at a glance now that both are drawn in
+ * the same hue — the app is monochrome, so the difference cannot be a colour.
+ */
+.milkdown .milkdown-list-item-block li .label-wrapper .checked svg {
+  fill: var(--foreground);
+}

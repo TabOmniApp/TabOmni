@@ -20,6 +20,7 @@ import type {
   InboxMessage,
   NoteFolder,
   NoteRecord,
+  NoteTemplate,
   UpdateDatabaseInput,
   WorkspaceFolder,
   WorkspaceRecord,
@@ -125,6 +126,19 @@ export const NOTE_FOLDERS_FILE = "note-folders.json"
  * that grep, an editor or git can read without going through this app.
  */
 export const NOTES_DIR = "notes"
+
+/** The note templates' listing; each body is a file of its own, as a note's is. */
+export const NOTE_TEMPLATES_FILE = "note-templates.json"
+
+/**
+ * Where each template's markdown is kept, one `<id>.md` per template.
+ *
+ * A directory of its own rather than sharing `NOTES_DIR`: the two are separate
+ * lists with separate ids, and interleaving them would leave a directory the
+ * user cannot read without the listing beside it — which is exactly what
+ * keeping the bodies as plain files was for.
+ */
+export const NOTE_TEMPLATES_DIR = "note-templates"
 
 /**
  * Where a note's drawings are kept, one `<id>.excalidraw` per drawing.
@@ -574,6 +588,27 @@ export class Store {
     return this.deleteOwnFiles(ids.map((id) => this.noteBodyPath(id)))
   }
 
+  listNoteTemplates(): Promise<NoteTemplate[]> {
+    return this.readList(NOTE_TEMPLATES_FILE)
+  }
+
+  saveNoteTemplates(templates: NoteTemplate[]): Promise<void> {
+    return this.writeList(NOTE_TEMPLATES_FILE, templates)
+  }
+
+  /** A template's markdown, or "" for one that has never been written to. */
+  readNoteTemplate(id: string): Promise<string> {
+    return this.readOwnFile(this.noteTemplatePath(id))
+  }
+
+  writeNoteTemplate(id: string, markdown: string): Promise<void> {
+    return this.writeOwnFile(this.noteTemplatePath(id), markdown)
+  }
+
+  deleteNoteTemplates(ids: string[]): Promise<void> {
+    return this.deleteOwnFiles(ids.map((id) => this.noteTemplatePath(id)))
+  }
+
   /** A drawing's scene, or "" for one that has never been saved. */
   readDrawing(id: string): Promise<string> {
     return this.readOwnFile(this.drawingPath(id))
@@ -590,6 +625,12 @@ export class Store {
   /** One note's markdown. */
   private noteBodyPath(id: string): string {
     return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.md`)
+  }
+
+  /** One template's markdown. `ownId` guards this path for the same reason it
+   * guards a note's: the id comes from the renderer and becomes a filename. */
+  private noteTemplatePath(id: string): string {
+    return path.join(this.workspaceDir, NOTE_TEMPLATES_DIR, `${ownId(id)}.md`)
   }
 
   /** One drawing's scene, in Excalidraw's own file format. */
