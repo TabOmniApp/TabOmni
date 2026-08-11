@@ -103,6 +103,26 @@ function BlockEditor({
       initial.length > 0
         ? (initial as unknown as (typeof schema.PartialBlock)[])
         : undefined,
+    /*
+     * What a paste keeps: the formatting the copied thing actually had.
+     *
+     * BlockNote's default is `prioritizeMarkdownOverHTML: true` — when the
+     * clipboard's `text/plain` fallback *looks* like markdown it throws the
+     * `text/html` away and re-parses that fallback instead. The heuristic it
+     * decides with fires on a bullet, a `*`, a `#` line or a `|`, so pasting a
+     * formatted document out of a browser, Notion or a mail client routinely
+     * took the plain-text branch: a heading arrived as a paragraph, `*starred*`
+     * arrived italic where the source was bold, and a table — which has no
+     * plain-text form beyond tab-separated lines — arrived as one paragraph of
+     * run-together cells.
+     *
+     * `plainTextAsMarkdown` is deliberately left on. It is the branch for a
+     * clipboard with no HTML on it at all — a terminal, an editor, a `.md`
+     * file — where markdown is the only structure there is to read, and it is
+     * unaffected by this, so pasting markdown source still becomes blocks.
+     */
+    pasteHandler: ({ defaultPasteHandler }) =>
+      defaultPasteHandler({ prioritizeMarkdownOverHTML: false }),
   })
 
   return (
