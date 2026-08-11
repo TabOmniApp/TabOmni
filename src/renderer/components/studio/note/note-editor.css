@@ -124,6 +124,30 @@
 }
 
 /*
+ * Inline code — the `code` style, typed with backticks or picked off the
+ * formatting toolbar.
+ *
+ * BlockNote gives it one declaration, `font-family: monospace`, which on a note
+ * set in the sans stack is a difference most readers do not see: an `id` in the
+ * middle of a sentence reads as a slightly narrower word rather than as code.
+ * The chip is drawn here, off the same tokens as the rest of this file.
+ *
+ * `.bn-inline-content code` and not a bare `code`: a code *block* renders its
+ * `<code>` as the inline content itself rather than inside one, so it is out of
+ * this selector's reach and keeps the full-width slab it already has.
+ */
+.note-prose .bn-inline-content code {
+  padding: 0.125em 0.375em;
+  border-radius: 0.25rem;
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  /* The monospace face runs larger than the sans at the same size, so a chip
+   * left at 1em sits taller than the line it is in and pushes the leading. */
+  font-size: 0.875em;
+}
+
+/*
  * A drawing block. Its toolbar stays out of the way until the pointer is on it
  * — a note being read should show the diagram and not two buttons per diagram.
  *

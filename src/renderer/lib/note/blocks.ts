@@ -1,4 +1,4 @@
-import { DRAWING_LANGUAGE } from "@shared/api"
+import { DRAWING_LANGUAGE, type NoteBlock } from "@shared/api"
 
 /**
  * A note's document, as it is on disk.
@@ -11,19 +11,13 @@ import { DRAWING_LANGUAGE } from "@shared/api"
  * being typed into. What it cost is a file no longer readable in another
  * editor, which is the trade `docs/design.md` records.
  *
- * The type here is deliberately structural rather than BlockNote's own `Block`:
- * everything in this file walks a document without caring what is in it, and
- * `Block` carries the schema's three type parameters through every signature
- * that touches it. It also keeps these functions runnable — and testable —
- * without an editor, which is the point of `test/note-blocks.ts`.
+ * `NoteBlock` itself moved to `shared/api.ts` when the preview server started
+ * rendering the same document in the main process — it is the shape of a file
+ * both sides read now, not this side's own idea. Re-exported here because
+ * every walk over it still lives in this file, and its callers ask this file
+ * for the type.
  */
-export type NoteBlock = {
-  id?: string
-  type?: string
-  props?: Record<string, unknown>
-  content?: unknown
-  children?: NoteBlock[]
-}
+export type { NoteBlock }
 
 /** The block a drawing lives in. Here rather than beside its React component,
  * so that the walks below — and the store that calls them — do not have to

@@ -869,6 +869,91 @@ all of it, and takes `convertToExcalidrawElements` as an argument rather than
 importing it — an import at the top of that file would pull the megabyte back
 out of its lazy chunk and into the studio's own bundle.
 
+### Preview
+
+**Copy preview link** on a note's right-click menu puts a loopback URL on the
+clipboard; **Open preview** hands the same URL to the browser. What is on the
+other end is the note as a finished page — the thing to paste into a browser
+beside whatever the note documents, to send to someone on the same machine, or
+to hand to something that reads pages rather than looks at them.
+
+**It is server-rendered, and that is the decision the rest follows from.** The
+page arrives complete: no script runs before the words are there, so anything
+that fetches it — `curl`, a model reading a URL — gets the whole note. The
+obvious way to build it was BlockNote's own `blocksToHTMLLossy`, and it is not
+available here: that is a method on an editor, an editor is ProseMirror, and
+ProseMirror is a DOM. Taking it would have meant the renderer rendering every
+preview and pushing it to the main process, so a note could only be previewed
+while the studio was open on that note. `main/note-html.ts` is the walk written
+instead — the same block model, emitting plain semantic HTML rather than
+BlockNote's own class-laden markup, which is the better output for a page that
+is read rather than edited.
+
+Everything it renders came off disk, so nothing is trusted: text is escaped, a
+URL is parsed and checked against a scheme list before it becomes an `href` —
+`javascript:` keeps its words and loses its link — and a colspan is an integer
+or it is not there. A note is the user's own writing, but this is a page served
+over a socket, and the document does not get to write the markup.
+
+`main/preview.ts` is the server: loopback, a port the OS picks, and a secret
+generated per run as the first path segment. A wrong secret and an id that is
+not a note in this workspace answer with the same 404, so neither can be found
+by trying. That secret is also what looks the id up — the note's own listing is
+consulted rather than the path being turned into a filename, which is what
+keeps `../` from ever reaching one. One segment shorter is the index: every
+note in the workspace with the folder it is filed under, which is what a reader
+after the notebook rather than the note wants.
+
+**A link lives as long as the app run.** Both the port and the secret change on
+the next launch and nothing is written to disk to outlive them, so a preview
+left open overnight is a dead tab rather than a page still serving a note to
+whoever kept the URL. The server binds on the first link asked for, so a
+workspace whose notes are never read outside the studio never opens a port, and
+it is closed on quit with the inbox's two.
+
+The page carries the version it was rendered at and answers `HEAD` with it as an
+ETag; the one script on it polls that and reloads when it changes. This is the
+only thing on the page that needs JavaScript, and it is the only thing lost
+without it — which is what makes a preview open beside the editor keep up with
+the typing while still being a document rather than an app.
+
+**A colour reaches the page as a name, never as the value behind it.** The
+stylesheet declares both renderings of each of BlockNote's nine highlights and a
+coloured run gets `var(--hl-yellow-text)`, so a yellow heading is the studio's
+yellow in a light browser and the studio's other yellow in a dark one — kept in
+step by the browser rather than by the walk. It is also the whole of the
+validation: nothing out of the file is ever spent as a CSS value, and a name
+that is not one of the nine is dropped. What that costs is a colour picked
+outside the menu — the studio writes its own `oklch(…)` onto table cells this
+way — which is bound to the theme it was picked in and has no honest rendering
+on a page that follows the reader's. The one value that is not BlockNote's own
+is the light-mode yellow, darkened because a yellow chosen for the editor's dark
+surface all but disappears on white.
+
+**A table keeps the column widths it was built with.** They ride along as the
+`<colgroup>` the editor holds them in, and with `table-layout: fixed`, which is
+what makes a width a width — under the automatic layout a browser treats one as
+a suggestion and stretches it to the content, which is the table the widths were
+set to prevent. A table with every column sized is exactly as wide as they add
+up to and sits at the left, the way the editor lays it out; one with any column
+unsized fills the measure, the sized columns keeping their pixels while the rest
+share what is left. A table the note gave no widths at all is left to its
+content, because fixed layout there would divide it into equal columns and call
+that a decision.
+
+Long words are broken with `overflow-wrap: anywhere`, and that is not
+cosmetic: a note holds URLs, ids and paths longer than the measure, and
+`anywhere` counts towards a table cell's min-content width — which is what stops
+one long link inside a table from making the page scroll sideways. `pre` is left
+out, because a line break invented inside code is a lie about the code.
+
+A **drawing** is the one thing the main process cannot render: it has no
+Excalidraw, and a scene needs a canvas and a font stack. What it inlines is an
+SVG the renderer exported beside the scene, always in light mode, written
+whenever a drawing is saved and backfilled the first time a scene is read in a
+session — so opening the note once is what gives its diagrams to the preview. A
+drawing that has not been through that says so rather than leaving a gap.
+
 ## The system bar
 
 A row along the bottom of the workbench: how busy the machine's cores are, how

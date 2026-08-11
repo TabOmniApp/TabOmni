@@ -47,10 +47,12 @@ import {
   ChevronDown,
   ChevronRight,
   CopyPlus,
+  ExternalLink,
   FileText,
   Folder,
   FolderPlus,
   LayoutTemplate,
+  Link2,
   NotebookPen,
   Pencil,
   Plus,
@@ -121,6 +123,35 @@ function TemplateSubmenu({
       </ContextMenuSubContent>
     </ContextMenuSub>
   )
+}
+
+/**
+ * The note's preview link, on the clipboard.
+ *
+ * A link rather than a rendered file, because what is on the other end keeps
+ * up: the page is rendered when it is asked for, so a preview open in a
+ * browser beside the editor reloads itself as the note is typed into. It is
+ * only good for as long as the app is running — see `main/preview.ts`.
+ */
+async function copyPreviewLink(noteId: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(
+      await window.desktop.notePreviewUrl(noteId)
+    )
+  } catch (error) {
+    console.error("Could not copy the preview link", error)
+  }
+}
+
+/** The same link, handed to the browser. `window.open` rather than an anchor:
+ * the main process answers it by passing the URL to the OS, which is what puts
+ * the page in the user's own browser instead of a second app window. */
+async function openPreview(noteId: string): Promise<void> {
+  try {
+    window.open(await window.desktop.notePreviewUrl(noteId))
+  } catch (error) {
+    console.error("Could not open the preview", error)
+  }
 }
 
 /** What the context menu was opened on — a note, a folder row, or the empty
@@ -595,6 +626,22 @@ export function NoteList() {
               >
                 <BookmarkPlus />
                 Save as template…
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              {/* Both of these ask for the same link and the app binds the
+                  preview server on the first one — a workspace whose notes are
+                  never read outside the studio never opens a port. */}
+              <ContextMenuItem
+                onClick={() => void copyPreviewLink(menuTarget.note.id)}
+              >
+                <Link2 />
+                Copy preview link
+              </ContextMenuItem>
+              <ContextMenuItem
+                onClick={() => void openPreview(menuTarget.note.id)}
+              >
+                <ExternalLink />
+                Open preview
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem

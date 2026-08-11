@@ -727,6 +727,26 @@ export type NoteBody = {
 }
 
 /**
+ * One block of a note's document — BlockNote's own model, as it is on disk.
+ *
+ * Deliberately structural rather than BlockNote's `Block`: everything that
+ * walks a document does so without caring what is in it, and `Block` carries
+ * the schema's three type parameters through every signature it touches.
+ *
+ * Here rather than beside the renderer's walks over it because the main
+ * process reads the same file now — the preview server renders a note to HTML
+ * itself (`main/note-html.ts`), so the shape of a note is no longer one side's
+ * private business. It does not cross a channel; both sides read the format.
+ */
+export type NoteBlock = {
+  id?: string
+  type?: string
+  props?: Record<string, unknown>
+  content?: unknown
+  children?: NoteBlock[]
+}
+
+/**
  * Which of the Inbox panel's two servers caught something.
  *
  * One panel rather than two because they are the same job seen from both
@@ -1073,6 +1093,16 @@ export type DesktopApi = {
   deleteNotes: (ids: string[]) => Promise<void>
 
   /**
+   * Where this note can be read outside the studio — a loopback URL to paste
+   * into a browser, or to hand to something that reads pages.
+   *
+   * Asking for it is what starts the server, so a workspace whose notes are
+   * never shared never binds a port. The URL carries a secret this run
+   * generated, so it is only guessable by whoever was given it.
+   */
+  notePreviewUrl: (id: string) => Promise<string>
+
+  /**
    * The note templates, and one template's body.
    *
    * The same five calls as the notes above and deliberately not the same ones:
@@ -1100,6 +1130,18 @@ export type DesktopApi = {
   /** Deletes those drawings' scenes — what deleting the note holding them
    * takes with it. */
   deleteDrawings: (ids: string[]) => Promise<void>
+  /**
+   * The drawing as a picture, written beside its scene whenever the scene is
+   * saved.
+   *
+   * For the preview server, which renders a note in the main process and so
+   * has no Excalidraw to draw a scene with — turning one into an image needs a
+   * canvas and a font stack, which is a renderer. This is that export, done
+   * once by the side that already has the editor loaded. Always the light
+   * rendering: the preview page is one page and does not follow the studio's
+   * theme toggle.
+   */
+  writeDrawingSvg: (id: string, svg: string) => Promise<void>
 
   /**
    * Sends one request from the main process rather than the renderer, which
@@ -1308,6 +1350,7 @@ export const IPC = {
   readNote: "notes:read",
   writeNote: "notes:write",
   deleteNotes: "notes:delete",
+  notePreviewUrl: "notes:preview-url",
   listNoteTemplates: "note-templates:list",
   saveNoteTemplates: "note-templates:save",
   readNoteTemplate: "note-templates:read",
@@ -1316,6 +1359,7 @@ export const IPC = {
   readDrawing: "drawings:read",
   writeDrawing: "drawings:write",
   deleteDrawings: "drawings:delete",
+  writeDrawingSvg: "drawings:write-svg",
   inboxStart: "inbox:start",
   inboxStop: "inbox:stop",
   inboxStatus: "inbox:status",

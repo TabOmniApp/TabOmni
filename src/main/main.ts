@@ -76,8 +76,15 @@ let mainWindow: BrowserWindow | null = null
 // module scope rather than inside `whenReady`.
 registerAppScheme()
 
-const { processes, sqlConnections, docker, transcripts, terminals, inbox } =
-  registerIpc(() => mainWindow)
+const {
+  processes,
+  sqlConnections,
+  docker,
+  transcripts,
+  terminals,
+  inbox,
+  preview,
+} = registerIpc(() => mainWindow)
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -223,12 +230,15 @@ app.on("before-quit", (event) => {
       // awaited, since an Electron that exits first would leave them running
       // with nobody to reattach them to.
       // The Inbox panel's servers hold two ports; a relaunch that found them
-      // taken by the app that just exited would be this app's own fault.
+      // taken by the app that just exited would be this app's own fault. The
+      // note preview holds a third, and outliving the app would leave the
+      // workspace's notes being served by a process nobody can see.
       Promise.allSettled([
         terminals.killAll(),
         docker.stopAll(),
         sqlConnections.closeAll(),
         inbox.stopAll(),
+        preview.stop(),
       ]),
       // A wedged daemon must not leave the app unquittable.
       new Promise((resolve) => setTimeout(resolve, CLEANUP_TIMEOUT_MS)),

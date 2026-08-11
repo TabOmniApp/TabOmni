@@ -89,6 +89,13 @@ export async function loadDrawing(id: string): Promise<DrawingScene> {
   }
 
   cache.set(id, scene)
+  // Once per session, for a scene that has something in it: the preview server
+  // can only show a drawing this side has exported, and the drawings already in
+  // the workspace were all drawn before there was an export to write. Reading
+  // one is what opening the note it is in does, so that is where the backfill
+  // belongs — the alternative is a pass over every scene at startup for a
+  // preview that may never be asked for.
+  if (scene.elements.length > 0) void exportDrawing(id, scene)
   return scene
 }
 
@@ -104,6 +111,44 @@ export async function saveDrawing(
   cache.set(id, scene)
   for (const listener of changed) listener(id)
   await window.desktop.writeDrawing(id, JSON.stringify(scene))
+  await exportDrawing(id, scene)
+}
+
+/**
+ * The picture beside the scene, for the preview server to inline.
+ *
+ * Here rather than in the block that already exports one on screen, because
+ * this is the one place every save goes through — the dialog's, and the copies
+ * `cloneDrawings` makes — and because the block's export follows the studio's
+ * theme while the preview page has only the one. So: always the light
+ * rendering, and always from the scene that was just written, so the two files
+ * cannot disagree.
+ *
+ * Failing is not failing the save. The scene is the record and it is already on
+ * disk; what is lost is a picture in a preview, which the next save replaces.
+ */
+async function exportDrawing(id: string, scene: DrawingScene): Promise<void> {
+  try {
+    const { exportToSvg } = await import("@excalidraw/excalidraw")
+    const svg = await exportToSvg({
+      elements: scene.elements as Parameters<typeof exportToSvg>[0]["elements"],
+      appState: { ...scene.appState, exportWithDarkMode: false },
+      files: scene.files as Parameters<typeof exportToSvg>[0]["files"],
+      exportPadding: 8,
+    })
+
+    // The same sizing the block does inline, for the same reason: Excalidraw
+    // writes its own width on the root element, and a preview page is a
+    // measure rather than the scene's own pixel bounds.
+    svg.removeAttribute("width")
+    svg.removeAttribute("height")
+    svg.style.width = "100%"
+    svg.style.height = "auto"
+
+    await window.desktop.writeDrawingSvg(id, svg.outerHTML)
+  } catch (error) {
+    console.error("Could not export the drawing", error)
+  }
 }
 
 /**

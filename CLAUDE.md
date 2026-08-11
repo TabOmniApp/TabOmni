@@ -113,6 +113,12 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   Reading a file, not driving the CLI, is what makes Chat and Terminal two
   views of one conversation — and is why replies arrive a message at a time and
   permission prompts are answered in the terminal view.
+- **`preview.ts` + `note-html.ts` + `note-blocks.ts`** — a note, served as a
+  finished page on loopback. Server-rendered on purpose: the page has to be
+  readable by something that fetches rather than renders, which rules out
+  BlockNote's own HTML export (a method on an editor, so a DOM). Port picked by
+  the OS, a per-run secret in the path, and a link that lives only as long as
+  the app run. See the Preview section of `docs/design.md`.
 - **`http.ts`** — API requests are sent from the main process, so there is no
   page origin, no CORS preflight, and forbidden headers go out as typed. The
   cookie jar in `cookies.json` is the panel's own, not Chromium's.

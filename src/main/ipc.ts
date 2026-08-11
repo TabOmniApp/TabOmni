@@ -47,6 +47,7 @@ import { DockerRuntime } from "./docker"
 import { currentBranch } from "./git"
 import { sendHttp } from "./http"
 import { InboxServers, replayInput } from "./inbox"
+import { NotePreview } from "./preview"
 import { ProcessManager } from "./process"
 import { claudeUsageLimits } from "./claude-usage"
 import { systemUsage } from "./system-usage"
@@ -141,6 +142,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   transcripts: TranscriptMirrors
   terminals: TerminalManager
   inbox: InboxServers
+  preview: NotePreview
 } {
   const store = new Store()
   const sqlConnections = new SqlConnections(async (databaseId) => {
@@ -181,6 +183,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       save: (messages) => store.saveInbox(messages),
     }
   )
+
+  // Reads the workspace's own files and nothing else — the preview is a view
+  // of what is on disk, so it is handed the four reads it needs rather than
+  // the store.
+  const preview = new NotePreview({
+    notes: () => store.listNotes(),
+    folders: () => store.listNoteFolders(),
+    body: (id) => store.readNote(id),
+    drawingSvg: (id) => store.readDrawingSvg(id),
+  })
 
   /** The account a Docker-managed database is created with. */
   const DB_USER = "tabula"
@@ -523,6 +535,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     store.deleteDrawings(ids)
   )
 
+  ipcMain.handle(IPC.writeDrawingSvg, (_event, id: string, svg: string) =>
+    store.writeDrawingSvg(id, svg)
+  )
+
+  ipcMain.handle(IPC.notePreviewUrl, (_event, id: string) => preview.urlOf(id))
+
   ipcMain.handle(IPC.inboxStart, (_event, server: InboxKind, port: number) =>
     inbox.start(server, port)
   )
@@ -661,5 +679,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     transcripts,
     terminals,
     inbox,
+    preview,
   }
 }

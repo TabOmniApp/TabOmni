@@ -667,8 +667,22 @@ export class Store {
     return this.writeOwnFile(this.drawingPath(id), scene)
   }
 
+  /** The drawing as a picture, or "" for one the studio has not exported since
+   * the preview server was added. */
+  readDrawingSvg(id: string): Promise<string> {
+    return this.readOwnFile(this.drawingSvgPath(id))
+  }
+
+  writeDrawingSvg(id: string, svg: string): Promise<void> {
+    return this.writeOwnFile(this.drawingSvgPath(id), svg)
+  }
+
+  /** The scene and the picture of it go together: the export is derived from
+   * the scene and means nothing without it. */
   deleteDrawings(ids: string[]): Promise<void> {
-    return this.deleteOwnFiles(ids.map((id) => this.drawingPath(id)))
+    return this.deleteOwnFiles(
+      ids.flatMap((id) => [this.drawingPath(id), this.drawingSvgPath(id)])
+    )
   }
 
   /** One note's blocks. */
@@ -694,6 +708,13 @@ export class Store {
   /** One drawing's scene, in Excalidraw's own file format. */
   private drawingPath(id: string): string {
     return path.join(this.workspaceDir, DRAWINGS_DIR, `${ownId(id)}.excalidraw`)
+  }
+
+  /** The same drawing as a picture, beside its scene. Written by the renderer,
+   * which is the only side with an Excalidraw to export from, and read by the
+   * preview server, which has none — see `preview.ts`. */
+  private drawingSvgPath(id: string): string {
+    return path.join(this.workspaceDir, DRAWINGS_DIR, `${ownId(id)}.svg`)
   }
 
   /** One of the workspace's own per-record files, or "" when it does not
