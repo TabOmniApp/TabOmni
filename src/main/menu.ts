@@ -75,6 +75,11 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
           { role: "cut" },
           { role: "copy" },
           { role: "paste" },
+          // The way out of a paste that keeps too much: a note pastes with the
+          // source's own formatting (see `block-editor.tsx`), and copying out
+          // of a rendered page is sometimes a request for its words rather than
+          // its headings and tables.
+          { role: "pasteAndMatchStyle" },
           { role: "selectAll" },
         ],
       },
