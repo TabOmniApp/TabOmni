@@ -1,10 +1,12 @@
 import { create } from "zustand"
 
-import type { NoteFolder, NoteRecord } from "@shared/api"
+import type { NoteBody, NoteFolder, NoteRecord } from "@shared/api"
 import { useStudio } from "../store"
 import { isRememberedTabs, recall, remember } from "../tab-memory"
 import { descendantFolderIds, isDescendant } from "../tree"
-import { cloneDrawingsIn, deleteDrawings, drawingIdsIn } from "./drawings"
+import { cloneDrawings, deleteDrawings } from "./drawings"
+import { drawingIdsIn, parseBody, serializeBody } from "./blocks"
+import { blocksOf } from "./from-markdown"
 import { useNoteTemplates } from "./templates"
 
 /** How long typing settles before a note is written back. */
@@ -50,10 +52,25 @@ type NoteState = {
   remove: (id: string) => void
   moveToFolder: (id: string, folderId: string | null) => void
 
-  /** The note's markdown, read from disk the first time it is asked for. */
-  loadBody: (id: string) => Promise<string>
+  /**
+   * The note's body, read from disk the first time it is asked for.
+   *
+   * Hands back what it found rather than always blocks: a note an older build
+   * wrote is still markdown, and the parser that turns it into blocks belongs
+   * to the editor. `adoptBlocks` is the other half of that.
+   */
+  loadBody: (id: string) => Promise<NoteBody>
   /** Records what was typed and writes it back once the typing stops. */
-  setBody: (id: string, markdown: string) => void
+  setBody: (id: string, body: string) => void
+  /**
+   * Takes the blocks a markdown note was converted into.
+   *
+   * Not `setBody`: this is the same note in a new format and not an edit, so it
+   * writes the file and fills the cache without touching `updatedAt` — opening
+   * a note written by an older build should not send it to the top of a list
+   * sorted by when it was last worked on.
+   */
+  adoptBlocks: (id: string, body: string) => void
 
   createFolder: (parentId: string | null) => NoteFolder
   renameFolder: (id: string, name: string) => void
@@ -75,6 +92,21 @@ function now(): string {
 
 function blankNoteName(index: number): string {
   return index === 0 ? "New note" : `New note ${index + 1}`
+}
+
+/**
+ * A body ready to become a second note: blocks, with every drawing in it
+ * copied and the blocks pointed at the copies.
+ *
+ * The three paths that make a note out of another one — from a template, into a
+ * template, and duplicate — all want exactly this, and all three can be handed a
+ * note an older build wrote, so the conversion happens here rather than three
+ * times. What lands is blocks either way: a copy is a new file, and writing it
+ * in the old format only to convert it on the first open would be keeping the
+ * migration alive on purpose.
+ */
+async function copyOf(body: NoteBody): Promise<string> {
+  return serializeBody(await cloneDrawings(blocksOf(body)))
 }
 
 function blankFolder(parentId: string | null): NoteFolder {
@@ -147,11 +179,7 @@ export const useNotes = create<NoteState>((set, get) => {
    * `duplicate` keeps its own copy of this because it inserts beside the note
    * it copied rather than at the end.
    */
-  async function addNote(
-    name: string,
-    folderId: string | null,
-    markdown: string
-  ) {
+  async function addNote(name: string, folderId: string | null, body: string) {
     const note: NoteRecord = {
       id: crypto.randomUUID(),
       name,
@@ -163,12 +191,14 @@ export const useNotes = create<NoteState>((set, get) => {
     // The body file is written even when empty rather than left absent, so the
     // note exists on disk as soon as it exists in the list — a note created and
     // never typed into is still a note.
-    set((state) => ({ bodies: { ...state.bodies, [note.id]: markdown } }))
+    set((state) => ({ bodies: { ...state.bodies, [note.id]: body } }))
     loaded.add(note.id)
     commitNotes([...get().notes, note])
-    await window.desktop.writeNote(note.id, markdown).catch((error) => {
-      console.error("Could not create the note", error)
-    })
+    await window.desktop
+      .writeNote(note.id, { format: "blocks", text: body })
+      .catch((error) => {
+        console.error("Could not create the note", error)
+      })
     get().select(note.id)
   }
 
@@ -179,11 +209,13 @@ export const useNotes = create<NoteState>((set, get) => {
     clearTimeout(timer)
     pendingBodies.delete(id)
 
-    const markdown = get().bodies[id]
-    if (markdown === undefined) return
-    void window.desktop.writeNote(id, markdown).catch((error) => {
-      console.error("Could not save the note", error)
-    })
+    const text = get().bodies[id]
+    if (text === undefined) return
+    void window.desktop
+      .writeNote(id, { format: "blocks", text })
+      .catch((error) => {
+        console.error("Could not save the note", error)
+      })
   }
 
   /** Forgets a deleted note's body and stops any save still in flight for it —
@@ -194,7 +226,7 @@ export const useNotes = create<NoteState>((set, get) => {
     // here. A note never opened this session has no body cached and no
     // drawings to lose — its file goes either way.
     const drawings = [...ids].flatMap((id) =>
-      drawingIdsIn(get().bodies[id] ?? "")
+      drawingIdsIn(parseBody(get().bodies[id] ?? ""))
     )
 
     for (const id of ids) {
@@ -283,10 +315,11 @@ export const useNotes = create<NoteState>((set, get) => {
       // copy — the same reason `duplicate` does it. Sharing them would mean
       // every note made from this template drew on one canvas, and deleting any
       // of them took that canvas from all the others.
-      const markdown = await cloneDrawingsIn(
-        await templates.loadBody(templateId)
+      await addNote(
+        template.name,
+        folderId,
+        await copyOf(await templates.loadBody(templateId))
       )
-      await addNote(template.name, folderId, markdown)
     },
 
     async saveAsTemplate(id) {
@@ -299,10 +332,9 @@ export const useNotes = create<NoteState>((set, get) => {
       const templates = useNoteTemplates.getState()
       await templates.refresh()
 
-      const markdown = await cloneDrawingsIn(await get().loadBody(id))
       const template = await templates.create({
         name: note.name,
-        markdown,
+        markdown: await copyOf(await get().loadBody(id)),
       })
       return template.id
     },
@@ -320,10 +352,10 @@ export const useNotes = create<NoteState>((set, get) => {
       const source = notes.find((note) => note.id === id)
       if (!source) return
 
-      // Each drawing is copied and the copy's markdown re-pointed at it.
-      // Sharing them would mean editing the copy changed the original, and
-      // deleting either took the other's diagrams with it.
-      const markdown = await cloneDrawingsIn(await get().loadBody(id))
+      // Each drawing is copied and the copy's blocks re-pointed at it. Sharing
+      // them would mean editing the copy changed the original, and deleting
+      // either took the other's diagrams with it.
+      const markdown = await copyOf(await get().loadBody(id))
       const copy: NoteRecord = {
         ...source,
         id: crypto.randomUUID(),
@@ -339,9 +371,11 @@ export const useNotes = create<NoteState>((set, get) => {
       const next = [...get().notes]
       next.splice(index + 1, 0, copy)
       commitNotes(next)
-      void window.desktop.writeNote(copy.id, markdown).catch((error) => {
-        console.error("Could not duplicate the note", error)
-      })
+      void window.desktop
+        .writeNote(copy.id, { format: "blocks", text: markdown })
+        .catch((error) => {
+          console.error("Could not duplicate the note", error)
+        })
       get().select(copy.id)
     },
 
@@ -361,16 +395,25 @@ export const useNotes = create<NoteState>((set, get) => {
 
     async loadBody(id) {
       const cached = get().bodies[id]
-      if (loaded.has(id) && cached !== undefined) return cached
+      if (loaded.has(id) && cached !== undefined) {
+        return { format: "blocks", text: cached }
+      }
 
-      const markdown = await window.desktop.readNote(id)
+      const body = await window.desktop.readNote(id)
       // Anything typed while the read was in flight wins over what came back:
       // the file is behind the editor, not ahead of it.
-      if (pendingBodies.has(id)) return get().bodies[id] ?? markdown
+      const racing = pendingBodies.has(id) ? get().bodies[id] : undefined
+      if (racing !== undefined) return { format: "blocks", text: racing }
+
+      // Markdown is not cached, and this note is not marked read: it is what an
+      // older build left behind, and the blocks it becomes are the editor's to
+      // produce — it holds the only parser. The `setBody` that follows the
+      // conversion is what fills the cache and writes the JSON.
+      if (body.format === "markdown") return body
 
       loaded.add(id)
-      set((state) => ({ bodies: { ...state.bodies, [id]: markdown } }))
-      return markdown
+      set((state) => ({ bodies: { ...state.bodies, [id]: body.text } }))
+      return body
     },
 
     setBody(id, markdown) {
@@ -392,6 +435,22 @@ export const useNotes = create<NoteState>((set, get) => {
         ),
         false
       )
+    },
+
+    adoptBlocks(id, body) {
+      if (get().bodies[id] === body) return
+
+      loaded.add(id)
+      set((state) => ({ bodies: { ...state.bodies, [id]: body } }))
+
+      // Written at once rather than through the debounce: nothing is being
+      // typed yet, and a note left half-migrated because the app was closed in
+      // the next 400ms would be read as markdown again on the way back.
+      void window.desktop
+        .writeNote(id, { format: "blocks", text: body })
+        .catch((error) => {
+          console.error("Could not save the converted note", error)
+        })
     },
 
     createFolder(parentId) {

@@ -113,6 +113,24 @@ acted on. The terminal steps aside for it too, which is what stops closing the
 last session from leaving its own "start a session" line saying the same thing
 in one panel's words.
 
+**A panel switched away from is hidden, not unmounted.** The terminal always had
+to be — its session is a pty with no way to reattach, so taking it off the screen
+would end the conversation — and the other five turned out to want the same for a
+smaller reason: a strip that keeps every panel's tabs on screen is an invitation
+to switch, and everything a panel held that its store did not was thrown away
+each time. Leaving Database for Mail and coming back gave a result grid scrolled
+to the top, a SQL editor with no undo history and the query split back at its
+default height; a note came back as a fresh ProseMirror over the same text. None
+of that is state a store has any business holding — a scroll offset and an undo
+stack belong to the view — so the view is what stays.
+
+A panel is still built the first time it is shown, since a panel nobody has
+opened is a connection nobody is reading and the terminal's is a process, and
+`mounted` in `studio.tsx` is that list. The hiding is `invisible` rather than
+`hidden`: `display: none` destroys the scrolling boxes inside, which would put
+that grid back at the top by another route, and it is what the Terminal panel
+already stacks its own sessions with.
+
 ## Terminal sessions
 
 The Terminal panel holds as many sessions as you open, each in one folder's
@@ -602,12 +620,84 @@ packages the SQL console and body editors already pull in rather than from
 has, and here it would be a longer dropdown rather than a better one. Each
 loads on demand, so a note with no code block costs nothing.
 
-The editor is keyed on the note id and rebuilt when the tab changes: Crepe takes
-its content once, at construction, and has no "load this instead". The pane
-waits for the file rather than mounting empty and filling in, which would put a
-document nobody typed through ProseMirror's history and make one undo empty the
-note. Both of those live in `markdown-editor.tsx` rather than in the note pane,
-because the templates below are the same editor over a different file.
+**A table's columns can be dragged.** Crepe's table block has no resizing, and
+prosemirror-tables' `columnResizing` cannot be switched on to supply it: it
+installs its own `TableView`, which Milkdown's node views beat because Milkdown
+hands them to `EditorView` as direct props; every width it writes goes through
+that view's `<colgroup>`, which Crepe's table does not have — pointed at the
+`<tbody>` instead, `updateColumnsOnResize` would remove the table's own rows;
+and its `mousedown` handler never runs anyway, because Crepe's `stopEvent`
+claims a click on a cell for the node view. So `table-resize.ts` does the drag
+itself, from a capture-phase listener that takes the event before Crepe can, and
+keeps a `<colgroup>` in step with the document. Crepe's table block is otherwise
+untouched — the grips, the `+` buttons and the alignment menu are still its own.
+
+The two columns either side of the border keep their total, so the table never
+changes width: it sits in a pane that is half a split workbench, with nowhere to
+grow into, and a table wider than its column would need a scrollbar where the
+row and column grips are. Widths reach the DOM as percentages for the same
+reason, since the pane is resizable and a column pinned at 240px is only right
+at one pane width. **They do not survive a reload**: the width lives in the
+cells' `colwidth` attribute, and GFM has no syntax for one, so serialising the
+note drops it. It holds for the session — the editors stay mounted, so tab and
+panel switches keep it — and the alternative was a width written into the file
+in a form no other markdown reader would understand, which is the one thing this
+panel is careful not to do. `test/table-resize.ts` covers the two halves that
+fail silently: the position arithmetic that finds every cell of a table, and the
+clamp that stops a column being dragged shut.
+
+The editor is keyed on the note id, and there is **one per open tab**, hidden
+rather than unmounted the way the Terminal panel stacks its sessions. Crepe
+takes its content once, at construction, and has no "load this instead", so a
+pane that mounted a single editor and swapped the note under it rebuilt
+ProseMirror on every tab click: back to a spinner, the caret at the top of the
+document, the scroll position gone and nothing left to undo. The text was never
+what that cost — `loadBody` has it cached — the editing state was. What a hidden
+editor must not do is answer the drawing event: `openDrawing` is a broadcast to
+every listener, so each mounted `DrawingHost` would open a dialog of its own for
+one drawing clicked in the note on screen, which is what the `visible` prop is
+for.
+
+The pane waits for the file rather than mounting empty and filling in, which
+would put a document nobody typed through ProseMirror's history and make one
+undo empty the note. Both of those live in `markdown-editor.tsx` rather than in
+the note pane, because the templates below are the same editor over a different
+file.
+
+**A table's columns can be dragged, and `table-resize.ts` is all of it.** Crepe
+ships no resizing, and prosemirror-tables' `columnResizing` cannot supply it
+here: it installs its `TableView` through `plugin.spec.props.nodeViews` while
+Milkdown hands its own views to `EditorView` as direct props, which ProseMirror
+consults first — so Crepe's table view wins and the `<colgroup>` every width is
+written through is never built. Turned on anyway, its `updateColumnsOnResize`
+would take the `<tbody>` for that colgroup, style the first rows as if they were
+`<col>`s and remove the rest: the table's own rows, out of the content DOM. And
+its handlers are `handleDOMEvents`, which never see the `mousedown` regardless,
+because Crepe's `stopEvent` claims one on a cell as a click into that cell.
+
+So the drag is its own: a capture-phase listener that takes the press before
+Crepe's view can claim it, widths painted into a colgroup the plugin keeps in
+step with the document, and one transaction at the end so one undo takes the
+whole drag. Crepe's table block is untouched — the row and column grips, the `+`
+buttons and the alignment menu are still its own. Widths are spent as
+percentages rather than the pixels the attribute holds: this pane is one half of
+a split workbench, and a column pinned to 240px in a pane later dragged narrower
+is a table wider than the note it is in. The pair either side of a border keeps
+its total, so the table itself never changes width.
+
+**A width does not survive a reload**, and that is the honest limit rather than
+an omission. It lives in the cells' `colwidth` attribute, and GFM has no syntax
+for a column width, so it is dropped the moment the document is serialised. It
+holds for the session — the editors stay mounted, so tab and panel switches keep
+it — and it is gone the next time the note is read from disk. The alternative
+was a width written into the file that no other markdown reader would
+understand, which is the one thing this panel is careful not to do.
+
+`test/table-resize.ts` covers the two halves that fail quietly: `commit`
+addresses every cell by arithmetic on the table's own position, where being one
+out lands on a row or the next cell along and ProseMirror simply drops an
+attribute that node has no place for, and `widthsFor` is what stops a drag from
+closing a column past the width a caret fits in.
 
 ### Templates
 

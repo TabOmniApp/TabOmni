@@ -1,8 +1,10 @@
 import { create } from "zustand"
 
-import type { NoteTemplate } from "@shared/api"
+import type { NoteBody, NoteTemplate } from "@shared/api"
 import { getSetting, setSetting } from "../workspace"
-import { deleteDrawings, drawingIdsIn } from "./drawings"
+import { drawingIdsIn, serializeBody } from "./blocks"
+import { deleteDrawings } from "./drawings"
+import { blocksFromMarkdown, blocksOf } from "./from-markdown"
 import { TEMPLATE_PRESETS } from "./template-presets"
 
 /** How long typing settles before a template is written back — the notes
@@ -34,10 +36,15 @@ type TemplateState = {
   rename: (id: string, name: string, description: string) => void
   remove: (id: string) => Promise<void>
 
-  /** The template's markdown, read from disk the first time it is asked for. */
-  loadBody: (id: string) => Promise<string>
+  /** The template's body, read from disk the first time it is asked for —
+   * blocks, or the markdown an older build wrote. See the note store's
+   * `loadBody`, which this is the twin of. */
+  loadBody: (id: string) => Promise<NoteBody>
   /** Records what was typed and writes it back once the typing stops. */
-  setBody: (id: string, markdown: string) => void
+  setBody: (id: string, body: string) => void
+  /** Takes the blocks a markdown template was converted into, without counting
+   * it as an edit. */
+  adoptBlocks: (id: string, body: string) => void
   /** Writes what is still waiting — what closing the dialog owes the disk. */
   flush: () => void
 }
@@ -81,11 +88,13 @@ export const useNoteTemplates = create<TemplateState>((set, get) => {
     clearTimeout(timer)
     pendingBodies.delete(id)
 
-    const markdown = get().bodies[id]
-    if (markdown === undefined) return
-    void window.desktop.writeNoteTemplate(id, markdown).catch((error) => {
-      console.error("Could not save the template", error)
-    })
+    const text = get().bodies[id]
+    if (text === undefined) return
+    void window.desktop
+      .writeNoteTemplate(id, { format: "blocks", text })
+      .catch((error) => {
+        console.error("Could not save the template", error)
+      })
   }
 
   async function seed(): Promise<NoteTemplate[]> {
@@ -101,9 +110,16 @@ export const useNoteTemplates = create<TemplateState>((set, get) => {
         updatedAt: now(),
       }
       seeded.push(template)
-      bodies[template.id] = preset.markdown
+      // The presets are authored as markdown in `template-presets.ts` — a
+      // heading and a list read better there than a block tree would — and are
+      // converted the once, here, on the way to disk.
+      const text = serializeBody(blocksFromMarkdown(preset.markdown))
+      bodies[template.id] = text
       loaded.add(template.id)
-      await window.desktop.writeNoteTemplate(template.id, preset.markdown)
+      await window.desktop.writeNoteTemplate(template.id, {
+        format: "blocks",
+        text,
+      })
     }
 
     set((state) => ({ bodies: { ...state.bodies, ...bodies } }))
@@ -159,7 +175,10 @@ export const useNoteTemplates = create<TemplateState>((set, get) => {
       }))
       loaded.add(template.id)
       commit([...get().templates, template])
-      await window.desktop.writeNoteTemplate(template.id, markdown)
+      await window.desktop.writeNoteTemplate(template.id, {
+        format: "blocks",
+        text: markdown,
+      })
       return template
     },
 
@@ -178,9 +197,9 @@ export const useNoteTemplates = create<TemplateState>((set, get) => {
     },
 
     async remove(id) {
-      // Read before it goes: the markdown is the only record of which drawings
+      // Read before it goes: the body is the only record of which drawings
       // belong to this template, and after the delete there is nothing to ask.
-      const drawings = drawingIdsIn(await get().loadBody(id))
+      const drawings = drawingIdsIn(blocksOf(await get().loadBody(id)))
 
       const timer = pendingBodies.get(id)
       if (timer !== undefined) clearTimeout(timer)
@@ -204,16 +223,36 @@ export const useNoteTemplates = create<TemplateState>((set, get) => {
 
     async loadBody(id) {
       const cached = get().bodies[id]
-      if (loaded.has(id) && cached !== undefined) return cached
+      if (loaded.has(id) && cached !== undefined) {
+        return { format: "blocks", text: cached }
+      }
 
-      const markdown = await window.desktop.readNoteTemplate(id)
+      const body = await window.desktop.readNoteTemplate(id)
       // Anything typed while the read was in flight wins over what came back:
       // the file is behind the editor, not ahead of it.
-      if (pendingBodies.has(id)) return get().bodies[id] ?? markdown
+      const racing = pendingBodies.has(id) ? get().bodies[id] : undefined
+      if (racing !== undefined) return { format: "blocks", text: racing }
+
+      // Left uncached and unmarked: this is what an older build wrote, and the
+      // blocks it becomes are the editor's to produce — `adoptBlocks` is what
+      // brings them back here.
+      if (body.format === "markdown") return body
 
       loaded.add(id)
-      set((state) => ({ bodies: { ...state.bodies, [id]: markdown } }))
-      return markdown
+      set((state) => ({ bodies: { ...state.bodies, [id]: body.text } }))
+      return body
+    },
+
+    adoptBlocks(id, body) {
+      if (get().bodies[id] === body) return
+
+      loaded.add(id)
+      set((state) => ({ bodies: { ...state.bodies, [id]: body } }))
+      void window.desktop
+        .writeNoteTemplate(id, { format: "blocks", text: body })
+        .catch((error) => {
+          console.error("Could not save the converted template", error)
+        })
     },
 
     setBody(id, markdown) {

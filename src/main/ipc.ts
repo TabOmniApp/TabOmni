@@ -28,6 +28,7 @@ import {
   type HttpSendInput,
   type InboxKind,
   type NewDatabaseInput,
+  type NoteBody,
   type NoteFolder,
   type NoteRecord,
   type NoteTemplate,
@@ -486,8 +487,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.readNote, (_event, id: string) => store.readNote(id))
 
-  ipcMain.handle(IPC.writeNote, (_event, id: string, markdown: string) =>
-    store.writeNote(id, markdown)
+  ipcMain.handle(IPC.writeNote, (_event, id: string, body: NoteBody) =>
+    store.writeNote(id, body)
   )
 
   ipcMain.handle(IPC.deleteNotes, (_event, ids: string[]) =>
@@ -504,10 +505,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     store.readNoteTemplate(id)
   )
 
-  ipcMain.handle(
-    IPC.writeNoteTemplate,
-    (_event, id: string, markdown: string) =>
-      store.writeNoteTemplate(id, markdown)
+  ipcMain.handle(IPC.writeNoteTemplate, (_event, id: string, body: NoteBody) =>
+    store.writeNoteTemplate(id, body)
   )
 
   ipcMain.handle(IPC.deleteNoteTemplates, (_event, ids: string[]) =>

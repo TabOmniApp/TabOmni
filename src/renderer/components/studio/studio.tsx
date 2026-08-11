@@ -36,9 +36,23 @@ import { IS_MAC, TitleBarDragStrip } from "./title-bar"
 import { ThemeToggle } from "./theme-toggle"
 import { useHasOpenTabs, WorkspaceTabs } from "./workspace-tabs"
 
-/** Whether the always-mounted terminal is the thing on screen. */
-function showsTerminal(section: Section, pane: Pane): boolean {
-  return pane === "terminal"
+/** What each pane on the rail shows. Built here rather than inline so the
+ * stack below is a list of panes and nothing else. */
+function paneView(pane: Pane) {
+  switch (pane) {
+    case "database":
+      return <DatabaseWorkspace />
+    case "api":
+      return <ApiWorkspace />
+    case "mail":
+      return <CaptureWorkspace server="mail" />
+    case "webhook":
+      return <CaptureWorkspace server="webhook" />
+    case "note":
+      return <NoteWorkspace />
+    case "terminal":
+      return <TerminalWorkspace />
+  }
 }
 
 /** How far the launch screen has got: still assembling, fading out over the
@@ -111,19 +125,20 @@ function Workbench() {
   /** Which sidebar the rail is showing — and only that; the pane beside it
    * follows the tab strip. */
   const [section, setSection] = useState<Section>("database")
-  /** Set the first time the terminal pane is shown; see the panel below. */
-  const [terminalOpened, setTerminalOpened] = useState(false)
+  /** The panels built so far, in the order they were first shown; see the
+   * stack below. */
+  const [mounted, setMounted] = useState<Pane[]>([])
 
-  // Adjusted during the render that first shows the terminal rather than in an
+  // The panel on screen — or none, because an empty strip is answered once, by
+  // `NothingOpen`, and every panel steps aside for it. Closing the last
+  // session otherwise left the pane on the terminal's own "start a session"
+  // line, which is the same notice again in a panel's own words.
+  const shown = hasOpenTabs ? pane : null
+
+  // Adjusted during the render that first shows a panel rather than in an
   // effect afterwards: an effect would leave one painted frame with the pane
-  // empty, and this is the flag that mounts what belongs in it.
-  if (pane === "terminal" && !terminalOpened) setTerminalOpened(true)
-
-  // An empty strip is answered once, by `NothingOpen`, so the terminal steps
-  // aside for it too — closing the last session otherwise left the pane on the
-  // terminal's own "start a session" line, which is the same notice again in a
-  // panel's own words.
-  const showTerminal = hasOpenTabs && showsTerminal(section, pane)
+  // empty, and this is the list that mounts what belongs in it.
+  if (shown && !mounted.includes(shown)) setMounted([...mounted, shown])
 
   // The File menu is a second way to reach the same dialog — and the only one
   // left when the Terminal section is taken off the rail. It runs in the main
@@ -193,41 +208,56 @@ function Workbench() {
                   looked at. */}
               <WorkspaceTabs pane={pane} />
 
-              <div className="min-h-0 flex-1">
+              {/* `overflow-hidden` because the panels below are absolutely
+                  positioned and so do not clip: a panel that forgot to scroll
+                  its own content would otherwise spill past this box and be
+                  scrolled by an ancestor, which takes the tab strip off the top
+                  of the window with it. The strip is `shrink-0`, so that is the
+                  only way it can move. */}
+              <div className="relative min-h-0 flex-1 overflow-hidden">
                 {/*
-                  The terminal sits outside the switch below, hidden rather
-                  than unmounted. Its session is a pty with no way to
-                  reattach, so taking it off the screen would end the
-                  conversation. It is not mounted until the section is first
-                  opened: a session nobody asked for is a process nobody is
-                  reading.
+                  Every panel is hidden rather than unmounted, and built the
+                  first time it is shown — a panel nobody has opened is a
+                  connection nobody is reading, and the terminal's is a process.
+
+                  The terminal had to be kept: its session is a pty with no way
+                  to reattach, so taking it off the screen would end the
+                  conversation. The other five want the same for a smaller
+                  reason — everything they hold that their store does not is
+                  lost on a switch, and a panel switched away from is coming
+                  back. Leaving Database for Mail and returning gave a result
+                  grid scrolled back to the top, a SQL editor with no undo
+                  history and the split at its default height; a note came back
+                  as a fresh ProseMirror over the same text, with the caret at
+                  the start.
+
+                  `invisible`, not `hidden`: `display: none` destroys the
+                  scrolling boxes inside, which would put that grid back at the
+                  top by another route — and it is what the terminal already
+                  stacks its own sessions with.
                 */}
-                {terminalOpened && (
-                  <div className={cn("h-full", !showTerminal && "hidden")}>
-                    <TerminalWorkspace />
+                {mounted.map((name) => (
+                  <div
+                    key={name}
+                    className={cn(
+                      "absolute inset-0",
+                      name !== shown && "invisible"
+                    )}
+                  >
+                    {paneView(name)}
+                  </div>
+                ))}
+
+                {/* One notice for an empty strip, rather than each panel's
+                    own. `pane` is where the last tab was, so with none it is
+                    only ever the one a launch starts on — which is how
+                    "No table selected" came to be what somebody who opened
+                    the app to read captured mail was told. */}
+                {!hasOpenTabs && (
+                  <div className="absolute inset-0">
+                    <NothingOpen section={section} />
                   </div>
                 )}
-
-                <div className={cn("h-full", showTerminal && "hidden")}>
-                  {/* One notice for an empty strip, rather than each panel's
-                      own. `pane` is where the last tab was, so with none it is
-                      only ever the one a launch starts on — which is how
-                      "No table selected" came to be what somebody who opened
-                      the app to read captured mail was told. */}
-                  {!hasOpenTabs ? (
-                    <NothingOpen section={section} />
-                  ) : pane === "database" ? (
-                    <DatabaseWorkspace />
-                  ) : pane === "mail" ? (
-                    <CaptureWorkspace server="mail" />
-                  ) : pane === "webhook" ? (
-                    <CaptureWorkspace server="webhook" />
-                  ) : pane === "note" ? (
-                    <NoteWorkspace />
-                  ) : (
-                    <ApiWorkspace />
-                  )}
-                </div>
               </div>
             </div>
           </ResizablePanel>
