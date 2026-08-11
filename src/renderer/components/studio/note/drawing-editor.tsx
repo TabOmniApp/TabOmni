@@ -352,7 +352,11 @@ export function DrawingEditor({
             )}
         </div>
 
-        <DialogFooter className="shrink-0 border-t px-4 py-3">
+        {/* `m-0` because `DialogFooter` carries `-mx-4 -mb-4`, sized to sit
+            inside a `DialogContent` with `p-4` — and this one is `p-0`, so
+            those margins pull the buttons out past the dialog's own right and
+            bottom edges. `new-table-dialog.tsx` cancels them the same way. */}
+        <DialogFooter className="m-0 shrink-0 border-t px-4 py-3">
           <Button type="button" variant="outline" onClick={onClose}>
             Cancel
           </Button>

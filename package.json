@@ -18,6 +18,9 @@
   },
   "//dependencies": "Only what the packaged app loads at runtime. Everything the renderer uses is bundled by Vite and everything the main process uses is bundled by esbuild, so it belongs below — these three are the esbuild externals, which stay real files in node_modules because node-pty loads a prebuilt binary and pg/mysql2 carry dynamic requires esbuild cannot resolve.",
   "dependencies": {
+    "@blocknote/core": "^0.53.0",
+    "@blocknote/react": "^0.53.0",
+    "@blocknote/shadcn": "^0.53.0",
     "@lydell/node-pty": "1.2.0-beta.14",
     "mysql2": "^3.15.2",
     "pg": "^8.16.3"

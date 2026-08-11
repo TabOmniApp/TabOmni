@@ -708,6 +708,25 @@ export type NoteTemplate = {
 export const DRAWING_LANGUAGE = "drawing"
 
 /**
+ * A note's or a template's body, and which of the two formats it is in.
+ *
+ * A note is BlockNote's block model, written as JSON — the editor's own
+ * document rather than a markdown rendering of it, because BlockNote's markdown
+ * export is lossy by its own documentation and a note kept as markdown would
+ * have been passed through that converter on every keystroke.
+ *
+ * `markdown` is what a note written by an older build still holds. The store
+ * hands it over as it found it and says so, because the conversion needs a
+ * parser that only the renderer has; the renderer converts once and the next
+ * write leaves JSON behind. The markdown file is *not* deleted — it is the
+ * user's own text and the migration is not the moment to be sure.
+ */
+export type NoteBody = {
+  format: "blocks" | "markdown"
+  text: string
+}
+
+/**
  * Which of the Inbox panel's two servers caught something.
  *
  * One panel rather than two because they are the same job seen from both
@@ -1042,16 +1061,19 @@ export type DesktopApi = {
   listNoteFolders: () => Promise<NoteFolder[]>
   saveNoteFolders: (folders: NoteFolder[]) => Promise<void>
 
-  /** One note's markdown. Empty for a note whose file does not exist yet —
-   * which is every note until the first thing is typed into it. */
-  readNote: (id: string) => Promise<string>
-  writeNote: (id: string, markdown: string) => Promise<void>
+  /** One note's body. Empty for a note whose file does not exist yet — which
+   * is every note until the first thing is typed into it. */
+  readNote: (id: string) => Promise<NoteBody>
+  /** Takes the format too, so that copying a note an older build wrote — which
+   * `duplicate` does before anything has converted it — lands as the markdown
+   * it still is rather than as markdown in a file named `.json`. */
+  writeNote: (id: string, body: NoteBody) => Promise<void>
   /** Deletes those notes' bodies. Takes a list because deleting a folder
    * takes every note under it, and one call is one pass over the directory. */
   deleteNotes: (ids: string[]) => Promise<void>
 
   /**
-   * The note templates, and one template's markdown.
+   * The note templates, and one template's body.
    *
    * The same five calls as the notes above and deliberately not the same ones:
    * a template id and a note id name files in different directories, and a
@@ -1060,8 +1082,8 @@ export type DesktopApi = {
    */
   listNoteTemplates: () => Promise<NoteTemplate[]>
   saveNoteTemplates: (templates: NoteTemplate[]) => Promise<void>
-  readNoteTemplate: (id: string) => Promise<string>
-  writeNoteTemplate: (id: string, markdown: string) => Promise<void>
+  readNoteTemplate: (id: string) => Promise<NoteBody>
+  writeNoteTemplate: (id: string, body: NoteBody) => Promise<void>
   deleteNoteTemplates: (ids: string[]) => Promise<void>
 
   /**

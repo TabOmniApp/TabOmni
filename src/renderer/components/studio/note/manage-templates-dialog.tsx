@@ -31,7 +31,7 @@ import { LayoutTemplate, Plus, Trash2 } from "lucide-react"
 import type { NoteTemplate } from "@shared/api"
 import { useNoteTemplates } from "@/lib/note/templates"
 import { IconButton } from "../icon-button"
-import { LoadedMarkdownEditor } from "./markdown-editor"
+import { LoadedBlockEditor } from "./block-editor"
 
 /**
  * Where templates are added, edited and deleted.
@@ -64,6 +64,7 @@ export function ManageTemplatesDialog({
   const remove = useNoteTemplates((state) => state.remove)
   const loadBody = useNoteTemplates((state) => state.loadBody)
   const setBody = useNoteTemplates((state) => state.setBody)
+  const adoptBlocks = useNoteTemplates((state) => state.adoptBlocks)
   const flush = useNoteTemplates((state) => state.flush)
 
   const [selectedId, setSelectedId] = useState<string | null>(initialTemplateId)
@@ -84,10 +85,16 @@ export function ManageTemplatesDialog({
   // is null until something is picked while the pane already shows the first.
   const openId = selected?.id ?? null
   const write = useCallback(
-    (markdown: string) => {
-      if (openId) setBody(openId, markdown)
+    (body: string) => {
+      if (openId) setBody(openId, body)
     },
     [openId, setBody]
+  )
+  const adopt = useCallback(
+    (body: string) => {
+      if (openId) adoptBlocks(openId, body)
+    },
+    [openId, adoptBlocks]
   )
 
   function close() {
@@ -193,10 +200,11 @@ export function ManageTemplatesDialog({
               </div>
 
               <div className="min-h-0 flex-1">
-                <LoadedMarkdownEditor
+                <LoadedBlockEditor
                   documentId={selected.id}
                   load={loadBody}
                   onChange={write}
+                  onAdopt={adopt}
                 />
               </div>
             </div>

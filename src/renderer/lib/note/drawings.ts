@@ -1,13 +1,13 @@
-import { DRAWING_LANGUAGE } from "@shared/api"
+import { drawingIdsIn, mapDrawingIds, type NoteBlock } from "./blocks"
 
 /**
- * The drawings a note's fenced blocks point at.
+ * The drawings a note's blocks point at.
  *
- * Not a zustand store, unlike everything else in `lib/`: the things that read a
- * drawing are ProseMirror node views, which are plain DOM objects created by
- * Milkdown rather than React components, and a hook is not something they can
- * call. So this is a cache and two subscriptions, and the React side (the
- * editor dialog) uses the same functions the node views do.
+ * Not a zustand store, unlike everything else in `lib/`: a drawing is opened
+ * from a block and from the slash menu, and both of those raise an event rather
+ * than call a hook — the dialog that answers it is mounted somewhere else
+ * entirely. So this is a cache and two subscriptions, and the React side uses
+ * the same functions everything else does.
  */
 
 /** What Excalidraw's own `.excalidraw` file holds. Only the fields this app
@@ -107,46 +107,33 @@ export async function saveDrawing(
 }
 
 /**
- * The drawings a note's markdown refers to.
- *
- * Read back out of the text rather than tracked alongside it, because the text
- * is the record: a block deleted with backspace, an undo that brings it back,
- * a note whose markdown was edited outside this app — all of them are answered
- * by looking at what the note actually says now.
- */
-export function drawingIdsIn(markdown: string): string[] {
-  const fence = new RegExp(
-    `^[ \\t]*\`{3,}[ \\t]*${DRAWING_LANGUAGE}[ \\t]*\\r?\\n([^\\n]*)`,
-    "gm"
-  )
-  const ids: string[] = []
-  for (const match of markdown.matchAll(fence)) {
-    const id = match[1]?.trim()
-    if (id && !ids.includes(id)) ids.push(id)
-  }
-  return ids
-}
-
-/**
  * Copies every drawing a note refers to and rewrites the note to point at the
  * copies — what duplicating a note has to do.
  *
  * Without it the copy and the original would share scenes, so editing the copy
  * would change the original and deleting either would take the other's drawings
  * with it.
+ *
+ * Which drawings those are is read back out of the document rather than tracked
+ * alongside it, because the document is the record: a block deleted with
+ * backspace and an undo that brings it back are both answered by looking at
+ * what the note actually says now. `drawingIdsIn` in `blocks.ts` is that read;
+ * it used to be a regular expression over ```drawing fences and is now a walk,
+ * which is the same question asked of a document that is no longer text.
  */
-export async function cloneDrawingsIn(markdown: string): Promise<string> {
-  const ids = drawingIdsIn(markdown)
-  if (ids.length === 0) return markdown
+export async function cloneDrawings(blocks: NoteBlock[]): Promise<NoteBlock[]> {
+  const ids = drawingIdsIn(blocks)
+  if (ids.length === 0) return blocks
 
-  let copy = markdown
+  const copies = new Map<string, string>()
   for (const id of ids) {
     const scene = await loadDrawing(id)
     const cloneId = newDrawingId()
     await saveDrawing(cloneId, scene)
-    copy = copy.split(id).join(cloneId)
+    copies.set(id, cloneId)
   }
-  return copy
+
+  return mapDrawingIds(blocks, (id) => copies.get(id) ?? id)
 }
 
 /** Forgets what is cached for drawings that have been deleted. */

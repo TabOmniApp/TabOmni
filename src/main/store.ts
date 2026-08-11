@@ -18,6 +18,7 @@ import type {
   HttpFolder,
   HttpRequestRecord,
   InboxMessage,
+  NoteBody,
   NoteFolder,
   NoteRecord,
   NoteTemplate,
@@ -573,19 +574,32 @@ export class Store {
     return this.writeList(NOTE_FOLDERS_FILE, folders)
   }
 
-  /** A note's markdown, or "" for one that has never been written to. */
-  readNote(id: string): Promise<string> {
-    return this.readOwnFile(this.noteBodyPath(id))
+  /** A note's blocks, the markdown an older build left, or "" for one that has
+   * never been written to — see `NoteBody`. */
+  readNote(id: string): Promise<NoteBody> {
+    return this.readBody(this.noteBodyPath(id), this.legacyNotePath(id))
   }
 
-  writeNote(id: string, markdown: string): Promise<void> {
-    return this.writeOwnFile(this.noteBodyPath(id), markdown)
+  /** Blocks land in `<id>.json`; markdown lands where an older build would
+   * have put it, so a note copied before anything converted it stays a note
+   * this store can read back rather than JSON that is not JSON. */
+  writeNote(id: string, body: NoteBody): Promise<void> {
+    return this.writeOwnFile(
+      body.format === "blocks"
+        ? this.noteBodyPath(id)
+        : this.legacyNotePath(id),
+      body.text
+    )
   }
 
   /** Removes those notes' bodies. A body that was never written is not an
-   * error — a note deleted before anything was typed into it has no file. */
+   * error — a note deleted before anything was typed into it has no file. The
+   * markdown an older build wrote goes too: it is this note's text, and a
+   * deleted note should not leave half of itself behind. */
   deleteNotes(ids: string[]): Promise<void> {
-    return this.deleteOwnFiles(ids.map((id) => this.noteBodyPath(id)))
+    return this.deleteOwnFiles(
+      ids.flatMap((id) => [this.noteBodyPath(id), this.legacyNotePath(id)])
+    )
   }
 
   listNoteTemplates(): Promise<NoteTemplate[]> {
@@ -596,17 +610,52 @@ export class Store {
     return this.writeList(NOTE_TEMPLATES_FILE, templates)
   }
 
-  /** A template's markdown, or "" for one that has never been written to. */
-  readNoteTemplate(id: string): Promise<string> {
-    return this.readOwnFile(this.noteTemplatePath(id))
+  /** A template's blocks, or the markdown an older build left. */
+  readNoteTemplate(id: string): Promise<NoteBody> {
+    return this.readBody(
+      this.noteTemplatePath(id),
+      this.legacyNoteTemplatePath(id)
+    )
   }
 
-  writeNoteTemplate(id: string, markdown: string): Promise<void> {
-    return this.writeOwnFile(this.noteTemplatePath(id), markdown)
+  writeNoteTemplate(id: string, body: NoteBody): Promise<void> {
+    return this.writeOwnFile(
+      body.format === "blocks"
+        ? this.noteTemplatePath(id)
+        : this.legacyNoteTemplatePath(id),
+      body.text
+    )
   }
 
   deleteNoteTemplates(ids: string[]): Promise<void> {
-    return this.deleteOwnFiles(ids.map((id) => this.noteTemplatePath(id)))
+    return this.deleteOwnFiles(
+      ids.flatMap((id) => [
+        this.noteTemplatePath(id),
+        this.legacyNoteTemplatePath(id),
+      ])
+    )
+  }
+
+  /**
+   * A body, preferring the blocks and falling back to what an older build
+   * wrote.
+   *
+   * The fallback is a read of a second file that is almost never there, which
+   * is the cheap half of the trade: the alternative is a migration pass over
+   * the whole directory at startup, which would have to be right about every
+   * note before the user has opened any of them.
+   */
+  private async readBody(
+    blocksPath: string,
+    legacyPath: string
+  ): Promise<NoteBody> {
+    const blocks = await this.readOwnFile(blocksPath)
+    if (blocks) return { format: "blocks", text: blocks }
+
+    const markdown = await this.readOwnFile(legacyPath)
+    return markdown
+      ? { format: "markdown", text: markdown }
+      : { format: "blocks", text: "" }
   }
 
   /** A drawing's scene, or "" for one that has never been saved. */
@@ -622,14 +671,23 @@ export class Store {
     return this.deleteOwnFiles(ids.map((id) => this.drawingPath(id)))
   }
 
-  /** One note's markdown. */
+  /** One note's blocks. */
   private noteBodyPath(id: string): string {
+    return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.json`)
+  }
+
+  /** Where the same note's text was kept when a note was markdown. */
+  private legacyNotePath(id: string): string {
     return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.md`)
   }
 
-  /** One template's markdown. `ownId` guards this path for the same reason it
+  /** One template's blocks. `ownId` guards this path for the same reason it
    * guards a note's: the id comes from the renderer and becomes a filename. */
   private noteTemplatePath(id: string): string {
+    return path.join(this.workspaceDir, NOTE_TEMPLATES_DIR, `${ownId(id)}.json`)
+  }
+
+  private legacyNoteTemplatePath(id: string): string {
     return path.join(this.workspaceDir, NOTE_TEMPLATES_DIR, `${ownId(id)}.md`)
   }
 
