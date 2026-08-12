@@ -1,13 +1,14 @@
 import { useEffect, useRef } from "react"
 import { useTheme } from "next-themes"
 
-import { modelFor, monaco } from "@/lib/files/monaco"
+import { modelFor } from "@/lib/files/monaco"
 import {
   closeFile,
   openFile,
   pendingReveal,
   syncFile,
 } from "@/lib/files/typescript"
+import { editorTheme, monaco, monoFont } from "@/lib/monaco"
 
 /**
  * One open file, in Monaco.
@@ -60,7 +61,7 @@ export default function MonacoFileEditor({
       model,
       // Set at construction as well as in the effect below, so the first paint
       // is not a white editor in a dark studio.
-      theme: initial.isDark ? "vs-dark" : "vs",
+      theme: editorTheme(initial.isDark),
       fontFamily: monoFont(),
       fontSize: 13,
       lineHeight: 1.6,
@@ -125,17 +126,8 @@ export default function MonacoFileEditor({
   // Global rather than per instance — Monaco has one theme for every editor on
   // the page, and there is only ever one visible here anyway.
   useEffect(() => {
-    monaco.editor.setTheme(isDark ? "vs-dark" : "vs")
+    monaco.editor.setTheme(editorTheme(isDark))
   }, [isDark])
 
   return <div ref={hostRef} className="h-full w-full overflow-hidden" />
-}
-
-/** The studio's own mono stack, which is a CSS variable Monaco cannot read —
- * it wants a font string, so the variable is resolved once here. */
-function monoFont(): string {
-  const value = getComputedStyle(document.documentElement)
-    .getPropertyValue("--font-mono")
-    .trim()
-  return value ? `${value}, ui-monospace, monospace` : "ui-monospace, monospace"
 }

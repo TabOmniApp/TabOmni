@@ -376,19 +376,33 @@ plainly, and rejecting would file them beside "the disk went away".
 
 ### The editor
 
-**Monaco**, and the one place in the studio that is not CodeMirror. The rest of
-the app edits fields — a SQL statement, a request body, a response — where
-CodeMirror's size is the point. This panel edits the user's own source, where
-what is wanted is the editor they already know: its find widget, multi-cursor,
-minimap, bracket colouring and command palette. Two editing stacks is a real
-cost and it buys one thing, which is that files feel like files.
+**Monaco**, which is what every editor in the studio is. It was this panel's
+alone for a while, against CodeMirror everywhere else: the rest of the app edits
+fields — a SQL statement, a request body, a response — where CodeMirror's size
+was the point, and this one edits the user's own source, where what is wanted is
+the editor they already know. Two editing stacks turned out to be the more
+expensive half of that trade. One stack costs the schema-aware SQL completion
+`lang-sql` gave the console for free, which is now hand-written in
+`lib/db/sql-completion.ts`, and buys back a launch bundle ~250 kB smaller, one
+set of keybindings across the app, and JSON and TypeScript language services the
+field editors never had.
 
-It is loaded on demand — `lazy` around `files/monaco-editor.tsx` — so the ~4 MB
-of grammars is fetched the first time a file is opened and never in a run that
-stays in the other panels. Its workers are bundled by Vite and served from the
-`app://` origin rather than fetched from the CDN the default `MonacoEnvironment`
-would reach for, which in a desktop app is a network round trip for something
-already on disk, and offline is a silent failure.
+What is shared is in `lib/monaco.ts` — the workers, the font, the theme, and
+`panelEditorOptions`, which is what an editor that is a _field_ gets. That is
+deliberately less than this panel's: no minimap, no sticky scroll, no overview
+ruler and none of Monaco's own context menu, since those are a few lines of
+chrome competing with a few lines of text. What survives at any size is the half
+the shared CodeMirror chrome carried too — numbered lines, folding, the find
+widget and wrapping.
+
+Every one of them is loaded on demand, each panel's editor behind its own `lazy`
+so the ~4 MB of grammars is fetched the first time an editor of any kind is
+opened and never in a run that stays in the sidebars. The fallback is an empty
+box rather than a spinner: the chunk comes off disk on the `app://` origin, so
+what it covers is a parse rather than a download. Those workers are bundled by
+Vite and served from that same origin rather than fetched from the CDN the
+default `MonacoEnvironment` would reach for, which in a desktop app is a network
+round trip for something already on disk, and offline is a silent failure.
 
 **Two grammars are extended rather than taken as they come** (`lib/files/grammars.ts`).
 Standalone Monaco highlights with Monarch, not with the TextMate grammars VS
@@ -764,6 +778,17 @@ is — so one statement of a script can be tried without deleting the rest of it
 Editing a row in the result grid reruns exactly what produced that grid,
 selection included, rather than whatever the editor holds by then.
 
+Completion is the connected database's own schema, and is hand-written
+(`lib/db/sql-completion.ts`) because Monaco ships a grammar for `sql`, `mysql`
+and `pgsql` but no language service behind any of them. It offers the tables,
+and after a `.` the columns of whichever table that alias resolves to; the
+statement is delimited by `;` and read with a regex rather than parsed, since
+the question is only which tables are named under which aliases, and being
+wrong there costs one bad suggestion rather than a broken query. Providers in
+Monaco are registered per language rather than per editor, so the live schema is
+published under each console's model URI and looked up from there — otherwise
+two open consoles would answer for each other.
+
 A row-returning statement that doesn't limit itself gets `limit 500` appended
 (`lib/db/row-limit.ts`), with "Run without limit" next to the results as the
 escape hatch. Neither driver offers a server-side row cap — Postgres has no
@@ -951,12 +976,6 @@ Three of Crepe's features are off, each for a reason:
   a dead image is worse than none.
 - **LaTeX**, which needs KaTeX's stylesheet, not a dependency this app declares.
 - **AI** and the top bar, which are not what this panel is.
-
-Code blocks are on, with the languages built from the `@codemirror/lang-*`
-packages the SQL console and body editors already pull in rather than from
-`@codemirror/language-data` — that package's list is every grammar CodeMirror
-has, and here it would be a longer dropdown rather than a better one. Each
-loads on demand, so a note with no code block costs nothing.
 
 **A table's columns can be dragged.** Crepe's table block has no resizing, and
 prosemirror-tables' `columnResizing` cannot be switched on to supply it: it

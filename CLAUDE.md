@@ -147,12 +147,17 @@ the active row into view for all of them. The rail moving the sidebar still
 leaves the pane alone; only the other direction is coupled. No panel store
 clears itself any more: there is no
 switch to clear for, and the only one that follows the folders at all is the
-Terminal store, which drops a removed folder's sessions. Editors are
-CodeMirror 6 — except the Explorer's, which is Monaco, loaded on demand
-(`lib/files/monaco.ts`) because a file editor is the one place the size buys
-something; its hovers and go-to-definition come from a real `tsserver` per
-folder in `src/main/tsserver.ts`, using the folder's own `typescript` and
-nothing if it has none. Terminals are xterm.
+Terminal store, which drops a removed folder's sessions. Every code editor is
+Monaco, set up once in `lib/monaco.ts` and always behind a `lazy` so its ~4 MB
+of grammars stays out of the launch bundle. What a panel adds to it lives with
+that panel: the Explorer's grammars and TypeScript wiring in
+`lib/files/monaco.ts`, whose hovers and go-to-definition come from a real
+`tsserver` per folder in `src/main/tsserver.ts` (the folder's own `typescript`,
+and nothing if it has none); the SQL console's schema completion in
+`lib/db/sql-completion.ts`, which Monaco ships no language service for; and the
+request body's own grammar in `lib/http/body-language.ts`, because a body full
+of `{{variables}}` is a template rather than the JSON it looks like. Terminals
+are xterm.
 
 `components/studio/splash.tsx` is the launch screen — the studio drawn in
 miniature, assembling — and the workbench is held back until it has finished,

@@ -446,9 +446,9 @@ async function listCompletions(
     relation: string
     column: string
   }>(results[0])) {
-    // CodeMirror's schema completion crashes on any non-string entry, and a
-    // driver quirk (e.g. a column-less row) is not worth taking the whole
-    // editor down over.
+    // A driver quirk (e.g. a column-less row) is not worth putting a
+    // non-string into the completion list over, where it would come back as
+    // a suggestion nobody can insert.
     if (typeof row.column !== "string") continue
     for (const key of [`${row.schema}.${row.relation}`, row.relation]) {
       ;(schema[key] ??= []).push(row.column)

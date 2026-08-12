@@ -1,6 +1,7 @@
 import type { TsHover } from "@shared/api"
 
-import { monaco } from "./monaco"
+import { monaco } from "@/lib/monaco"
+
 import { useFiles } from "./store"
 
 /**

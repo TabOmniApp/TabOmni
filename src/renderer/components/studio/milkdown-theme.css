@@ -8,10 +8,10 @@
  * its bundled visual themes (`frame`, `nord`, `classic`, each its own fixed
  * palette with its own light/dark pair), those variables are pointed at this
  * app's own tokens directly, so an editor reads as part of the app and follows
- * its theme toggle for free — the same reason `body-editor.tsx`'s CodeMirror
- * instance never pulled in a themed package either. Features an editor
- * disables still get some unused CSS from that import; harmless, since nothing
- * of theirs exists in that DOM to match it.
+ * its theme toggle for free — the same reason the studio's Monaco editors are
+ * left on Monaco's own `vs`/`vs-dark` rather than a themed package. Features
+ * an editor disables still get some unused CSS from that import; harmless,
+ * since nothing of theirs exists in that DOM to match it.
  *
  * Its own file rather than part of `chat-composer.css` because the palette and
  * the sizing are answers to different questions: a second editor added later

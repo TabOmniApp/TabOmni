@@ -1,15 +1,11 @@
-import * as monaco from "monaco-editor"
-import cssWorker from "monaco-editor/languages/features/css/css.worker?worker"
-import editorWorker from "monaco-editor/editor/editor.worker?worker"
-import htmlWorker from "monaco-editor/languages/features/html/html.worker?worker"
-import jsonWorker from "monaco-editor/languages/features/json/json.worker?worker"
-import tsWorker from "monaco-editor/languages/features/typescript/ts.worker?worker"
 import {
   language as htmlGrammar,
   conf as htmlConf,
 } from "monaco-editor/languages/definitions/html/html"
 import { language as jsGrammar } from "monaco-editor/languages/definitions/javascript/javascript"
 import { language as tsGrammar } from "monaco-editor/languages/definitions/typescript/typescript"
+
+import { monaco } from "@/lib/monaco"
 
 import { vueFrom, withJsx } from "./grammars"
 import { nameOf } from "./paths"
@@ -18,69 +14,14 @@ import { registerTypeScriptProviders } from "./typescript"
 /**
  * Monaco, set up for the Explorer.
  *
- * The one place in the studio that is not CodeMirror. The rest of the app
- * edits fields — a SQL statement, a request body, a response — where
- * CodeMirror's size is the point; this panel edits the user's own source files,
- * where what is wanted is the editor they already know, with its own find
- * widget, multi-cursor, minimap, bracket colouring and command palette. Two
- * editing stacks is a real cost, and it buys exactly one thing: files feel like
- * files.
- *
- * Imported only from the lazy chunk in `files/monaco-editor.tsx`, so the ~4 MB
- * of language grammars is fetched the first time somebody opens a file and
- * never in a run that stays in the other panels — the same bargain the Notes
- * panel makes with Excalidraw.
+ * What the whole studio shares — the workers, the font, the panel options — is
+ * in `lib/monaco.ts`; this is the half only a file editor wants. The other
+ * panels edit fields, where a language is a grammar and nothing more. This one
+ * edits the user's own source files, so it carries the things that only make
+ * sense against a real repository: JSX and Vue grammars Monaco does not ship,
+ * a TypeScript worker held to syntax errors, and hover and go-to-definition
+ * answered by a `tsserver` in the main process.
  */
-
-/**
- * Monaco's workers, as modules this app's own bundle carries.
- *
- * The default `MonacoEnvironment` builds a worker URL against a CDN, which in a
- * desktop app is a network round trip for something already on disk — and one
- * that simply fails offline, leaving files with no highlighting and no
- * diagnostics for reasons nothing on screen would explain. Vite's `?worker`
- * emits each of these as a chunk beside the renderer, so they load from the
- * `app://` origin the window is already on.
- */
-self.MonacoEnvironment = {
-  getWorker(_workerId: string, label: string) {
-    switch (label) {
-      case "json":
-        return new jsonWorker()
-      case "css":
-      case "scss":
-      case "less":
-        return new cssWorker()
-      case "html":
-      case "handlebars":
-      case "razor":
-        return new htmlWorker()
-      case "typescript":
-      case "javascript":
-        return new tsWorker()
-      default:
-        return new editorWorker()
-    }
-  },
-}
-
-/*
- * Syntax errors, but no type errors.
- *
- * Monaco's TypeScript worker knows only the file in front of it: no tsconfig,
- * no `node_modules`, no other file in the repository. Left on, it reports every
- * import in a real project as a module it cannot find and every symbol from one
- * as `any`, which is a screen of red squiggles that are all wrong. Syntax
- * validation needs none of that context and is right every time, so it stays.
- */
-monaco.typescript.typescriptDefaults.setDiagnosticsOptions({
-  noSemanticValidation: true,
-  noSyntaxValidation: false,
-})
-monaco.typescript.javascriptDefaults.setDiagnosticsOptions({
-  noSemanticValidation: true,
-  noSyntaxValidation: false,
-})
 
 /*
  * JSX, in the two grammars that need it.
@@ -207,5 +148,3 @@ export function modelFor(
     monaco.editor.createModel(text, languageIdFor(filePath), uri)
   )
 }
-
-export { monaco }
