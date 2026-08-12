@@ -43,6 +43,16 @@ export type LabelRow = {
 }
 
 /**
+ * One cell the user has changed but not yet saved: `updateCell`'s arguments
+ * minus the relation, which is the same for every edit on a page.
+ */
+export type CellWrite = {
+  primaryKey: Record<string, unknown>
+  column: string
+  value: string | null
+}
+
+/**
  * An order the user asked for from a column's header menu. It is layered *on
  * top of* each engine's own stable ordering rather than replacing it, so
  * paging through rows that tie on the sorted column stays consistent.

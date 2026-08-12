@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from "react"
+import { useState, type MouseEvent } from "react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -111,23 +111,10 @@ export function DatabaseTree() {
   const dropTable = useExplorer((state) => state.dropTable)
   const truncateTable = useExplorer((state) => state.truncateTable)
 
-  /*
-   * Open the branch holding the table on screen.
-   *
-   * A table reaches the pane from the tab strip and the search palette as well
-   * as from here, and a tree that marks a row inside a collapsed branch has
-   * marked nothing. Reading the schema is what opening a branch means, so this
-   * goes through the same `toggle` a click would — and only when the branch is
-   * shut, which is what keeps it from being a read per tab click.
-   */
-  useEffect(() => {
-    if (!selected || !openDatabaseId || expanded[openDatabaseId]) return
-
-    const database = databases.find(
-      (candidate) => candidate.id === openDatabaseId
-    )
-    if (database) void toggleBranch(database)
-  }, [selected, openDatabaseId, expanded, databases, toggleBranch])
+  // Opening the branch that holds the table on screen is `useDbTree`'s own
+  // doing — it watches the explorer's selection. Doing it from here meant
+  // watching `expanded` as well, and a branch that reopened the moment it was
+  // collapsed.
 
   const [query, setQuery] = useState("")
   const [addingDatabase, setAddingDatabase] = useState(false)

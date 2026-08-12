@@ -125,6 +125,38 @@ export const useDbTree = create<TreeState>((set, get) => {
     })
   })
 
+  /*
+   * Open the branch holding the table that just reached the pane.
+   *
+   * A table is selected from the tab strip and the search palette as well as
+   * from the tree, and a tree that marks a row inside a collapsed branch has
+   * marked nothing. Reading the schema is what opening a branch means, so this
+   * goes through the same `toggle` a click would.
+   *
+   * Keyed on the *selection changing*, not on the branch being shut: the sidebar
+   * used to do this in a render effect that also watched `expanded`, so
+   * collapsing the database of the table on screen re-opened it on the next
+   * render and the branch could not be closed at all. Living here rather than in
+   * the component also means a collapse survives the sidebar unmounting when
+   * another rail section is picked.
+   */
+  let shown = selectionKey(useExplorer.getState())
+  useExplorer.subscribe((state) => {
+    const key = selectionKey(state)
+    if (key === shown) return
+    shown = key
+    if (key === null) return
+
+    const databaseId = useDatabases.getState().selectedId
+    if (!databaseId || get().expanded[databaseId]) return
+    const database = useDatabases
+      .getState()
+      .databases.find((candidate) => candidate.id === databaseId)
+    // The failure is the pane's to report — it is showing the same table this
+    // would have revealed, and its error with it.
+    if (database) void get().toggle(database)
+  })
+
   return {
     expanded: {},
     branches: {},
@@ -139,8 +171,17 @@ export const useDbTree = create<TreeState>((set, get) => {
         return null
       }
 
-      const failure = await read(database)
-      if (failure) return failure
+      // Only a branch that has never been read costs a read. Re-reading one
+      // goes through the explorer for the open database, and that reloads the
+      // table on screen — so collapsing a branch and opening it again made the
+      // grid flash "Loading…" for rows nothing had changed. An open database's
+      // branch follows the schema reads above, and any branch can be re-read
+      // from the Refresh in its own menu.
+      const branch = get().branches[database.id]
+      if (!branch || branch.error) {
+        const failure = await read(database)
+        if (failure) return failure
+      }
       set((state) => ({
         expanded: { ...state.expanded, [database.id]: true },
       }))
@@ -176,6 +217,19 @@ export const useDbTree = create<TreeState>((set, get) => {
     },
   }
 })
+
+/**
+ * Which table the pane is showing, as one comparable value — null while a query
+ * tab is on screen, since `selected` outlives a switch to one. Coming back from
+ * a query tab to the table's own tab is a change, and reveals it again.
+ */
+function selectionKey(state: {
+  selected: Relation | null
+  activeQueryTabId: string | null
+}): string | null {
+  if (state.activeQueryTabId !== null || !state.selected) return null
+  return `${state.selected.schema}.${state.selected.name}`
+}
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)

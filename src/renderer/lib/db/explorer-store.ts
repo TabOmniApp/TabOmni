@@ -4,6 +4,7 @@ import type { DbEngine } from "@shared/api"
 import {
   getAdapter,
   PAGE_SIZE,
+  type CellWrite,
   type CheckConstraint,
   type Column,
   type EngineAdapter,
@@ -227,12 +228,18 @@ type ExplorerState = {
   resetColumnPrefs: () => void
   /** Re-reads the selected relation's current page, e.g. after a row mutation. */
   reloadPage: () => Promise<void>
-  /** Resolves to an error message on failure, so the grid can show it inline. */
-  updateCell: (
-    primaryKey: Record<string, unknown>,
-    column: string,
-    value: unknown
-  ) => Promise<string | null>
+  /**
+   * Writes the cells the grid has been holding as unsaved edits, and re-reads
+   * the page once at the end rather than once per cell.
+   *
+   * The writes are separate statements, not a transaction: a connection here
+   * is a pool, so `BEGIN` and the statements after it could each land on a
+   * different one. A failure therefore stops the run with the writes before it
+   * already committed — and the page is re-read either way, so what is on
+   * screen afterwards is what actually landed rather than what was asked for.
+   * Resolves to an error message on failure, so the grid can show it inline.
+   */
+  updateCells: (writes: CellWrite[]) => Promise<string | null>
   insertRow: (values: Record<string, unknown>) => Promise<string | null>
   deleteRow: (primaryKey: Record<string, unknown>) => Promise<string | null>
   /** Candidate rows for a foreign-key cell's picker, optionally filtered —
@@ -270,11 +277,11 @@ type ExplorerState = {
   /** Mutates through a query tab's `resultEdit`, the same way `updateCell` /
    * `insertRow` / `deleteRow` do for the Data tab — then reruns the query so
    * the grid reflects the change. Resolves to an error message on failure. */
-  updateQueryCell: (
+  /** A query tab's own `updateCells`, against the one table its result was
+   * traced back to. */
+  updateQueryCells: (
     tabId: string,
-    primaryKey: Record<string, unknown>,
-    column: string,
-    value: unknown
+    writes: CellWrite[]
   ) => Promise<string | null>
   insertQueryRow: (
     tabId: string,
@@ -1172,23 +1179,26 @@ export const useExplorer = create<ExplorerState>((set, get) => {
 
     reloadPage,
 
-    async updateCell(primaryKey, column, value) {
+    async updateCells(writes) {
       const { selected } = get()
       if (!selected) return "No table is selected."
 
+      let failure: string | null = null
       try {
-        await adapter().updateCell(
-          runner(),
-          selected,
-          primaryKey,
-          column,
-          value
-        )
+        for (const write of writes) {
+          await adapter().updateCell(
+            runner(),
+            selected,
+            write.primaryKey,
+            write.column,
+            write.value
+          )
+        }
       } catch (error) {
-        return message(error)
+        failure = message(error)
       }
       await reloadPage()
-      return null
+      return failure
     },
 
     async insertRow(values) {
@@ -1488,26 +1498,31 @@ export const useExplorer = create<ExplorerState>((set, get) => {
       if (mayChangeSchema(sql)) await get().refresh()
     },
 
-    async updateQueryCell(tabId, primaryKey, column, value) {
+    async updateQueryCells(tabId, writes) {
       const entry = get().openTabs.find(
         (item) => item.kind === "query" && item.query.id === tabId
       )
       const edit = entry?.kind === "query" ? entry.query.resultEdit : null
       if (!edit) return "No editable result."
 
+      // Statement by statement and re-run once at the end, for the reasons on
+      // `updateCells`.
+      let failure: string | null = null
       try {
-        await adapter().updateCell(
-          runner(),
-          edit.relation,
-          primaryKey,
-          column,
-          value
-        )
+        for (const write of writes) {
+          await adapter().updateCell(
+            runner(),
+            edit.relation,
+            write.primaryKey,
+            write.column,
+            write.value
+          )
+        }
       } catch (error) {
-        return message(error)
+        failure = message(error)
       }
       await get().runQuery(tabId, { silent: true })
-      return null
+      return failure
     },
 
     async insertQueryRow(tabId, values) {

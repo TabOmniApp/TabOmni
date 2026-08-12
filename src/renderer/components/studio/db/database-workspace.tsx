@@ -37,6 +37,7 @@ import {
   KeyRound,
   Plus,
   Play,
+  RefreshCw,
   Table2,
   Trash2,
 } from "lucide-react"
@@ -73,6 +74,7 @@ import {
   type ColumnControl,
 } from "./result-grid"
 import { FilterBar } from "./filter-bar"
+import { GridSkeleton } from "./grid-skeleton"
 import { RenameDialog } from "./rename-dialog"
 import { SqlEditor } from "./sql-editor"
 
@@ -226,8 +228,9 @@ function DataBrowser({
   // own — every pane but the one on screen is hidden, so they are the same
   // table. See the note above `setTab` in the store.
   const setPage = useExplorer((state) => state.setPage)
+  const reloadPage = useExplorer((state) => state.reloadPage)
   const engine = useExplorer((state) => state.engine)
-  const updateCellAction = useExplorer((state) => state.updateCell)
+  const updateCellsAction = useExplorer((state) => state.updateCells)
   const insertRowAction = useExplorer((state) => state.insertRow)
   const deleteRowAction = useExplorer((state) => state.deleteRow)
   const searchForeignKeyRowsAction = useExplorer(
@@ -252,10 +255,19 @@ function DataBrowser({
   )
   const [dropColumnError, setDropColumnError] = useState<string | null>(null)
   const [dropColumnBusy, setDropColumnBusy] = useState(false)
+  /** Why the last batch of cell edits did not go through. */
+  const [saveError, setSaveError] = useState<string | null>(null)
+  /** Cells the grid is holding unwritten. Anything that re-reads the page
+   * would drop them, so the controls that do are held back until they are
+   * saved or discarded. */
+  const [unsaved, setUnsaved] = useState(0)
 
   const prefs =
     columnPrefs[`${relation.schema}.${relation.name}`] ?? EMPTY_PREFS
   const hidden = columns.filter((column) => prefs[column.name]?.hidden)
+  // What the grid will draw, and so what the placeholder standing in for it
+  // draws too.
+  const visible = columns.filter((column) => !prefs[column.name]?.hidden)
 
   const from = page * PAGE_SIZE
   const shown = data?.rows.length ?? 0
@@ -278,8 +290,16 @@ function DataBrowser({
             isEditableType: getAdapter(engine!).isEditableType,
             fkLabels,
             searchForeignKeyRows: searchForeignKeyRowsAction,
-            onUpdateCell: (primaryKey, column, value) =>
-              updateCellAction(primaryKey, column, value),
+            // Reported here rather than inside the grid: a save re-reads the
+            // page whether it worked or not, and the grid is replaced by the
+            // placeholder while that runs — an error left in it would go with
+            // it.
+            onSaveCells: async (writes) => {
+              setSaveError(null)
+              const failure = await updateCellsAction(writes)
+              setSaveError(failure)
+              return failure
+            },
             onRequestDelete: (row) => {
               setPendingDelete(row)
               setDeleteError(null)
@@ -306,7 +326,7 @@ function DataBrowser({
       fkLabels,
       inserting,
       searchForeignKeyRowsAction,
-      updateCellAction,
+      updateCellsAction,
       insertRowAction,
       addColumnAction,
     ]
@@ -339,11 +359,6 @@ function DataBrowser({
             ? "0 rows"
             : `${from + 1}–${from + shown} of ${total} row${total === 1 ? "" : "s"}`}
         </span>
-        {loading && (
-          <span className="animate-pulse text-[0.65rem] text-muted-foreground">
-            loading…
-          </span>
-        )}
         {!isView && !hasPrimaryKey && (
           <span className="text-[0.65rem] text-muted-foreground">
             No primary key — edit from the SQL tab instead.
@@ -411,19 +426,37 @@ function DataBrowser({
         </Button>
 
         <div className="ml-auto flex items-center gap-0.5">
-          <span className="mr-1 text-[0.65rem] text-muted-foreground tabular-nums">
+          {/* Rows are read when a tab is opened and not again — coming back to a
+              table is meant to be the screen it was left on. This is how the
+              table is asked for afresh without closing the tab, and it re-reads
+              the columns and the count with the page, since a schema changed
+              elsewhere moves those too. */}
+          <IconButton
+            label={
+              unsaved > 0 ? "Save or discard your edits first" : "Refresh rows"
+            }
+            disabled={loading || unsaved > 0}
+            onClick={() => void reloadPage()}
+          >
+            <RefreshCw />
+          </IconButton>
+          <span className="mx-1 text-[0.65rem] text-muted-foreground tabular-nums">
             {page + 1} / {Math.max(1, Math.ceil(total / PAGE_SIZE))}
           </span>
           <IconButton
-            label="Previous page"
-            disabled={page === 0 || loading}
+            label={
+              unsaved > 0 ? "Save or discard your edits first" : "Previous page"
+            }
+            disabled={page === 0 || loading || unsaved > 0}
             onClick={() => setPage(page - 1)}
           >
             <ChevronLeft />
           </IconButton>
           <IconButton
-            label="Next page"
-            disabled={!hasMore || loading}
+            label={
+              unsaved > 0 ? "Save or discard your edits first" : "Next page"
+            }
+            disabled={!hasMore || loading || unsaved > 0}
             onClick={() => setPage(page + 1)}
           >
             <ChevronRight />
@@ -431,13 +464,30 @@ function DataBrowser({
         </div>
       </div>
 
+      {/* The read wins over the rows already on screen: a page turned, a filter
+          applied or a table re-read is a different set of rows, and leaving the
+          old ones up under a word in the toolbar was the least visible thing
+          the pane could have done about it. */}
       <div className="min-h-0 flex-1">
-        {data ? (
-          <ResultGrid result={data} edit={edit} control={control} />
+        {loading ? (
+          <GridSkeleton columns={visible.map((column) => column.name)} />
+        ) : data ? (
+          <ResultGrid
+            result={data}
+            edit={edit}
+            control={control}
+            onUnsavedChange={setUnsaved}
+          />
         ) : (
           <Hint>Reading rows…</Hint>
         )}
       </div>
+
+      {saveError && (
+        <p className="shrink-0 border-t bg-destructive/10 px-3 py-1.5 font-mono text-[0.65rem] whitespace-pre-wrap text-destructive">
+          {saveError}
+        </p>
+      )}
 
       <AlertDialog
         open={pendingDelete !== null}
@@ -957,7 +1007,7 @@ function QueryConsole({ tabId, query }: { tabId: string; query: QueryTab }) {
   const resetQueryColumnPrefs = useExplorer(
     (state) => state.resetQueryColumnPrefs
   )
-  const updateQueryCell = useExplorer((state) => state.updateQueryCell)
+  const updateQueryCells = useExplorer((state) => state.updateQueryCells)
   const insertQueryRow = useExplorer((state) => state.insertQueryRow)
   const deleteQueryRow = useExplorer((state) => state.deleteQueryRow)
   const setQueryInserting = useExplorer((state) => state.setQueryInserting)
@@ -971,6 +1021,8 @@ function QueryConsole({ tabId, query }: { tabId: string; query: QueryTab }) {
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [filterText, setFilterText] = useState("")
+  /** Why the last batch of cell edits did not go through. */
+  const [saveError, setSaveError] = useState<string | null>(null)
   // What is highlighted in the editor, "" when nothing is — running over a
   // selection is how a console lets one statement of a script be tried without
   // deleting the rest of it.
@@ -1047,8 +1099,14 @@ function QueryConsole({ tabId, query }: { tabId: string; query: QueryTab }) {
             isEditableType: getAdapter(engine!).isEditableType,
             fkLabels: resultEdit.fkLabels,
             searchForeignKeyRows: searchForeignKeyRowsAction,
-            onUpdateCell: (primaryKey, column, value) =>
-              updateQueryCell(tabId, primaryKey, column, value),
+            // See the note on the Data tab's own — a query is re-run after a
+            // save, taking its grid with it.
+            onSaveCells: async (writes) => {
+              setSaveError(null)
+              const failure = await updateQueryCells(tabId, writes)
+              setSaveError(failure)
+              return failure
+            },
             onRequestDelete: (row) => {
               setPendingDelete(row)
               setDeleteError(null)
@@ -1069,7 +1127,7 @@ function QueryConsole({ tabId, query }: { tabId: string; query: QueryTab }) {
       tabId,
       query.inserting,
       searchForeignKeyRowsAction,
-      updateQueryCell,
+      updateQueryCells,
       insertQueryRow,
       setQueryInserting,
     ]
@@ -1300,6 +1358,12 @@ function QueryConsole({ tabId, query }: { tabId: string; query: QueryTab }) {
           ))
         )}
       </div>
+
+      {saveError && (
+        <p className="shrink-0 border-t bg-destructive/10 px-3 py-1.5 font-mono text-[0.65rem] whitespace-pre-wrap text-destructive">
+          {saveError}
+        </p>
+      )}
 
       <AlertDialog open={confirmRun} onOpenChange={setConfirmRun}>
         <AlertDialogContent>

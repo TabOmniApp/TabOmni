@@ -76,6 +76,7 @@ import {
 import {
   newColumnDraft,
   newColumnError,
+  type CellWrite,
   type Column,
   type ForeignKey,
   type LabelRow,
@@ -118,11 +119,17 @@ export type CellEdit = {
   fkLabels: Record<string, Map<string, string>>
   /** Candidate rows for a foreign-key cell's picker, optionally filtered. */
   searchForeignKeyRows: (fk: ForeignKey, search?: string) => Promise<LabelRow[]>
-  onUpdateCell: (
-    primaryKey: Record<string, unknown>,
-    column: string,
-    value: string | null
-  ) => Promise<string | null>
+  /**
+   * Writes every cell edited since the last save, in one go.
+   *
+   * Editing a cell used to write it there and then, which made a table of
+   * corrections a table of round trips — and each one re-read the page, so the
+   * rows moved under the next edit. Edits are now held in the grid, drawn in
+   * place of the values they replace, and sent when the bar at the foot of the
+   * grid is used. Resolves to an error message on failure; the page is re-read
+   * either way, so the grid shows what landed.
+   */
+  onSaveCells: (writes: CellWrite[]) => Promise<string | null>
   onRequestDelete: (row: unknown[]) => void
   /** Opens an unsaved draft row at the foot of the grid — the trailing
    * "New row" line. */
@@ -218,11 +225,16 @@ export const ResultGrid = memo(function ResultGrid({
   emptyLabel = "No rows.",
   edit,
   control,
+  onUnsavedChange,
 }: {
   result: SqlResult
   emptyLabel?: string
   edit?: CellEdit
   control?: ColumnControl
+  /** How many cells are edited but unwritten, for the pane around the grid:
+   * anything that re-reads the rows drops them, so it has controls to hold
+   * back while there are any. Called with 0 when the grid goes away. */
+  onUnsavedChange?: (count: number) => void
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [expandedRow, setExpandedRow] = useState<number | null>(null)
@@ -241,8 +253,25 @@ export const ResultGrid = memo(function ResultGrid({
   const [actionError, setActionError] = useState<string | null>(null)
   const [insertDraft, setInsertDraft] = useState<Record<string, string>>({})
   const [insertBusy, setInsertBusy] = useState(false)
+  /** Cells changed but not yet written, keyed by `row index:column name` — the
+   * row's own index because that is what identifies it until it is saved, and
+   * a page is re-read (and these cleared) whenever the rows themselves move. */
+  const [pending, setPending] = useState<Record<string, string | null>>({})
+  const [saving, setSaving] = useState(false)
   const bodyRef = useRef<HTMLTableSectionElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Both above the early return for a result with no columns at all, which is
+  // ahead of every other hook in this component.
+  const pendingCount = Object.keys(pending).length
+  useEffect(() => {
+    onUnsavedChange?.(pendingCount)
+  }, [pendingCount, onUnsavedChange])
+  useEffect(() => {
+    // The grid is unmounted while its page is re-read, taking its edits with
+    // it — the pane must not be left holding a count for a grid that is gone.
+    return () => onUnsavedChange?.(0)
+  }, [onUnsavedChange])
 
   // A fresh draft every time the row is (re)opened, rather than whatever was
   // left over from the last one that was saved or cancelled. Adjusted during
@@ -307,6 +336,17 @@ export const ResultGrid = memo(function ResultGrid({
     setWidths({})
     setActive(null)
     setEditing(false)
+  }
+
+  // Unsaved edits are addressed by row index, so any new set of rows — a save,
+  // a refresh, a page turned, a filter — invalidates them. They are dropped
+  // rather than re-anchored: the values behind them have just been re-read, and
+  // an edit carried onto whatever row now sits at that index would be written
+  // against the wrong one.
+  const [shownRows, setShownRows] = useState(result)
+  if (shownRows !== result) {
+    setShownRows(result)
+    setPending({})
   }
 
   const defaultWidths = useMemo(() => measureColumns(result), [result])
@@ -555,17 +595,58 @@ export const ResultGrid = memo(function ResultGrid({
     }
   }
 
-  /** Writes NULL into one cell, straight from the menu. */
-  async function clearCell(row: number, col: number) {
+  /** Holds one cell's new value until the bar at the foot of the grid sends
+   * it. Setting a cell back to what it already held drops the edit instead of
+   * keeping a write that would change nothing. */
+  function stage(row: number, column: string, value: string | null) {
+    const key = `${row}:${column}`
+    const index = result.fields.findIndex((field) => field.name === column)
+    const current = index === -1 ? undefined : result.rows[row]?.[index]
+    setActionError(null)
+    setPending((held) => {
+      const next = { ...held }
+      if (sameAsStored(current, value)) delete next[key]
+      else next[key] = value
+      return next
+    })
+  }
+
+  /** Sets a cell to NULL, straight from the menu — staged like any other edit. */
+  function clearCell(row: number, col: number) {
     const info = visible[col]
-    const values = result.rows[row]
-    if (!info || !values || !edit) return
-    const failure = await edit.onUpdateCell(
-      primaryKeyFromRow(result.fields, edit.columns, values),
-      info.field.name,
-      null
-    )
-    setActionError(failure)
+    if (!info) return
+    stage(row, info.field.name, null)
+  }
+
+  function discard() {
+    setPending({})
+    setActionError(null)
+    setEditing(false)
+  }
+
+  async function save() {
+    if (!edit || saving) return
+    const writes: CellWrite[] = []
+    for (const [key, value] of Object.entries(pending)) {
+      // The column name can itself contain a colon, so only the first
+      // separator is one.
+      const separator = key.indexOf(":")
+      const row = result.rows[Number(key.slice(0, separator))]
+      if (!row) continue
+      writes.push({
+        primaryKey: primaryKeyFromRow(result.fields, edit.columns, row),
+        column: key.slice(separator + 1),
+        value,
+      })
+    }
+    if (writes.length === 0) return
+
+    setSaving(true)
+    setActionError(null)
+    // A failure is the pane's to show, not this grid's: the page is re-read
+    // either way, and the grid goes with it while that runs.
+    await edit.onSaveCells(writes)
+    setSaving(false)
   }
 
   const totalWidth =
@@ -768,38 +849,36 @@ export const ResultGrid = memo(function ResultGrid({
                         } = slot.info
                         const index = slot.index
                         const onCommit = editable
-                          ? async (value: string | null) => {
-                              const failure = await edit!.onUpdateCell(
-                                primaryKeyFromRow(
-                                  result.fields,
-                                  edit!.columns,
-                                  row
-                                ),
-                                field.name,
-                                value
-                              )
-                              if (!failure) setEditing(false)
-                              return failure
+                          ? (value: string | null) => {
+                              stage(rowIndex, field.name, value)
+                              setEditing(false)
                             }
                           : undefined
+
+                        // An unsaved edit stands in for the stored value, so
+                        // the grid reads as what saving would leave behind.
+                        const key = `${rowIndex}:${field.name}`
+                        const dirty = key in pending
+                        const value = dirty
+                          ? asStoredShape(pending[key]!, kind)
+                          : row[dataIndex]
 
                         return (
                           <GridCell
                             key={`${field.name}-${dataIndex}`}
-                            value={row[dataIndex]}
+                            value={value}
                             pref={prefs[field.name] ?? EMPTY_PREF}
                             kind={kind}
                             column={column}
                             foreignKey={foreignKey}
                             fkLabel={
                               foreignKey && edit
-                                ? edit.fkLabels[field.name]?.get(
-                                    String(row[dataIndex])
-                                  )
+                                ? edit.fkLabels[field.name]?.get(String(value))
                                 : undefined
                             }
                             searchForeignKeyRows={edit?.searchForeignKeyRows}
                             editable={editable}
+                            dirty={dirty}
                             sticky={index === 0}
                             address={`${rowIndex}-${index}`}
                             active={
@@ -964,9 +1043,48 @@ export const ResultGrid = memo(function ResultGrid({
         </div>
 
         {actionError && (
-          <p className="absolute right-2 bottom-2 z-40 max-w-96 rounded-md border bg-destructive/10 px-2 py-1 text-[0.65rem] whitespace-pre-wrap text-destructive shadow-sm">
+          <p
+            className={cn(
+              "absolute right-2 z-40 max-w-96 rounded-md border bg-destructive/10 px-2 py-1 text-[0.65rem] whitespace-pre-wrap text-destructive shadow-sm",
+              // Above the save bar when both are up: the error is usually that
+              // bar's own, and the two must not sit on top of each other.
+              pendingCount > 0 ? "bottom-14" : "bottom-2"
+            )}
+          >
             {actionError}
           </p>
+        )}
+
+        {/* The unsaved edits, and the only way they reach the database. Across
+            the foot of the grid rather than per cell: a correction is rarely
+            one cell, and a bar per cell would have put a pair of buttons under
+            each of them. */}
+        {pendingCount > 0 && (
+          <div className="absolute inset-x-0 bottom-0 z-40 flex items-center gap-2 border-t bg-popover/95 px-3 py-2 shadow-[0_-2px_8px_rgb(0_0_0/0.06)] backdrop-blur-sm">
+            <span className="size-2 rounded-full bg-warning" />
+            <span className="text-xs text-muted-foreground">
+              {pendingCount} unsaved {pendingCount === 1 ? "cell" : "cells"}
+            </span>
+            <div className="ml-auto flex items-center gap-1.5">
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                disabled={saving}
+                onClick={discard}
+              >
+                Discard
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                disabled={saving}
+                onClick={() => void save()}
+              >
+                {saving ? "Saving…" : "Save changes"}
+              </Button>
+            </div>
+          </div>
         )}
       </div>
 
@@ -1277,6 +1395,30 @@ function rowAsJson(fields: SqlField[], row: unknown[]): string {
   return JSON.stringify(object, null, 2)
 }
 
+/**
+ * An unsaved edit, as the value the engine would have handed back for it.
+ *
+ * Edits are held as the string that will be written, which is what the update
+ * takes — but the cells draw stored values, and a boolean drawn from the
+ * string "false" would be `Boolean("false")`, which is true. Everything else
+ * stays a string: a number column showing "42" before the save and 42 after it
+ * reads the same, and rewriting the user's own text would be claiming to know
+ * what the engine will make of it.
+ */
+function asStoredShape(value: string | null, kind: FieldKind): unknown {
+  if (value === null) return null
+  return kind === "boolean" ? value === "true" : value
+}
+
+/** Whether an edit would write back the value the cell already holds — checked
+ * against the stored value's own text, so `42` and "42" are the same edit. */
+function sameAsStored(stored: unknown, staged: string | null): boolean {
+  if (stored === null || stored === undefined) return staged === null
+  if (staged === null) return false
+  if (typeof stored === "boolean") return String(stored) === staged
+  return formatCell(stored).text === staged
+}
+
 /** Roughly how wide a column has to be to show its header and its values —
  * sampled from the first rows only, which is enough to stop an `id` column
  * from taking the same room as a `description` one. */
@@ -1322,6 +1464,10 @@ type CellShell = {
   sticky: boolean
   address: string
   active: boolean
+  /** Changed and not yet written, so it is tinted apart from the rows around
+   * it — the one thing telling the reader the value under the cursor is not
+   * the one in the database. */
+  dirty: boolean
   /** The column is set to wrap: the cell grows to fit its value instead of
    * truncating it, and its row grows with it. */
   wrap: boolean
@@ -1341,6 +1487,9 @@ function shellProps(shell: CellShell, extra?: string) {
       "relative border-r border-b px-2 outline-none",
       shell.wrap ? "py-1 align-top" : "align-middle",
       shell.sticky && STICKY_CELL,
+      // Before the sticky cell's own background, which would otherwise paint
+      // over it — see STICKY_CELL's `before` layer.
+      shell.dirty && "bg-warning/20 before:bg-warning/20",
       shell.active && "ring-2 ring-primary ring-inset",
       extra
     ),
@@ -1369,6 +1518,7 @@ function GridCell({
   fkLabel,
   searchForeignKeyRows,
   editable,
+  dirty,
   sticky,
   address,
   active,
@@ -1390,6 +1540,8 @@ function GridCell({
     search?: string
   ) => Promise<LabelRow[]>
   editable: boolean
+  /** The cell holds an unsaved edit — see `ResultGrid`'s `pending`. */
+  dirty: boolean
   sticky: boolean
   address: string
   active: boolean
@@ -1397,13 +1549,16 @@ function GridCell({
   onActivate: () => void
   onEdit: () => void
   onEditEnd: () => void
-  onCommit?: (value: string | null) => Promise<string | null>
+  /** Holds the new value as an unsaved edit — the write happens when the bar
+   * at the foot of the grid is used, not here. */
+  onCommit?: (value: string | null) => void
   onExpand: (text: string) => void
 }) {
   const shell: CellShell = {
     sticky,
     address,
     active,
+    dirty,
     wrap: Boolean(pref.wrap),
     onActivate,
   }
@@ -1524,16 +1679,16 @@ function BooleanCell({
   value: unknown
   nullable: boolean
   editable: boolean
-  onCommit?: (value: string | null) => Promise<string | null>
+  /** Holds the new value as an unsaved edit — the write happens when the bar
+   * at the foot of the grid is used, not here. */
+  onCommit?: (value: string | null) => void
   onExpand: (text: string) => void
 }) {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const current = value === null || value === undefined ? null : Boolean(value)
 
-  async function cycle() {
-    if (!editable || busy) {
-      if (!editable) onExpand(formatCell(value).text)
+  function cycle() {
+    if (!editable) {
+      onExpand(formatCell(value).text)
       return
     }
     const next =
@@ -1544,11 +1699,7 @@ function BooleanCell({
             ? null
             : true
           : true
-    setBusy(true)
-    setError(null)
-    const failure = await onCommit!(next === null ? null : String(next))
-    setBusy(false)
-    if (failure) setError(failure)
+    onCommit!(next === null ? null : String(next))
   }
 
   const Icon =
@@ -1560,17 +1711,15 @@ function BooleanCell({
         type="button"
         role="checkbox"
         aria-checked={current === null ? "mixed" : current}
-        disabled={busy}
-        onClick={() => void cycle()}
+        onClick={cycle}
         className={cn(
-          "inline-flex items-center rounded-sm text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
+          "inline-flex items-center rounded-sm text-muted-foreground hover:text-foreground",
           current === true && "text-primary",
           !editable && "cursor-default"
         )}
       >
         <Icon className="size-4" />
       </button>
-      {error && <CellError message={error} />}
     </td>
   )
 }
@@ -1597,16 +1746,16 @@ function SelectCell({
   open: boolean
   onOpen: () => void
   onClose: () => void
-  onCommit?: (value: string | null) => Promise<string | null>
+  /** Holds the new value as an unsaved edit — the write happens when the bar
+   * at the foot of the grid is used, not here. */
+  onCommit?: (value: string | null) => void
   onExpand: (text: string) => void
 }) {
-  const [error, setError] = useState<string | null>(null)
   const label = value === null || value === undefined ? null : String(value)
 
-  async function choose(next: string | null) {
+  function choose(next: string | null) {
     onClose()
-    const failure = await onCommit!(next)
-    setError(failure)
+    onCommit!(next)
   }
 
   const pill =
@@ -1650,10 +1799,7 @@ function SelectCell({
           <Command>
             <CommandList>
               {nullable && (
-                <CommandItem
-                  value="__null__"
-                  onSelect={() => void choose(null)}
-                >
+                <CommandItem value="__null__" onSelect={() => choose(null)}>
                   <span className="text-muted-foreground italic">NULL</span>
                 </CommandItem>
               )}
@@ -1661,7 +1807,7 @@ function SelectCell({
                 <CommandItem
                   key={option}
                   value={option}
-                  onSelect={() => void choose(option)}
+                  onSelect={() => choose(option)}
                 >
                   <Pill label={option} />
                 </CommandItem>
@@ -1670,7 +1816,6 @@ function SelectCell({
           </Command>
         </PopoverContent>
       </Popover>
-      {error && <CellError message={error} />}
     </td>
   )
 }
@@ -1702,12 +1847,13 @@ function ForeignKeyCell({
   open: boolean
   onOpen: () => void
   onClose: () => void
-  onCommit?: (value: string | null) => Promise<string | null>
+  /** Holds the new value as an unsaved edit — the write happens when the bar
+   * at the foot of the grid is used, not here. */
+  onCommit?: (value: string | null) => void
   onExpand: (text: string) => void
 }) {
   const [search, setSearch] = useState("")
   const [rows, setRows] = useState<LabelRow[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const rawText = value === null || value === undefined ? "NULL" : String(value)
 
   useEffect(() => {
@@ -1724,19 +1870,15 @@ function ForeignKeyCell({
     }
   }, [open, search, foreignKey, onSearch])
 
-  async function choose(row: LabelRow) {
+  function choose(row: LabelRow) {
     onClose()
     const next = Object.values(row.pk)[0]
-    const failure = await onCommit!(
-      next === null || next === undefined ? null : String(next)
-    )
-    setError(failure)
+    onCommit!(next === null || next === undefined ? null : String(next))
   }
 
-  async function clear() {
+  function clear() {
     onClose()
-    const failure = await onCommit!(null)
-    setError(failure)
+    onCommit!(null)
   }
 
   const pill =
@@ -1789,7 +1931,7 @@ function ForeignKeyCell({
             />
             <CommandList>
               {nullable && (
-                <CommandItem value="__null__" onSelect={() => void clear()}>
+                <CommandItem value="__null__" onSelect={clear}>
                   <span className="text-muted-foreground italic">NULL</span>
                 </CommandItem>
               )}
@@ -1802,7 +1944,7 @@ function ForeignKeyCell({
                   <CommandItem
                     key={index}
                     value={`${index}-${row.label}`}
-                    onSelect={() => void choose(row)}
+                    onSelect={() => choose(row)}
                   >
                     {row.label || (
                       <span className="text-muted-foreground italic">
@@ -1816,7 +1958,6 @@ function ForeignKeyCell({
           </Command>
         </PopoverContent>
       </Popover>
-      {error && <CellError message={error} />}
     </td>
   )
 }
@@ -1856,7 +1997,9 @@ function TextCell({
   editing: boolean
   onEdit: () => void
   onEditEnd: () => void
-  onCommit?: (value: string | null) => Promise<string | null>
+  /** Holds the new value as an unsaved edit — the write happens when the bar
+   * at the foot of the grid is used, not here. */
+  onCommit?: (value: string | null) => void
   onExpand: (text: string) => void
 }) {
   const { text, muted } = formatCell(value, pref)
@@ -1894,7 +2037,16 @@ function TextCell({
   )
 }
 
-/** The text input a `TextCell` swaps in while it is being edited. */
+/**
+ * The text input a `TextCell` swaps in while it is being edited.
+ *
+ * Leaving the input keeps what was typed rather than throwing it away: the
+ * value is only staged, and the bar at the foot of the grid is what decides
+ * whether it is ever written. Escape is the way out without keeping it. A
+ * draft equal to what is already in the cell stages nothing — which is what
+ * makes opening a NULL cell to read it harmless, since its draft starts empty
+ * and leaving it that way used to write an empty string over the NULL.
+ */
 function TextEditor({
   initial,
   initiallyNull,
@@ -1903,63 +2055,42 @@ function TextEditor({
 }: {
   initial: string
   initiallyNull: boolean
-  onCommit: (value: string | null) => Promise<string | null>
+  onCommit: (value: string | null) => void
   onCancel: () => void
 }) {
-  const [draft, setDraft] = useState(initiallyNull ? "" : initial)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const original = initiallyNull ? "" : initial
+  const [draft, setDraft] = useState(original)
+  // Enter and the blur it causes would otherwise stage the same value twice.
   const settled = useRef(false)
 
-  async function commit() {
-    if (settled.current || busy) return
+  function commit() {
+    if (settled.current) return
     settled.current = true
-    setBusy(true)
-    setError(null)
-    const failure = await onCommit(draft)
-    setBusy(false)
-    if (failure) {
-      setError(failure)
-      settled.current = false
-    }
+    if (draft !== original) onCommit(draft)
+    onCancel()
   }
 
   function cancel() {
     settled.current = true
-    setError(null)
     onCancel()
   }
 
   return (
-    <>
-      <Input
-        autoFocus
-        value={draft}
-        disabled={busy}
-        onChange={(event) => setDraft(event.target.value)}
-        onFocus={(event) => event.currentTarget.select()}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault()
-            void commit()
-          }
-          if (event.key === "Escape") cancel()
-        }}
-        onBlur={() => void commit()}
-        className="h-6 min-w-16 px-1.5 font-mono text-xs md:text-xs"
-      />
-      {error && <CellError message={error} />}
-    </>
-  )
-}
-
-/** A failed write, shown against the cell that caused it. Floated out of the
- * row's flow so one error doesn't push every column out of alignment. */
-function CellError({ message }: { message: string }) {
-  return (
-    <p className="absolute top-full left-0 z-40 max-w-72 rounded-md border bg-destructive/10 px-2 py-1 text-[0.65rem] whitespace-pre-wrap text-destructive shadow-sm">
-      {message}
-    </p>
+    <Input
+      autoFocus
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault()
+          commit()
+        }
+        if (event.key === "Escape") cancel()
+      }}
+      onBlur={commit}
+      className="h-6 min-w-16 px-1.5 font-mono text-xs md:text-xs"
+    />
   )
 }
 
