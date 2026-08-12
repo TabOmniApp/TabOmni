@@ -1,0 +1,15 @@
+node_modules/
+coverage/
+.next/
+.bun-cache/
+.bun-tmp/
+
+# Build output: the renderer's bundle, the main process' bundle, the installers.
+dist-electron/
+dist-renderer/
+release/
+
+# Lockfiles and generated manifests.
+bun.lock
+pnpm-lock.yaml
+.pnpm-store/

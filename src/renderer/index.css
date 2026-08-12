@@ -1,0 +1,33 @@
+@import "./styles/globals.css";
+
+/*
+ * globals.css expects the app shell to define these (Next's app previously
+ * supplied them via next/font's Geist variable classes); we use the system
+ * font stack instead since there's no SSR font-loading step here.
+ */
+:root {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
+    monospace;
+}
+
+/*
+ * On macOS the window has no title bar of its own — the studio's header stands
+ * in for it (see `titleBarStyle` in electron/main.ts). That makes the header
+ * the only thing left to drag the window by, and a drag region swallows clicks
+ * unless whatever is clickable inside it opts back out.
+ */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.drag-region button,
+.drag-region a,
+.drag-region input,
+.drag-region [role="button"],
+.drag-region [role="combobox"] {
+  -webkit-app-region: no-drag;
+}

@@ -1,0 +1,62 @@
+/*
+ * How the composer's Crepe editor is *sized*. What it is coloured like is in
+ * `milkdown-theme.css`, which is the theme on its own so that sizing and
+ * colour can be changed apart.
+ */
+
+/*
+ * `<Milkdown/>` renders one bare `<div data-milkdown-root>` with no class of
+ * its own to hook — Milkdown itself then nests a `.milkdown` container, and
+ * ProseMirror's own `.ProseMirror` content div, inside that. A percentage
+ * height only reaches the actual editable div if every link in that chain
+ * carries one; miss a link and the content div quietly falls back to
+ * sizing itself to its own text (one empty line) instead of filling this
+ * panel — which is exactly the bug this chain fixes. `.composer-prose`
+ * itself already gets `height: 100%` from its own `h-full` class in JSX.
+ */
+.composer-prose [data-milkdown-root] {
+  height: 100%;
+}
+
+.composer-prose .milkdown {
+  height: 100%;
+}
+
+/*
+ * The `/` menu's container (`composer-slash.tsx`). Deliberately not named
+ * `.milkdown-slash-menu`: that is Crepe's own class, and the stylesheet
+ * imported above would then style this menu as if it were Crepe's block
+ * menu. Only the positioning shell lives here — the panel inside it is
+ * drawn with the app's own tokens like any other popover.
+ *
+ * `fixed`, and parked on `<body>` rather than beside the editor, because the
+ * composer's scroll box clips overflow and this menu is routinely taller
+ * than it; `SlashProvider` is configured to match (`strategy: "fixed"`).
+ */
+.composer-slash-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 50;
+}
+
+.composer-slash-menu[data-show="false"] {
+  display: none;
+}
+
+.composer-prose .ProseMirror {
+  height: 100%;
+  min-height: 100%;
+  outline: none;
+  /* Crepe sets no caret-color of its own here (only for the code-block and
+   * image-block features, both disabled) — left alone it is `currentColor`,
+   * which is thin and easy to lose against body text of the same color.
+   * The link/active-toolbar blue is already the one accent color this
+   * editor uses, so the caret reuses it rather than adding a second one. */
+  caret-color: var(--crepe-color-primary);
+  /* Crepe's own `reset.css` sets `padding: 60px 120px` here — sized for a
+   * full document page (its usual context), not a chat composer a few
+   * lines tall. The wrapping card (`chat-composer.tsx`) already has its own
+   * `px-3 py-2`, so this only needs to not double up on top of that. */
+  padding: 0 !important;
+}
