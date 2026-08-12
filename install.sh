@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-REPO="tabomni/tabomni"
+REPO="TabOmniApp/TabOmni"
 # Overridable so the script can be exercised against a scratch directory.
 APPLICATIONS="${APPLICATIONS:-/Applications}"
 

@@ -6,7 +6,7 @@
 
 **One window for the applications a project already needs.**
 
-[![CI](https://github.com/tabomni/tabomni/actions/workflows/ci.yml/badge.svg)](https://github.com/tabomni/tabomni/actions/workflows/ci.yml)
+[![CI](https://github.com/TabOmniApp/TabOmni/actions/workflows/ci.yml/badge.svg)](https://github.com/TabOmniApp/TabOmni/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F.svg)](https://electronjs.org)
 
@@ -43,11 +43,11 @@ last line of each section is about.
 macOS 12 (Monterey) or newer, Apple Silicon or Intel.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tabomni/tabomni/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/TabOmniApp/TabOmni/main/install.sh | bash
 ```
 
 [`install.sh`](install.sh) picks the build for your architecture and copies it
-into `/Applications`. Run it again to update, or `| bash -s 0.0.3` to pin a
+into `/Applications`. Run it again to update, or `| bash -s 1.0.0` to pin a
 version.
 
 Use `curl` rather than a browser: macOS quarantines a download and Gatekeeper
@@ -73,7 +73,7 @@ It needs FUSE (`sudo apt install libfuse2` on Debian and Ubuntu), or
 x64. The `.exe` from [Releases][releases] is an NSIS installer. SmartScreen
 stops it: _More info_ → _Run anyway_.
 
-[releases]: https://github.com/tabomni/tabomni/releases
+[releases]: https://github.com/TabOmniApp/TabOmni/releases
 
 TabOmni is developed and used day to day on macOS; the Linux and Windows builds
 come out of the same workflow and the tests run on Linux, but assume rough
@@ -85,7 +85,7 @@ only for agent sessions and the AI features — neither to start the app.
 Needs [Bun](https://bun.sh) 1.3+ and Node 20+.
 
 ```bash
-git clone https://github.com/tabomni/tabomni.git
+git clone https://github.com/TabOmniApp/TabOmni.git
 cd tabomni
 bun install
 bun run dev      # bundles the main process, starts Vite, launches Electron at it
