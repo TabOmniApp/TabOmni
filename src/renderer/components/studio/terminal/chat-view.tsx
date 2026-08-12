@@ -46,7 +46,7 @@ import {
 import { parseUserMessage } from "@/lib/terminal/slash-command"
 import { clamp, describeInput } from "@/lib/terminal/tool-input"
 import { Meter } from "../meter"
-import { MarkdownView } from "./markdown-view"
+import { MarkdownView } from "../markdown-view"
 import "./slash-command.css"
 
 /** Whether tool calls show up in the transcript at all, remembered across

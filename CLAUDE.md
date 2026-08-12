@@ -182,9 +182,11 @@ time, nothing hidden, nothing watched (Refresh is the header button). Its
 keeps an absolute path from the renderer inside the folders the workspace was
 pointed at; deleting is `shell.trashItem` rather than `unlink`. `⌘P` searches files too — the one index in the palette
 (`files:index` walks the workspace once per run; `lib/files/search.ts` shortlists
-before cmdk scores). Images open in an image view, and an SVG can be
-opened either way from its right-click menu (`lib/files/viewers.ts` is the one
-place that decides). Rows carry a vendored vscode-icons file-type icon —
+before cmdk scores). Images open in an image view, and the files that are
+honestly two things — an SVG, and a `.md`, which opens in the editor and has a
+rendered **Markdown preview** beside it — are switched between from their
+right-click menu (`lib/files/viewers.ts` is the one place that decides, and
+`components/studio/markdown-view.tsx` is the renderer the chat view uses too). Rows carry a vendored vscode-icons file-type icon —
 `lib/files/icon-names.ts` maps a name to one, `assets/file-icons/README.md`
 says what is checked in and why it is a subset. A file tab is
 addressed by its own absolute path, and `lib/files/paths.ts` is the one place

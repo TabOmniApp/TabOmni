@@ -4,12 +4,13 @@ import { nameOf } from "./paths"
  * How a file can be shown, and which way it is shown by default.
  *
  * Most files have one honest answer — a `.ts` is text, a `.png` is a picture —
- * and for those this decides nothing the extension had not already decided. SVG
- * is the one that is genuinely both: it is a picture, and it is also a text
- * file people open to change a `fill` or a `viewBox`. So it gets both, with the
- * picture first, and the tree's right-click menu is where the other one is.
+ * and for those this decides nothing the extension had not already decided. Two
+ * are genuinely more than one thing. An SVG is a picture, and also a text file
+ * people open to change a `fill` or a `viewBox`. A `.md` is the source somebody
+ * edits, and also a document somebody reads. Both get both, and the tree's
+ * right-click menu is where the second one is.
  */
-export type Viewer = "image" | "text"
+export type Viewer = "image" | "text" | "markdown"
 
 /**
  * What the studio will draw as a picture.
@@ -43,6 +44,20 @@ export function isImage(filePath: string): boolean {
 }
 
 /**
+ * What the studio will render as a document.
+ *
+ * Just the two spellings of markdown, and deliberately not `.mdx`: that is
+ * markdown with JSX in it, and a commonmark parser reads a component tag as
+ * either nothing or a stray paragraph — a preview that quietly drops half the
+ * file is worse than no preview offered.
+ */
+const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"])
+
+export function isMarkdown(filePath: string): boolean {
+  return MARKDOWN_EXTENSIONS.has(extensionOf(filePath))
+}
+
+/**
  * Every way this file can be shown, best first.
  *
  * The order is the menu's order and the first entry is the default, so there is
@@ -51,10 +66,19 @@ export function isImage(filePath: string): boolean {
  * the thing already on screen is a menu that teaches nothing.
  */
 export function viewersFor(filePath: string): Viewer[] {
-  if (!isImage(filePath)) return ["text"]
-  // An SVG is a picture first — that is what somebody double-clicking one
-  // wants to see — and text when they say so.
-  return extensionOf(filePath) === "svg" ? ["image", "text"] : ["image"]
+  if (isImage(filePath)) {
+    // An SVG is a picture first — that is what somebody double-clicking one
+    // wants to see — and text when they say so.
+    return extensionOf(filePath) === "svg" ? ["image", "text"] : ["image"]
+  }
+
+  // A `.md` opens in the editor, not the preview. The Explorer is where a
+  // project's files are worked on, and a README clicked from a tree of source
+  // is more often on the way to being changed than being read — so the
+  // rendered view is the one asked for rather than the one arrived at.
+  if (isMarkdown(filePath)) return ["text", "markdown"]
+
+  return ["text"]
 }
 
 export function defaultViewer(filePath: string): Viewer {
@@ -64,4 +88,5 @@ export function defaultViewer(filePath: string): Viewer {
 export const VIEWER_LABELS: Record<Viewer, string> = {
   image: "Image preview",
   text: "Text editor",
+  markdown: "Markdown preview",
 }

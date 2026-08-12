@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/context-menu"
 import { cn } from "@/lib/utils"
 import {
+  BookOpen,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -370,9 +371,9 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
 
       {menuTarget?.kind === "entry" && (
         <ContextMenuContent className="w-52">
-          {/* Only where there is a choice to make. An SVG is the one file the
-              studio can honestly draw two ways; offering a picture-or-text
-              menu on a `.ts` would be offering the same thing twice. */}
+          {/* Only where there is a choice to make — an SVG and a `.md` are the
+              files the studio can honestly draw two ways; offering the menu on
+              a `.ts` would be offering the same thing twice. */}
           {menuTarget.entry.kind === "file" &&
             viewersFor(menuTarget.entry.path).length > 1 && (
               <>
@@ -537,16 +538,18 @@ function OpenWith({ path }: { path: string }) {
     >
       {viewersFor(path).map((viewer) => (
         <ContextMenuRadioItem key={viewer} value={viewer}>
-          {viewer === "image" ? (
-            <Image className="text-muted-foreground" />
-          ) : (
-            <FileCode className="text-muted-foreground" />
-          )}
+          <ViewerIcon viewer={viewer} />
           {VIEWER_LABELS[viewer]}
         </ContextMenuRadioItem>
       ))}
     </ContextMenuRadioGroup>
   )
+}
+
+function ViewerIcon({ viewer }: { viewer: Viewer }) {
+  const Icon =
+    viewer === "image" ? Image : viewer === "markdown" ? BookOpen : FileCode
+  return <Icon className="text-muted-foreground" />
 }
 
 /**

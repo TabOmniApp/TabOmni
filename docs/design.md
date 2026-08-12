@@ -363,11 +363,27 @@ exactly like a white one. The bytes come over as a `data:` URL: the renderer is
 not on a `file://` origin, and Chromium will not load a `file://` subresource
 from any other one.
 
-SVG is the one file that is honestly both, so it gets both — a picture by
-default, and the text editor from **Open with** in its right-click menu, which
-appears only where there is a genuine choice to make. The two halves are read
-and kept separately, so switching back and forth re-reads neither.
-`lib/files/viewers.ts` holds that rule and nothing else does.
+SVG is honestly both, so it gets both — a picture by default, and the text
+editor from **Open with** in its right-click menu, which appears only where
+there is a genuine choice to make. The two halves are read and kept separately,
+so switching back and forth re-reads neither.
+
+**A `.md` is the other one**, and the menu is the same menu: **Text editor**,
+which is what it opens as, and **Markdown preview**, which draws it as the
+document it was written to be. The default is the editor rather than the
+preview, unlike SVG's: the Explorer is a tree of a project's source, and a
+README reached from there is more often on the way to being changed than being
+read. There is no second copy of the text — the preview draws the same buffer
+the editor writes into, so an edit is in it the moment the view is switched,
+saved or not. The renderer is the transcript's,
+`components/studio/markdown-view.tsx`, which is why it sits at the studio's root
+rather than in either panel; what the Explorer adds is a document's type scale
+over a chat message's, in `files/file-markdown.css`, in the same theme tokens as
+everything else so light and dark need no second palette. `.mdx` is deliberately
+not offered one: it is markdown with JSX in it, and a commonmark parser drops
+the component tags rather than drawing them.
+
+`lib/files/viewers.ts` holds all of that and nothing else does.
 
 Two other kinds of file are reported rather than opened: anything with a NUL
 byte in its first 8 KB, and anything over 2 MB. Both come back as results rather than

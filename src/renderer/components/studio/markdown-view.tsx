@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from "react"
 
+import { cn } from "@/lib/utils"
 import { markdownRenderer } from "@/lib/terminal/markdown"
 import "./markdown-view.css"
 
 /**
- * One markdown message, rendered.
+ * Some markdown, rendered — a chat message, or a `.md` file in the Explorer.
+ *
+ * At the studio's root rather than in either panel because it is now both, and
+ * one renderer means a heading looks the same wherever it was read from. What
+ * differs between the two is the type scale a document wants and a message does
+ * not, which is what `className` is for.
  *
  * The DOM comes from `markdownRenderer()` and is put in place imperatively
  * rather than as React children: it is a `DocumentFragment` built by
@@ -16,7 +22,13 @@ import "./markdown-view.css"
  * the formatting and nothing else, and says so in the console, which
  * `electron/main.ts` mirrors into the dev terminal.
  */
-export function MarkdownView({ source }: { source: string }) {
+export function MarkdownView({
+  source,
+  className,
+}: {
+  source: string
+  className?: string
+}) {
   const host = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState(false)
 
@@ -43,7 +55,11 @@ export function MarkdownView({ source }: { source: string }) {
   }, [source])
 
   if (failed)
-    return <p className="text-sm break-words whitespace-pre-wrap">{source}</p>
+    return (
+      <p className={cn("text-sm break-words whitespace-pre-wrap", className)}>
+        {source}
+      </p>
+    )
 
-  return <div ref={host} className="markdown-prose text-sm" />
+  return <div ref={host} className={cn("markdown-prose text-sm", className)} />
 }

@@ -173,6 +173,25 @@ async function main() {
   check("a PNG has only the one", viewersFor("/w/logo.png").join() === "image")
   check("a text file has only the one", viewersFor("/w/a.ts").join() === "text")
 
+  check(
+    "a markdown file opens in the editor",
+    defaultViewer("/w/README.md") === "text",
+    "the Explorer is where files are changed; the preview is asked for"
+  )
+  check(
+    "and has the preview as its second way",
+    viewersFor("/w/README.md").join() === "text,markdown"
+  )
+  check(
+    "`.markdown` is the same file",
+    viewersFor("/w/notes.MARKDOWN").join() === "text,markdown"
+  )
+  check(
+    "an MDX is not offered one",
+    viewersFor("/w/page.mdx").join() === "text",
+    "a commonmark parser drops its component tags — see MARKDOWN_EXTENSIONS"
+  )
+
   section("file-type icons")
 
   check(

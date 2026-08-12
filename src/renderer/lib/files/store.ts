@@ -631,7 +631,9 @@ export const useFiles = create<FilesState>((set, get) => {
             ...state.docs,
             ...Object.fromEntries(
               kept
-                .filter(([, viewer]) => viewer === "text")
+                // Everything that is not a picture was read as text — the
+                // markdown preview draws the same `docs` entry the editor does.
+                .filter(([, viewer]) => viewer !== "image")
                 .map(([filePath, , result]) => [filePath, result as FileDoc])
             ),
           },

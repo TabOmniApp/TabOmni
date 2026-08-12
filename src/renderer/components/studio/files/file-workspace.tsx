@@ -10,11 +10,13 @@ import { cn } from "@/lib/utils"
 import { Copy, ExternalLink, FolderTree, Save } from "lucide-react"
 
 import { isDirty, useFiles, viewOf, type FileDoc } from "@/lib/files/store"
+import type { Viewer } from "@/lib/files/viewers"
 import { isStudioShortcut } from "@/lib/shortcuts"
 import { SECTION_ACCENT } from "../activity-bar"
 import { IconButton } from "../icon-button"
 import { FileEditor } from "./file-editor"
 import { FileImage } from "./file-image"
+import { FileMarkdown } from "./file-markdown"
 
 /**
  * The open files, one editor each.
@@ -179,23 +181,32 @@ function FilePane({ path }: { path: string }) {
         {viewer === "image" ? (
           <FileImage image={image ?? { kind: "loading" }} alt={path} />
         ) : (
-          <Body path={path} doc={doc} onChange={write} onSave={commit} />
+          <Body
+            path={path}
+            doc={doc}
+            viewer={viewer}
+            onChange={write}
+            onSave={commit}
+          />
         )}
       </div>
     </div>
   )
 }
 
-/** What the pane draws for a document — the editor, or the reason there is
- * none. */
+/** What the pane draws for a document — the editor, the rendered markdown, or
+ * the reason there is neither. The notices below are shared by both: a file too
+ * large to edit is one no preview could render either. */
 function Body({
   path,
   doc,
+  viewer,
   onChange,
   onSave,
 }: {
   path: string
   doc: FileDoc | undefined
+  viewer: Viewer
   onChange: (text: string) => void
   onSave: () => void
 }) {
@@ -224,6 +235,8 @@ function Body({
   if (doc.kind === "error") {
     return <Notice title="Could not open this file" detail={doc.message} />
   }
+
+  if (viewer === "markdown") return <FileMarkdown text={doc.text} />
 
   return (
     <FileEditor
