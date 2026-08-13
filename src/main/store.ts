@@ -743,6 +743,26 @@ export class Store {
     })
   }
 
+  /**
+   * Whether the workspace still holds this file, without reading it.
+   *
+   * For the preview server's render pass: a video is fetched on a request of its
+   * own, so the page only needs to know the file is there to put a player
+   * around it — and reading a 60 MB file to find that out would happen on every
+   * render of the page.
+   */
+  hasNoteFile(fileName: string): Promise<boolean> {
+    const file = this.noteFilePath(fileName)
+    return this.enqueue(async () => {
+      try {
+        return (await stat(file)).isFile()
+      } catch (error) {
+        if (isNotFound(error)) return false
+        throw error
+      }
+    })
+  }
+
   writeNoteFile(fileName: string, bytes: Uint8Array): Promise<void> {
     const file = this.noteFilePath(fileName)
     return this.enqueue(async () => {

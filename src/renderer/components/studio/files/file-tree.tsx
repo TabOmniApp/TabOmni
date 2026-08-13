@@ -63,6 +63,7 @@ import { useTerminal } from "@/lib/terminal/store"
 import { RenameDialog } from "../db/rename-dialog"
 import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
+import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
 import { ConversationsList } from "./conversations-list"
 import { SessionsList } from "./sessions-list"
@@ -132,8 +133,8 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
 
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null)
   const [creating, setCreating] = useState<Creating | null>(null)
-  const [renaming, setRenaming] = useState<FileEntry | null>(null)
   const [trashing, setTrashing] = useState<FileEntry | null>(null)
+  const menuFocus = useMenuFocusHandoff()
   const [renamingFolder, setRenamingFolder] = useState<WorkspaceFolder | null>(
     null
   )
@@ -293,34 +294,6 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           />
         )}
 
-        {renaming && (
-          <RenameDialog
-            title={
-              renaming.kind === "directory" ? "Rename folder" : "Rename file"
-            }
-            // The one place in the studio where a rename does touch the disk,
-            // which is worth saying beside the field: the workspace folder
-            // rename right next to it in this same tree does not.
-            description={
-              <>
-                Renames it on disk, in{" "}
-                <code className="font-mono">{parentOf(renaming.path)}</code>.
-              </>
-            }
-            label="Name"
-            currentName={renaming.name}
-            onRename={async (name) => {
-              try {
-                await useFiles.getState().rename(renaming.path, name)
-                return null
-              } catch (error) {
-                return failureOf(error, "Could not rename that.")
-              }
-            }}
-            onClose={() => setRenaming(null)}
-          />
-        )}
-
         {renamingFolder && (
           <RenameDialog
             title="Rename folder"
@@ -428,7 +401,11 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
       )}
 
       {menuTarget?.kind === "entry" && (
-        <ContextMenuContent className="w-52">
+        <ContextMenuContent
+          className="w-52"
+          // Rename hands focus to the field it opens — see `useMenuFocusHandoff`.
+          finalFocus={menuFocus.finalFocus}
+        >
           {/* Only where there is a choice to make — an SVG and a `.md` are the
               files the studio can honestly draw two ways; offering the menu on
               a `.ts` would be offering the same thing twice. */}
@@ -481,9 +458,14 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
             Reveal in file manager
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => setRenaming(menuTarget.entry)}>
+          <ContextMenuItem
+            onClick={() => {
+              menuFocus.handOff()
+              useFiles.getState().beginRename(menuTarget.entry.path)
+            }}
+          >
             <Pencil />
-            Rename…
+            Rename
           </ContextMenuItem>
           <ContextMenuItem
             variant="destructive"
@@ -696,6 +678,7 @@ function Row({
 }) {
   const open = useFiles((state) => state.expanded.includes(entry.path))
   const active = useFiles((state) => state.selectedId === entry.path)
+  const renaming = useFiles((state) => state.renaming === entry.path)
   // Marked on the row as well as on the tab: the tree is where somebody looks
   // to find the file they were editing, and a strip with fifteen tabs in it is
   // not.
@@ -720,6 +703,67 @@ function Row({
   const iconUrl = directory ? null : iconFor(entry.path)
   const Chevron = open ? ChevronDown : ChevronRight
 
+  /* The row's own left-hand side, drawn the same whether the right of it is the
+     name or a field being typed into — so the field opens exactly where the name
+     was rather than a few pixels off it. */
+  const lead = (
+    <>
+      {/* A file has no chevron but keeps its width, so names line up down a
+          mixed listing rather than stepping in and out. */}
+      {directory ? (
+        <Chevron className="size-3.5 shrink-0" />
+      ) : (
+        <span aria-hidden className="size-3.5 shrink-0" />
+      )}
+      {iconUrl ? (
+        <img
+          src={iconUrl}
+          alt=""
+          aria-hidden
+          // The icon recedes with the name for an ignored row: a full-colour
+          // TypeScript logo beside a greyed `dist/bundle.ts` would be the
+          // brightest thing in the subtree it is meant to play down.
+          className={cn("size-3.5 shrink-0", git === "ignored" && "opacity-40")}
+        />
+      ) : (
+        <Icon
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground",
+            git === "ignored" && "opacity-60"
+          )}
+        />
+      )}
+    </>
+  )
+
+  if (renaming) {
+    return (
+      <li>
+        <RenameRow
+          name={entry.name}
+          indent={depth}
+          // A directory's dot is part of its name; a file's is its extension.
+          selection={directory ? "all" : "stem"}
+          label={directory ? "Folder name" : "File name"}
+          lead={lead}
+          onRename={async (name) => {
+            try {
+              await useFiles.getState().rename(entry.path, name)
+              useFiles.getState().endRename()
+              return null
+            } catch (error) {
+              return failureOf(error, "Could not rename that.")
+            }
+          }}
+          onCancel={() => useFiles.getState().endRename()}
+        />
+        {directory && open && (
+          <Directory dir={entry.path} depth={depth + 1} onMenu={onMenu} />
+        )}
+      </li>
+    )
+  }
+
   return (
     <li>
       <SideRow
@@ -736,34 +780,7 @@ function Row({
         }
         onContextMenu={() => onMenu(entry)}
       >
-        {/* A file has no chevron but keeps its width, so names line up down a
-            mixed listing rather than stepping in and out. */}
-        {directory ? (
-          <Chevron className="size-3.5 shrink-0" />
-        ) : (
-          <span aria-hidden className="size-3.5 shrink-0" />
-        )}
-        {iconUrl ? (
-          <img
-            src={iconUrl}
-            alt=""
-            aria-hidden
-            // The icon recedes with the name for an ignored row: a full-colour
-            // TypeScript logo beside a greyed `dist/bundle.ts` would be the
-            // brightest thing in the subtree it is meant to play down.
-            className={cn(
-              "size-3.5 shrink-0",
-              git === "ignored" && "opacity-40"
-            )}
-          />
-        ) : (
-          <Icon
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground",
-              git === "ignored" && "opacity-60"
-            )}
-          />
-        )}
+        {lead}
         <span
           className={cn(
             "truncate",

@@ -191,6 +191,19 @@ type FilesState = {
   /** Writes one file back, resolving to why it could not be written, or null. */
   save: (filePath: string) => Promise<string | null>
 
+  /**
+   * The row being renamed in place, by path, or null.
+   *
+   * Here rather than in the tree's own `useState` because the row that draws the
+   * field is at the bottom of a recursion, and the menu that starts the rename is
+   * at the top: threading it down would give `Directory` a prop it does nothing
+   * with, and every row in every open directory a re-render each time a rename
+   * starts. From the store, the two rows that change are the two that re-render.
+   */
+  renaming: string | null
+  beginRename: (target: string) => void
+  endRename: () => void
+
   create: (dir: string, name: string) => Promise<string>
   createFolder: (dir: string, name: string) => Promise<string>
   rename: (target: string, name: string) => Promise<string>
@@ -347,8 +360,17 @@ export const useFiles = create<FilesState>((set, get) => {
     views: {},
     openIds: [],
     selectedId: null,
+    renaming: null,
     index: [],
     indexing: false,
+
+    beginRename(target) {
+      set({ renaming: target })
+    },
+
+    endRename() {
+      set({ renaming: null })
+    },
 
     loadIndex(force = false) {
       if (force) indexPromise = null

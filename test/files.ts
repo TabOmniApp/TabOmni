@@ -24,6 +24,7 @@ import {
   movedPath,
   nameOf,
   parentOf,
+  stemEnd,
 } from "../src/renderer/lib/files/paths"
 import { check, finish, section } from "./harness"
 
@@ -147,6 +148,23 @@ async function main() {
     "renaming leaves a path that only shares a prefix alone",
     movedPath("/a/older/x.ts", "/a/old", "/a/new") === "/a/older/x.ts"
   )
+
+  // What the rename field opens with selected. Getting this wrong is quiet: the
+  // dialog still works, and the extension is either selected along with the name
+  // — so the first keystroke drops it — or the last letters of the name are not.
+  check("a name stops before its extension", stemEnd("report.txt") === 6)
+  check(
+    "a dotfile is all name",
+    stemEnd(".gitignore") === ".gitignore".length,
+    "the leading dot is part of the name, not an extension"
+  )
+  check("a name with no dot is all name", stemEnd("Makefile") === 8)
+  check(
+    "a compound suffix keeps everything but the last part",
+    stemEnd("archive.tar.gz") === "archive.tar".length,
+    "deciding that `.tar.gz` is one extension is a list with no end"
+  )
+  check("a trailing dot leaves itself behind", stemEnd("draft.") === 5)
 
   section("viewers")
 

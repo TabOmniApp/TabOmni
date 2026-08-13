@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -22,6 +22,12 @@ import { Input } from "@/components/ui/input"
  * verb: asking for a name and asking for a different name are the same field,
  * the same validation and the same way of reporting that the name is taken —
  * see the Explorer's New file. Only the button says which one it is.
+ *
+ * The name opens **selected**, so the first keystroke replaces it: this is asking
+ * for a different name, and a caret at one end of the old one leaves it to be
+ * selected by hand before that can be typed. All of it, since nothing this
+ * dialog renames has an extension — a file does, and a file is renamed in its
+ * row in the tree rather than here (`files/file-tree.tsx`).
  */
 export function RenameDialog({
   title,
@@ -53,6 +59,23 @@ export function RenameDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const field = useRef<HTMLInputElement>(null)
+
+  // Once, on mount, and not through `autoFocus` alone: that gives the field the
+  // caret and leaves the old name to be selected by hand. The attribute stays
+  // because it is also what tells the dialog's own focus management which
+  // control this dialog is for.
+  useEffect(() => {
+    const input = field.current
+    if (!input) return
+    input.focus()
+    input.setSelectionRange(0, currentName.length)
+    // The name it opened with is the one being replaced, so this runs for that
+    // name and no other: re-selecting on a later render would swallow what has
+    // been typed since.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     if (busy || !name.trim() || name === currentName) return
@@ -78,6 +101,7 @@ export function RenameDialog({
         </DialogHeader>
         <form onSubmit={submit} className="space-y-3">
           <Input
+            ref={field}
             autoFocus
             value={name}
             onChange={(event) => setName(event.target.value)}

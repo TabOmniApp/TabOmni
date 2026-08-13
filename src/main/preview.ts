@@ -7,6 +7,7 @@ import {
 } from "node:http"
 
 import type { NoteBlock, NoteBody, NoteFolder, NoteRecord } from "../shared/api"
+import { contentTypeOf } from "../shared/note-files"
 import {
   drawingIdsIn,
   noteFileNamesIn,
@@ -47,6 +48,16 @@ const HOST = "127.0.0.1"
  * guessable and still fits in a URL someone might read out. */
 const TOKEN_BYTES = 16
 
+/**
+ * The segment that makes a URL a note file's rather than a note's.
+ *
+ * Safe as a reserved word because the other branch is a note id, and a note id
+ * is a UUID — `Store` refuses anything else before it becomes a filename, and
+ * `serveNote` looks the id up in the listing rather than in the path. So no note
+ * can be shadowed by this.
+ */
+const FILE_SEGMENT = "file"
+
 /** What the workspace gives this server. Injected rather than imported so the
  * file has no opinion about `~/.tabomni` — the same shape `InboxServers` takes,
  * and for the same reason. */
@@ -57,9 +68,12 @@ export type NoteSource = {
   /** The drawing's last export, or "" for a scene that has never been drawn
    * into a picture. */
   drawingSvg: (id: string) => Promise<string>
-  /** One of the note's own pictures as a `data:` URL, or "" for a file that is
-   * not a picture or is no longer there. */
-  noteFileDataUrl: (fileName: string) => Promise<string>
+  /** One of the note's own files, or null for a name nothing was written
+   * under. */
+  noteFile: (fileName: string) => Promise<Buffer | null>
+  /** Whether that file is still there, asked without reading it — what the
+   * render pass needs to know about a video it is only going to link to. */
+  hasNoteFile: (fileName: string) => Promise<boolean>
 }
 
 export class NotePreview {
@@ -126,23 +140,33 @@ export class NotePreview {
         return send(request, response, 405, "text/plain", "Method not allowed")
       }
 
-      const [token, noteId, ...rest] = (request.url ?? "/")
+      const [token, first, second, ...rest] = (request.url ?? "/")
         .split("?")[0]!
         .split("/")
         .filter(Boolean)
         .map((segment) => decodeURIComponent(segment))
 
-      if (!token || !this.matches(token) || rest.length > 0) {
+      if (!token || !this.matches(token)) {
         // No hint about what was wrong with it. A wrong token and a wrong note
         // id answer identically, so the 404 cannot be used to find out which
         // half was guessed right.
         return send(request, response, 404, "text/plain", "Not found")
       }
 
-      if (noteId === undefined) {
+      if (first === FILE_SEGMENT) {
+        if (second === undefined || rest.length > 0) {
+          return send(request, response, 404, "text/plain", "Not found")
+        }
+        return await this.serveFile(request, response, second)
+      }
+
+      if (second !== undefined || rest.length > 0) {
+        return send(request, response, 404, "text/plain", "Not found")
+      }
+      if (first === undefined) {
         return await this.serveIndex(request, response)
       }
-      return await this.serveNote(request, response, noteId)
+      return await this.serveNote(request, response, first)
     } catch (error) {
       console.error("Could not render the preview", error)
       send(request, response, 500, "text/plain", "Preview failed")
@@ -228,10 +252,10 @@ export class NotePreview {
     const body = await this.source.body(note.id)
     const parsed = body.format === "blocks" ? parseNote(body.text) : []
     const drawings = await this.drawingsIn(parsed)
-    // The note's own pictures are inlined into the document before it is
-    // rendered: this page is one file, and the browser reading it has never
-    // heard of the scheme the studio loads them by.
-    const blocks = withNoteFileUrls(parsed, await this.picturesIn(parsed))
+    // The note's own files are resolved into the document before it is
+    // rendered: the browser reading this page has never heard of the scheme the
+    // studio loads them by. See `filesIn` for what each becomes.
+    const blocks = withNoteFileUrls(parsed, await this.filesIn(parsed))
 
     const rendered =
       body.format === "markdown"
@@ -273,24 +297,167 @@ export class NotePreview {
     return drawings
   }
 
-  /** Each picture the document points at, by file name. */
-  private async picturesIn(blocks: NoteBlock[]): Promise<Map<string, string>> {
-    const pictures = new Map<string, string>()
+  /**
+   * What each of the note's own files becomes on the page, by file name.
+   *
+   * The two answers are the two kinds of file a note holds, and the split is
+   * not arbitrary:
+   *
+   * - **A picture is inlined**, as a `data:` URL. It is small, and it is what
+   *   keeps a note of writing and screenshots a single file that can be saved
+   *   out of the browser or handed to something that follows no links.
+   * - **Everything else is a link to this server**, because a `data:` URL is the
+   *   wrong shape for it: a video would put tens of megabytes of base64 in the
+   *   markup, `<video>` could not seek within it, and a browser refuses to
+   *   navigate to a `data:` document at all — which is what left a PDF in a note
+   *   unopenable.
+   *
+   * Relative, so the link carries the token it was reached through without this
+   * having to know the port it is being read on.
+   */
+  private async filesIn(blocks: NoteBlock[]): Promise<Map<string, string>> {
+    const urls = new Map<string, string>()
 
     await Promise.all(
       noteFileNamesIn(blocks).map(async (name) => {
         try {
-          const url = await this.source.noteFileDataUrl(name)
-          if (url) pictures.set(name, url)
+          const type = contentTypeOf(name)
+          if (type?.startsWith("image/")) {
+            const bytes = await this.source.noteFile(name)
+            if (bytes) {
+              urls.set(name, `data:${type};base64,${bytes.toString("base64")}`)
+            }
+            return
+          }
+          // Asked before the link is written rather than left to the browser:
+          // a file that has gone should read as the note saying what it was,
+          // which is what `note-html.ts` does with a URL it cannot resolve.
+          if (await this.source.hasNoteFile(name)) {
+            urls.set(
+              name,
+              `/${this.token}/${FILE_SEGMENT}/${encodeURIComponent(name)}`
+            )
+          }
         } catch (error) {
           // A name the store refuses is a document edited by hand, and one
           // unreadable file is not a page nobody gets to read.
-          console.error("Could not read the note's picture", error)
+          console.error("Could not read the note's file", error)
         }
       })
     )
-    return pictures
+    return urls
   }
+
+  /**
+   * One of the note's own files, on a request of its own.
+   *
+   * Range requests are answered because that is what a media element does: a
+   * `<video>` asks for the head of the file to find its duration and then for
+   * the bytes around wherever the reader drags to, and a server that answers
+   * every one of those with the whole file gives a player that cannot seek.
+   *
+   * Sliced out of the bytes in hand rather than streamed off disk, which is
+   * honest only because an upload is capped — see `MAX_UPLOAD_BYTES`. A note
+   * that could hold an hour of video would want a read stream here.
+   */
+  private async serveFile(
+    request: IncomingMessage,
+    response: ServerResponse,
+    fileName: string
+  ): Promise<void> {
+    let bytes: Buffer | null = null
+    try {
+      bytes = await this.source.noteFile(fileName)
+    } catch {
+      // A name that is not one the store wrote answers like one it does not
+      // have, the same way a wrong token does.
+    }
+    if (!bytes) return send(request, response, 404, "text/plain", "Not found")
+
+    /*
+     * The type comes off the name through the shared table and from nowhere
+     * else — never from the request, and never sniffed out of the bytes.
+     *
+     * An extension the table has no entry for is served as bytes rather than
+     * guessed at, which with `nosniff` below is a download instead of a
+     * document. That, and one property of the split in `filesIn`, is what keeps
+     * this route from rendering anything scriptable on the preview's own origin:
+     * the only entry in the table a browser would run script from is
+     * `image/svg+xml`, and an SVG is an image, so it is inlined into the page as
+     * a `data:` URL and never arrives here.
+     */
+    const type = contentTypeOf(fileName) ?? "application/octet-stream"
+    const range = rangeOf(request.headers.range, bytes.byteLength)
+
+    if (range === "unsatisfiable") {
+      response.writeHead(416, {
+        "content-range": `bytes */${bytes.byteLength}`,
+        "accept-ranges": "bytes",
+      })
+      return void response.end()
+    }
+
+    const headers: Record<string, string> = {
+      "content-type": type,
+      "accept-ranges": "bytes",
+      // The note's own files, on a link that dies with the app run — the same
+      // reason the pages are not stored.
+      "cache-control": "no-store",
+      // Shown where it can be — a PDF in the browser's own viewer beats a file
+      // in the downloads tray — which is safe for the reason the type above
+      // gives, and comes to the same thing for anything unknown.
+      "content-disposition": "inline",
+      "x-content-type-options": "nosniff",
+    }
+
+    if (!range) {
+      response.writeHead(200, {
+        ...headers,
+        "content-length": bytes.byteLength,
+      })
+      return void (request.method === "HEAD"
+        ? response.end()
+        : response.end(bytes))
+    }
+
+    const part = bytes.subarray(range.start, range.end + 1)
+    response.writeHead(206, {
+      ...headers,
+      "content-length": part.byteLength,
+      "content-range": `bytes ${range.start}-${range.end}/${bytes.byteLength}`,
+    })
+    return void (request.method === "HEAD"
+      ? response.end()
+      : response.end(part))
+  }
+}
+
+/**
+ * The single range a request asked for, or null for a request that asked for
+ * none.
+ *
+ * Only `bytes=` and only one range: multipart ranges exist and no media element
+ * sends them, so the whole file is a truthful answer to a header this does not
+ * understand — where inventing a `multipart/byteranges` body would not be.
+ */
+function rangeOf(
+  header: string | undefined,
+  size: number
+): { start: number; end: number } | "unsatisfiable" | null {
+  if (!header) return null
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
+  if (!match) return null
+
+  const [, from, to] = match
+  if (!from && !to) return null
+
+  // A suffix range — `bytes=-500`, the last 500 bytes.
+  const start = from ? Number(from) : Math.max(0, size - Number(to))
+  const end = from ? (to ? Math.min(Number(to), size - 1) : size - 1) : size - 1
+
+  if (start > end || start >= size) return "unsatisfiable"
+  return { start, end }
 }
 
 /** Where a note is filed, as a path — "Specs / API" — or "" at the top

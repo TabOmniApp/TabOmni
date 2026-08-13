@@ -27,7 +27,7 @@ import {
 import { closeTab, fillPane } from "@/lib/panels"
 import { useStudio } from "@/lib/store"
 import { PREFIX } from "@/lib/tabs"
-import { RenameDialog } from "../db/rename-dialog"
+import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { IconButton } from "../icon-button"
 import { SideRow } from "../side-row"
 
@@ -123,6 +123,7 @@ export function SessionsList() {
   const [expanded, setExpanded] = useState(true)
   const [menuTarget, setMenuTarget] = useState<TerminalSession | null>(null)
   const [renaming, setRenaming] = useState<TerminalSession | null>(null)
+  const menuFocus = useMenuFocusHandoff()
 
   const active = activeSessionOf(sessions, activeId)
   const grouped = folders.length > 1
@@ -194,55 +195,72 @@ export function SessionsList() {
 
                       return (
                         <li key={session.id} className="group relative">
-                          {/* The close control sits over the row rather than
+                          {renaming?.id === session.id ? (
+                            <RenameRow
+                              name={label}
+                              indent={grouped ? 1 : 0}
+                              label="Session name"
+                              lead={<Icon className="size-3.5 shrink-0" />}
+                              onRename={async (name) => {
+                                rename(session.id, name)
+                                setRenaming(null)
+                                return null
+                              }}
+                              onCancel={() => setRenaming(null)}
+                            />
+                          ) : (
+                            <>
+                              {/* The close control sits over the row rather than
                               inside it: a button within a button is neither
                               valid markup nor reachable by keyboard. */}
-                          <SideRow
-                            active={
-                              !session.closed && session.id === active?.id
-                            }
-                            indent={grouped ? 1 : 0}
-                            // A closed row has no pane to select — clicking it
-                            // is asking for it back, which is the same act as
-                            // restarting a running one.
-                            onClick={() =>
-                              session.closed
-                                ? restart(session.id)
-                                : select(session.id)
-                            }
-                            onContextMenu={() => setMenuTarget(session)}
-                            className={cn(
-                              "pr-7",
-                              session.closed && "opacity-55"
-                            )}
-                          >
-                            <Icon className="size-3.5 shrink-0" />
-                            <span className="truncate">{label}</span>
-                            {(session.closed || session.exited) && (
-                              <span className="shrink-0 text-[0.65rem] text-muted-foreground">
-                                {session.closed ? "closed" : "ended"}
-                              </span>
-                            )}
-                          </SideRow>
-                          {/* Always "take this row out of where it is": off the
+                              <SideRow
+                                active={
+                                  !session.closed && session.id === active?.id
+                                }
+                                indent={grouped ? 1 : 0}
+                                // A closed row has no pane to select — clicking it
+                                // is asking for it back, which is the same act as
+                                // restarting a running one.
+                                onClick={() =>
+                                  session.closed
+                                    ? restart(session.id)
+                                    : select(session.id)
+                                }
+                                onContextMenu={() => setMenuTarget(session)}
+                                className={cn(
+                                  "pr-7",
+                                  session.closed && "opacity-55"
+                                )}
+                              >
+                                <Icon className="size-3.5 shrink-0" />
+                                <span className="truncate">{label}</span>
+                                {(session.closed || session.exited) && (
+                                  <span className="shrink-0 text-[0.65rem] text-muted-foreground">
+                                    {session.closed ? "closed" : "ended"}
+                                  </span>
+                                )}
+                              </SideRow>
+                              {/* Always "take this row out of where it is": off the
                               screen while it is running, off the list once it
                               already is. */}
-                          <button
-                            type="button"
-                            aria-label={
-                              session.closed
-                                ? `Forget ${label}`
-                                : `Close ${label}`
-                            }
-                            onClick={() =>
-                              session.closed
-                                ? forget(session.id)
-                                : close(session.id)
-                            }
-                            className="absolute inset-y-0 right-1 my-auto inline-flex size-4 items-center justify-center rounded-sm text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100"
-                          >
-                            <X className="size-3" />
-                          </button>
+                              <button
+                                type="button"
+                                aria-label={
+                                  session.closed
+                                    ? `Forget ${label}`
+                                    : `Close ${label}`
+                                }
+                                onClick={() =>
+                                  session.closed
+                                    ? forget(session.id)
+                                    : close(session.id)
+                                }
+                                className="absolute inset-y-0 right-1 my-auto inline-flex size-4 items-center justify-center rounded-sm text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100"
+                              >
+                                <X className="size-3" />
+                              </button>
+                            </>
+                          )}
                         </li>
                       )
                     })}
@@ -252,35 +270,26 @@ export function SessionsList() {
             })}
           </ContextMenuTrigger>
         )}
-
-        {renaming && (
-          <RenameDialog
-            title="Rename session"
-            label="Session name"
-            currentName={labelOf(
-              sessions.filter(
-                (session) => session.folderId === renaming.folderId
-              ),
-              renaming
-            )}
-            onRename={async (name) => {
-              rename(renaming.id, name)
-              return null
-            }}
-            onClose={() => setRenaming(null)}
-          />
-        )}
       </section>
 
       {menuTarget?.closed && (
-        <ContextMenuContent className="w-48">
+        <ContextMenuContent
+          className="w-48"
+          // Rename hands focus to the field it opens — see `useMenuFocusHandoff`.
+          finalFocus={menuFocus.finalFocus}
+        >
           <ContextMenuItem onClick={() => restart(menuTarget.id)}>
             <RotateCw />
             Reopen
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => setRenaming(menuTarget)}>
+          <ContextMenuItem
+            onClick={() => {
+              menuFocus.handOff()
+              setRenaming(menuTarget)
+            }}
+          >
             <Pencil />
-            Rename…
+            Rename
           </ContextMenuItem>
           <ContextMenuSeparator />
           {/*
@@ -301,10 +310,19 @@ export function SessionsList() {
       )}
 
       {menuTarget && !menuTarget.closed && (
-        <ContextMenuContent className="w-48">
-          <ContextMenuItem onClick={() => setRenaming(menuTarget)}>
+        <ContextMenuContent
+          className="w-48"
+          // Rename hands focus to the field it opens — see `useMenuFocusHandoff`.
+          finalFocus={menuFocus.finalFocus}
+        >
+          <ContextMenuItem
+            onClick={() => {
+              menuFocus.handOff()
+              setRenaming(menuTarget)
+            }}
+          >
             <Pencil />
-            Rename…
+            Rename
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() => {

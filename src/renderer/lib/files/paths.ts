@@ -25,6 +25,26 @@ export function nameOf(target: string): string {
 }
 
 /**
+ * How much of a file's name is the name rather than its extension:
+ * `report.txt` → 8.
+ *
+ * A length rather than the stem itself, because the one caller is a text
+ * selection — the rename field opens with `report` selected and `.txt` left
+ * alone, since retyping the extension is not what renaming a file usually
+ * means.
+ *
+ * `dot > 0`, the same rule the extension lookups elsewhere in `lib/files` use:
+ * the leading dot of `.gitignore` is part of the name, so a dotfile has no
+ * extension and the whole of it is selected. The *last* dot, so `archive.tar.gz`
+ * offers `archive.tar` — the alternative is deciding which compound suffixes are
+ * really one, and there is no end to that list.
+ */
+export function stemEnd(name: string): number {
+  const dot = name.lastIndexOf(".")
+  return dot > 0 ? dot : name.length
+}
+
+/**
  * The directory holding it: `/a/b/c.ts` → `/a/b`.
  *
  * A path with no separator left in it is its own parent rather than `""` —

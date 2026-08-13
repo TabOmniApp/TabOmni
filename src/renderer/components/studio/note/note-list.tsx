@@ -71,7 +71,7 @@ import {
 } from "@/lib/tree"
 import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
-import { RenameDialog } from "../db/rename-dialog"
+import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
 import { ManageTemplatesDialog } from "./manage-templates-dialog"
 
@@ -202,6 +202,7 @@ export function NoteList() {
   const [query, setQuery] = useState("")
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null)
   const [renaming, setRenaming] = useState<NoteRecord | null>(null)
+  const menuFocus = useMenuFocusHandoff()
   const [renamingFolder, setRenamingFolder] = useState<NoteFolder | null>(null)
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [dragItem, setDragItem] = useState<DragItem | null>(null)
@@ -337,23 +338,41 @@ export function NoteList() {
     return nodes.map((node) => {
       if (node.type === "item") {
         const note = node.item
+        const noteIcon = (
+          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+        )
         return (
           <li
             key={note.id}
             data-note-id={note.id}
-            draggable
+            draggable={renaming?.id !== note.id}
             onDragStart={onRowDragStart({ kind: "note", id: note.id })}
             onDragEnd={endDrag}
           >
-            <SideRow
-              indent={depth}
-              active={note.id === selectedId}
-              title={note.name}
-              onClick={() => select(note.id)}
-            >
-              <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate">{note.name}</span>
-            </SideRow>
+            {renaming?.id === note.id ? (
+              <RenameRow
+                name={note.name}
+                indent={depth}
+                label="Note name"
+                lead={noteIcon}
+                onRename={async (name) => {
+                  rename(note.id, name)
+                  setRenaming(null)
+                  return null
+                }}
+                onCancel={() => setRenaming(null)}
+              />
+            ) : (
+              <SideRow
+                indent={depth}
+                active={note.id === selectedId}
+                title={note.name}
+                onClick={() => select(note.id)}
+              >
+                {noteIcon}
+                <span className="truncate">{note.name}</span>
+              </SideRow>
+            )}
           </li>
         )
       }
@@ -364,7 +383,7 @@ export function NoteList() {
         <li
           key={folder.id}
           data-folder-id={folder.id}
-          draggable
+          draggable={renamingFolder?.id !== folder.id}
           onDragStart={onRowDragStart({ kind: "folder", id: folder.id })}
           onDragEnd={endDrag}
           onDragOver={onFolderDragOver(folder.id)}
@@ -375,28 +394,52 @@ export function NoteList() {
           }
           onDrop={onFolderDrop(folder.id)}
         >
-          <SideRow
-            indent={depth}
-            onClick={() => toggleCollapsed(folder.id)}
-            className={cn(
-              dropFolderId === folder.id &&
-                canDropOnFolder(folder.id) &&
-                "ring-1 ring-primary ring-inset"
-            )}
-          >
-            {isCollapsed ? (
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-            )}
-            <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{folder.name}</span>
-            {node.children.length > 0 && (
-              <span className="ml-auto shrink-0 text-[0.65rem] text-muted-foreground tabular-nums">
-                {node.children.length}
-              </span>
-            )}
-          </SideRow>
+          {renamingFolder?.id === folder.id ? (
+            <RenameRow
+              name={folder.name}
+              indent={depth}
+              label="Folder name"
+              lead={
+                <>
+                  {isCollapsed ? (
+                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                </>
+              }
+              onRename={async (name) => {
+                renameFolder(folder.id, name)
+                setRenamingFolder(null)
+                return null
+              }}
+              onCancel={() => setRenamingFolder(null)}
+            />
+          ) : (
+            <SideRow
+              indent={depth}
+              onClick={() => toggleCollapsed(folder.id)}
+              className={cn(
+                dropFolderId === folder.id &&
+                  canDropOnFolder(folder.id) &&
+                  "ring-1 ring-primary ring-inset"
+              )}
+            >
+              {isCollapsed ? (
+                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate">{folder.name}</span>
+              {node.children.length > 0 && (
+                <span className="ml-auto shrink-0 text-[0.65rem] text-muted-foreground tabular-nums">
+                  {node.children.length}
+                </span>
+              )}
+            </SideRow>
+          )}
           {!isCollapsed && node.children.length > 0 && (
             <ul>{renderNodes(node.children, depth + 1)}</ul>
           )}
@@ -522,32 +565,6 @@ export function NoteList() {
           />
         )}
 
-        {renaming && (
-          <RenameDialog
-            title="Rename note"
-            label="Note name"
-            currentName={renaming.name}
-            onRename={async (name) => {
-              rename(renaming.id, name.trim())
-              return null
-            }}
-            onClose={() => setRenaming(null)}
-          />
-        )}
-
-        {renamingFolder && (
-          <RenameDialog
-            title="Rename folder"
-            label="Folder name"
-            currentName={renamingFolder.name}
-            onRename={async (name) => {
-              renameFolder(renamingFolder.id, name.trim())
-              return null
-            }}
-            onClose={() => setRenamingFolder(null)}
-          />
-        )}
-
         <AlertDialog
           open={pendingDelete !== null}
           onOpenChange={(open) => {
@@ -596,12 +613,21 @@ export function NoteList() {
       </div>
 
       {menuTarget && (
-        <ContextMenuContent className="w-48">
+        <ContextMenuContent
+          className="w-48"
+          // Rename hands focus to the field it opens — see `useMenuFocusHandoff`.
+          finalFocus={menuFocus.finalFocus}
+        >
           {menuTarget.kind === "note" && (
             <>
-              <ContextMenuItem onClick={() => setRenaming(menuTarget.note)}>
+              <ContextMenuItem
+                onClick={() => {
+                  menuFocus.handOff()
+                  setRenaming(menuTarget.note)
+                }}
+              >
                 <Pencil />
-                Rename…
+                Rename
               </ContextMenuItem>
               <ContextMenuItem
                 onClick={() => void duplicate(menuTarget.note.id)}
@@ -672,10 +698,13 @@ export function NoteList() {
                 New folder
               </ContextMenuItem>
               <ContextMenuItem
-                onClick={() => setRenamingFolder(menuTarget.folder)}
+                onClick={() => {
+                  menuFocus.handOff()
+                  setRenamingFolder(menuTarget.folder)
+                }}
               >
                 <Pencil />
-                Rename…
+                Rename
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem

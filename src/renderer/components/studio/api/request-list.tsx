@@ -67,7 +67,7 @@ import {
 } from "@/lib/http/store"
 import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
-import { RenameDialog } from "../db/rename-dialog"
+import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
 
 /** A method's colour, so a list of them can be read down the left edge. */
@@ -79,6 +79,21 @@ export const METHOD_TONES: Record<string, string> = {
   DELETE: "text-destructive",
   HEAD: "text-muted-foreground",
   OPTIONS: "text-muted-foreground",
+}
+
+/** The method at the head of a row, drawn the same whether the rest of the row
+ * is the request's name or a field replacing it. */
+function MethodBadge({ method }: { method: string }) {
+  return (
+    <span
+      className={cn(
+        "w-10 shrink-0 font-mono text-[0.6rem] font-semibold",
+        METHOD_TONES[method] ?? "text-muted-foreground"
+      )}
+    >
+      {method}
+    </span>
+  )
 }
 
 /** What the context menu was opened on — the tree, a folder row, or the
@@ -121,6 +136,7 @@ export function RequestList() {
   const [query, setQuery] = useState("")
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null)
   const [renaming, setRenaming] = useState<HttpRequestRecord | null>(null)
+  const menuFocus = useMenuFocusHandoff()
   const [renamingFolder, setRenamingFolder] = useState<HttpFolder | null>(null)
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [dragItem, setDragItem] = useState<DragItem | null>(null)
@@ -267,26 +283,34 @@ export function RequestList() {
           <li
             key={request.id}
             data-request-id={request.id}
-            draggable
+            draggable={renaming?.id !== request.id}
             onDragStart={onRowDragStart({ kind: "request", id: request.id })}
             onDragEnd={endDrag}
           >
-            <SideRow
-              indent={depth}
-              active={request.id === selectedId}
-              title={`${request.method} ${request.url}`}
-              onClick={() => select(request.id)}
-            >
-              <span
-                className={cn(
-                  "w-10 shrink-0 font-mono text-[0.6rem] font-semibold",
-                  METHOD_TONES[request.method] ?? "text-muted-foreground"
-                )}
+            {renaming?.id === request.id ? (
+              <RenameRow
+                name={request.name}
+                indent={depth}
+                label="Request name"
+                lead={<MethodBadge method={request.method} />}
+                onRename={async (name) => {
+                  update(request.id, { name })
+                  setRenaming(null)
+                  return null
+                }}
+                onCancel={() => setRenaming(null)}
+              />
+            ) : (
+              <SideRow
+                indent={depth}
+                active={request.id === selectedId}
+                title={`${request.method} ${request.url}`}
+                onClick={() => select(request.id)}
               >
-                {request.method}
-              </span>
-              <span className="truncate">{request.name}</span>
-            </SideRow>
+                <MethodBadge method={request.method} />
+                <span className="truncate">{request.name}</span>
+              </SideRow>
+            )}
           </li>
         )
       }
@@ -297,7 +321,7 @@ export function RequestList() {
         <li
           key={folder.id}
           data-folder-id={folder.id}
-          draggable
+          draggable={renamingFolder?.id !== folder.id}
           onDragStart={onRowDragStart({ kind: "folder", id: folder.id })}
           onDragEnd={endDrag}
           onDragOver={onFolderDragOver(folder.id)}
@@ -308,29 +332,53 @@ export function RequestList() {
           }
           onDrop={onFolderDrop(folder.id)}
         >
-          <SideRow
-            indent={depth}
-            active={folder.id === selectedId}
-            onClick={() => toggleCollapsed(folder.id)}
-            className={cn(
-              dropFolderId === folder.id &&
-                canDropOnFolder(folder.id) &&
-                "ring-1 ring-primary ring-inset"
-            )}
-          >
-            {isCollapsed ? (
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-            )}
-            <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{folder.name}</span>
-            {node.children.length > 0 && (
-              <span className="ml-auto shrink-0 text-[0.65rem] text-muted-foreground tabular-nums">
-                {node.children.length}
-              </span>
-            )}
-          </SideRow>
+          {renamingFolder?.id === folder.id ? (
+            <RenameRow
+              name={folder.name}
+              indent={depth}
+              label="Folder name"
+              lead={
+                <>
+                  {isCollapsed ? (
+                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                </>
+              }
+              onRename={async (name) => {
+                renameFolder(folder.id, name)
+                setRenamingFolder(null)
+                return null
+              }}
+              onCancel={() => setRenamingFolder(null)}
+            />
+          ) : (
+            <SideRow
+              indent={depth}
+              active={folder.id === selectedId}
+              onClick={() => toggleCollapsed(folder.id)}
+              className={cn(
+                dropFolderId === folder.id &&
+                  canDropOnFolder(folder.id) &&
+                  "ring-1 ring-primary ring-inset"
+              )}
+            >
+              {isCollapsed ? (
+                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate">{folder.name}</span>
+              {node.children.length > 0 && (
+                <span className="ml-auto shrink-0 text-[0.65rem] text-muted-foreground tabular-nums">
+                  {node.children.length}
+                </span>
+              )}
+            </SideRow>
+          )}
           {!isCollapsed && node.children.length > 0 && (
             <ul>{renderNodes(node.children, depth + 1)}</ul>
           )}
@@ -451,32 +499,6 @@ export function RequestList() {
           </ContextMenuTrigger>
         </div>
 
-        {renaming && (
-          <RenameDialog
-            title="Rename request"
-            label="Request name"
-            currentName={renaming.name}
-            onRename={async (name) => {
-              update(renaming.id, { name: name.trim() })
-              return null
-            }}
-            onClose={() => setRenaming(null)}
-          />
-        )}
-
-        {renamingFolder && (
-          <RenameDialog
-            title="Rename folder"
-            label="Folder name"
-            currentName={renamingFolder.name}
-            onRename={async (name) => {
-              renameFolder(renamingFolder.id, name.trim())
-              return null
-            }}
-            onClose={() => setRenamingFolder(null)}
-          />
-        )}
-
         <AlertDialog
           open={pendingDelete !== null}
           onOpenChange={(open) => {
@@ -525,12 +547,21 @@ export function RequestList() {
       </div>
 
       {menuTarget && (
-        <ContextMenuContent className="w-48">
+        <ContextMenuContent
+          className="w-48"
+          // Rename hands focus to the field it opens — see `useMenuFocusHandoff`.
+          finalFocus={menuFocus.finalFocus}
+        >
           {menuTarget.kind === "request" && (
             <>
-              <ContextMenuItem onClick={() => setRenaming(menuTarget.request)}>
+              <ContextMenuItem
+                onClick={() => {
+                  menuFocus.handOff()
+                  setRenaming(menuTarget.request)
+                }}
+              >
                 <Pencil />
-                Rename…
+                Rename
               </ContextMenuItem>
               <ContextMenuItem onClick={() => duplicate(menuTarget.request.id)}>
                 <CopyPlus />
@@ -577,10 +608,13 @@ export function RequestList() {
                 New folder
               </ContextMenuItem>
               <ContextMenuItem
-                onClick={() => setRenamingFolder(menuTarget.folder)}
+                onClick={() => {
+                  menuFocus.handOff()
+                  setRenamingFolder(menuTarget.folder)
+                }}
               >
                 <Pencil />
-                Rename…
+                Rename
               </ContextMenuItem>
               <ContextMenuItem onClick={() => select(menuTarget.folder.id)}>
                 <Settings2 />

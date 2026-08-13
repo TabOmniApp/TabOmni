@@ -78,6 +78,12 @@ export function serveApp(root: string): void {
  * content type comes off the extension the same way it does for the renderer's
  * own assets above, so an `img` gets `image/png` without a second mime table
  * in this app.
+ *
+ * The `Range` header is passed along, and that is not incidental: a `<video>` in
+ * a note asks for the head of the file and then for the bytes around wherever
+ * the reader drags to, and `net.fetch` given a bare URL sends none of the
+ * request's own headers — so a player that could not seek was the failure to
+ * avoid here.
  */
 export function serveNoteFiles(pathOf: (fileName: string) => string): void {
   protocol.handle(NOTE_FILE_SCHEME, (request) => {
@@ -90,6 +96,11 @@ export function serveNoteFiles(pathOf: (fileName: string) => string): void {
     } catch {
       return new Response("Forbidden", { status: 403 })
     }
-    return net.fetch(pathToFileURL(target).toString())
+
+    const range = request.headers.get("range")
+    return net.fetch(
+      pathToFileURL(target).toString(),
+      range ? { headers: { range } } : undefined
+    )
   })
 }

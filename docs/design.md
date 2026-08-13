@@ -434,6 +434,53 @@ than leaving it to be discovered from Finder, which is what the `description` on
 `RenameDialog` is for. The rename directly under it in the same menu, of a file
 or directory _inside_ a folder, does touch the disk, and says which it is.
 
+**A row is renamed in the row**, not in a dialog, and that is true of every
+sidebar in the studio: a file and a directory here, a note and a note folder, a
+saved request and a request folder, a session. The field takes the row's place —
+same height, same inset, the same icon or method badge beside it — the way every
+editor's tree does it. `components/studio/rename-row.tsx` is the one of it;
+`SIDE_ROW_SHAPE` is exported from `side-row.tsx` so the field and the row it
+stands in for cannot drift apart, since a field cannot live inside the row's own
+`<button>`.
+
+Two renames are still dialogs, and both for the same reason — they are not a row's
+own name. A **workspace folder**'s is the studio's label rather than the directory
+on disk, and it needs somewhere to say so (above). A **table or column** is a
+schema change run against a server, not a label being corrected.
+
+The name opens **selected**, so the first keystroke replaces it. For a file that is
+the name without its extension — `report.txt` opens with `report` selected and
+`.txt` left alone, since an extension is a fact about the file rather than a name
+someone chose, and one typed over by accident is a file the editor opens as
+something else. `stemEnd` in `lib/files/paths.ts` is where the line falls, on the
+same `dot > 0` rule the extension lookups beside it use: a dotfile is all name, and
+`archive.tar.gz` offers `archive.tar`, because deciding which compound suffixes are
+really one is a list with no end. Everything else takes the whole name — a
+directory can have a dot in it and mean it, and a note or a request has no
+extension for this to be about.
+
+**Enter renames, Escape leaves it alone, clicking away renames**, and a rename that
+fails keeps the field open with the caret back in it and the reason under the row —
+the name is wrong and it is still the best thing to start from. Two details there
+are load-bearing rather than incidental, which is why `useMenuFocusHandoff` exists
+beside the row rather than being written out four times:
+
+- **The closing menu must not take the focus back.** Base UI returns focus to the
+  trigger when a menu closes, which would take it off the field the instant it
+  appeared — and the blur that followed would commit an unchanged name and close it
+  again, which reads as a feature that does not work. So the one item that means to
+  take focus says so, and the rest keep the default.
+- **The field is never disabled while the rename is in flight.** Disabling a
+  focused input blurs it, which arrives as a second commit; and re-enabling it a
+  render later means the refocus after a failure lands on an input that is still
+  disabled and does nothing.
+
+Which row is being renamed is the panel's own state, except in the Explorer, where
+it is in the files store: the row that draws the field is at the bottom of a
+recursion and the menu that starts it is at the top, so passing it down would give
+`Directory` a prop it does nothing with and re-render every row in every open
+directory. From the store, the two rows that change are the two that re-render.
+
 **`New session here…`** is on a folder as well, opening the Terminal panel's own
 picker with that folder chosen. It is the flow anyway — what somebody wants a
 terminal in is usually the repository they are reading — and since the Terminal
@@ -1394,16 +1441,24 @@ another origin, and `secure` so it is not mixed content on a page served over
 `app://`. The handler builds no path of its own: it hands the name to the store's
 own `noteFilePath`, which is the same check every other note file goes through.
 
-**A picture is what this is for**, and the honest limit is what happens to
-anything else. A file dropped into a note that is not one — a PDF, an archive —
-is still stored and still named in the note, but nothing will open it again from
-there: BlockNote's Download button hands the URL to `window.open`, and the
+**A picture, a clip and a sound all work; an attachment is where it stops.** A
+video or an audio file dropped in plays where it sits, in the editor and on the
+preview page both — the Preview section below is how, since a player needs a URL
+it can seek within rather than the inlined bytes an image gets. Anything with no
+player, a PDF or an archive, is still stored and still named in the note, and in
+the preview it is a link the browser opens if it can show the type and downloads
+if it cannot. What it is _not_ is openable from the
+editor: BlockNote's Download button hands the URL to `window.open`, and the
 studio denies a `window.open` in any scheme but `http`, `https` and `mailto`
-(`openExternal` in `main.ts`), which is a rule worth more than that button. The
-preview says the same thing in its own way, rendering the "missing" line rather
-than a `data:` link a browser would refuse to navigate to. Making those files
-openable is a save dialog in the main process, not a URL — so it is left undone
-rather than half-done.
+(`openExternal` in `main.ts`), which is a rule worth more than that button.
+Opening one from the studio is a save dialog in the main process, not a URL — so
+it is left undone rather than half-done.
+
+What every one of them shares is one table of types, in `shared/note-files.ts`,
+read in both directions: the renderer turns the browser's `file.type` into the
+extension it stores under, and the main process turns that extension back into
+what it serves. Two tables would eventually disagree, and a file stored as `.mp4`
+and served as `video/quicktime` is a player that shows nothing.
 
 An `![alt](https://…)` or an image copied out of a browser — which arrives as a
 `data:` URL on the clipboard's HTML — is left exactly as it is. Those are not the
@@ -1633,16 +1688,45 @@ whenever a drawing is saved and backfilled the first time a scene is read in a
 session — so opening the note once is what gives its diagrams to the preview. A
 drawing that has not been through that says so rather than leaving a gap.
 
-**A picture is inlined too**, as a `data:` URL, because the note holds it under
-`note-file://` — a scheme of this app's, which the browser reading this page has
-never heard of. That happens to the document rather than to the markup:
-`withNoteFileUrls` in `main/note-blocks.ts` swaps the URLs before the walk runs,
-so `note-html.ts` keeps one scheme list and sees a URL a browser can follow like
-any other. Only the pictures — a `data:` link to a PDF is a navigation Chromium
-refuses, so any other kind of file, and any picture whose file has gone, gets the
-same "missing" line as a file the page cannot reach. What is deliberately not in
-the ETag is the pictures: a note file is written once under a name nothing else
-uses, so a picture that changed is a document that changed.
+**The note's own files are resolved before the walk runs, not inside it.** They
+arrive under `note-file://`, a scheme of this app's that the browser reading this
+page has never heard of, and `withNoteFileUrls` in `main/note-blocks.ts` swaps
+every one of them in the document — so `note-html.ts` keeps a single scheme list
+and sees a URL a browser can follow like any other. `filesIn` in `preview.ts` is
+what each becomes, and the split is the one interesting decision on this page:
+
+- **A picture is inlined**, as a `data:` URL. It is small, and it is what keeps a
+  note of writing and screenshots a single file — saveable out of the browser,
+  readable by something that follows no links.
+- **Everything else is a link back to this server**, on a route of its own:
+  `/{token}/file/{name}`. A `data:` URL is the wrong shape for it — a video would
+  put tens of megabytes of base64 in the markup, `<video>` cannot seek inside
+  one, and a browser refuses to navigate to a `data:` document at all, which is
+  what once left a PDF in a note unopenable.
+
+`file` is safe as a reserved first segment because the branch it shadows is a
+note id, and a note id is a UUID. The token is checked before either branch, so a
+file is exactly as reachable as the note holding it and no more.
+
+**That route answers ranges**, and that is what makes a player a player rather
+than a play button: a `<video>` asks for the head of the file to find its
+duration and then for the bytes around wherever the reader drags to, and a server
+answering each of those with the whole file gives a clip that cannot be seeked.
+Single ranges only — `bytes=a-b` and the `bytes=-n` suffix form — because no media
+element sends a multipart range, and the whole file is a truthful answer to a
+header this does not parse. The bytes are sliced out of a buffer rather than
+streamed off disk, which is honest only because an upload is capped at 64 MB; a
+note that could hold an hour of video would want a read stream there.
+
+A video or audio block gets `controls preload="metadata"` and never `autoplay`:
+three clips in a note should cost three headers rather than three downloads, and
+nothing on a page someone opened to read should start making noise. A block the
+editor was told not to preview, and one whose file has gone, both fall back to
+the link — or, with nothing to link to, to the "missing" line.
+
+What is deliberately not in the ETag is the files: a note file is written once,
+under a name nothing else uses, so a picture that changed is a document that
+changed.
 
 ## The system bar
 

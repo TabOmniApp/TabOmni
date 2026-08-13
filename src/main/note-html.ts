@@ -347,7 +347,11 @@ function renderBlockSelf(block: NoteBlock, drawings: Drawings): string {
       return renderImage(block)
 
     case "video":
+      return renderMedia(block, "video")
+
     case "audio":
+      return renderMedia(block, "audio")
+
     case "file":
       return renderFile(block)
 
@@ -489,9 +493,40 @@ function renderImage(block: NoteBlock): string {
   )
 }
 
-/** A video, an audio clip or an attachment: a link rather than a player. The
- * file is wherever the note said it was, and a preview page that cannot reach
- * it should say what it was rather than show a broken control. */
+/**
+ * A video or an audio clip, as the control the browser already has.
+ *
+ * A player rather than the link this used to be, because the note is being read
+ * here: a clip explaining a bug is the note's content in the way a screenshot
+ * is, and "open this in a new tab" is a worse answer than a play button. What
+ * makes it possible is the file being served on a URL of its own
+ * (`preview.ts`'s file route) — a `data:` URL cannot be seeked within, so this
+ * is the one thing on the page that is not inlined.
+ *
+ * `preload="metadata"` and no `autoplay`: a note with three clips in it should
+ * cost three headers rather than three downloads, and nothing on a page someone
+ * opened to read should start making noise. A block the editor was told not to
+ * preview, and one whose file cannot be reached, both fall back to what
+ * `renderFile` does — the name, as a link or as the note saying it is gone.
+ */
+function renderMedia(block: NoteBlock, tag: "video" | "audio"): string {
+  const src = safeUrl(block.props?.url)
+  if (!src || block.props?.showPreview === false) return renderFile(block)
+
+  const caption = propString(block, "caption")
+  const figcaption = caption
+    ? `<figcaption>${escapeHtml(caption)}</figcaption>`
+    : ""
+  return (
+    `<figure class="media"><${tag} controls preload="metadata" src="${src}">` +
+    `</${tag}>${figcaption}</figure>`
+  )
+}
+
+/** An attachment: a link rather than a control, since a browser has nothing to
+ * play a `.zip` with. The file is wherever the note said it was, and a preview
+ * page that cannot reach it says what it was rather than showing a control that
+ * does nothing. */
 function renderFile(block: NoteBlock): string {
   const href = safeUrl(block.props?.url)
   const label =
@@ -613,6 +648,12 @@ th, td { border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: left
 thead th { background: var(--sunk); }
 figure { margin: 1.5rem 0; }
 figure img, figure svg { max-width: 100%; height: auto; }
+/* A player is a control rather than a picture, so it takes the measure it is
+   given instead of its own intrinsic size — a phone clip would otherwise be
+   drawn 320px wide in the middle of the page. The video's own box is dark
+   whatever the theme, because that is what letterboxing looks like. */
+.media video { width: 100%; max-height: 32rem; background: #000; border-radius: 0.5rem; }
+.media audio { width: 100%; }
 figcaption { color: var(--dim); font-size: 0.85rem; margin-top: 0.4rem; }
 .drawing { border: 1px solid var(--line); border-radius: 0.5rem; padding: 0.75rem; background: #ffffff; }
 .missing { color: var(--dim); font-size: 0.85rem; text-align: center; margin: 0; }

@@ -196,17 +196,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     folders: () => store.listNoteFolders(),
     body: (id) => store.readNote(id),
     drawingSvg: (id) => store.readDrawingSvg(id),
-    noteFileDataUrl: async (name) => {
-      // Only the pictures. A preview page is one file with nothing to fetch, so
-      // an image becomes a `data:` URL in it — and a `data:` link to anything
-      // else is a navigation the browser refuses, which is worse than the
-      // "missing" line `note-html.ts` renders for a file it cannot reach.
-      const mime = IMAGE_MIME_TYPES[path.extname(name).toLowerCase()]
-      if (!mime) return ""
-
-      const bytes = await store.readNoteFile(name)
-      return bytes ? `data:${mime};base64,${bytes.toString("base64")}` : ""
-    },
+    // Which of these two a file goes through — inlined into the page, or served
+    // on a request of its own — is the preview's decision, not this file's.
+    noteFile: (name) => store.readNoteFile(name),
+    hasNoteFile: (name) => store.hasNoteFile(name),
   })
 
   /** The account a Docker-managed database is created with. */

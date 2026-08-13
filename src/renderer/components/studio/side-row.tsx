@@ -21,6 +21,25 @@ import { cn } from "@/lib/utils"
  * that marks a row nobody can see has marked nothing. The tab strip has done
  * this since it was written; this is the same two lines for the other axis.
  */
+/**
+ * The shape of a row, apart from the button it usually is.
+ *
+ * Exported because a row is occasionally something else and still has to line up
+ * with its neighbours to the pixel: the Explorer swaps a row for a text field
+ * while it is being renamed, and an input inside a button is neither valid markup
+ * nor a field that can be typed in. So the geometry is named here — one height,
+ * one gap, one inset — rather than written out a second time where it would
+ * quietly drift.
+ */
+export const SIDE_ROW_SHAPE =
+  "flex h-6 w-full items-center gap-1.5 pr-2 text-xs"
+
+/** The inset for a row at `indent` levels deep. The base is built in, so a flat
+ * list and a nested one align. */
+export function sideRowIndent(indent: number): { paddingLeft: string } {
+  return { paddingLeft: `${indent * 0.75 + 0.75}rem` }
+}
+
 export function SideRow({
   active = false,
   indent = 0,
@@ -56,9 +75,10 @@ export function SideRow({
       onContextMenu={onContextMenu}
       title={title}
       aria-current={active ? "true" : undefined}
-      style={{ paddingLeft: `${indent * 0.75 + 0.75}rem` }}
+      style={sideRowIndent(indent)}
       className={cn(
-        "h-6 w-full justify-start gap-1.5 rounded-none pr-2 text-xs font-normal",
+        SIDE_ROW_SHAPE,
+        "justify-start rounded-none font-normal",
         active
           ? "bg-accent text-accent-foreground"
           : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",

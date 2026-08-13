@@ -1,4 +1,4 @@
-import { noteFileUrl } from "@shared/note-files"
+import { extensionForType, noteFileUrl } from "@shared/note-files"
 
 import { mapNoteFileNames, noteFileNamesIn, type NoteBlock } from "./blocks"
 
@@ -18,34 +18,6 @@ import { mapNoteFileNames, noteFileNamesIn, type NoteBlock } from "./blocks"
  */
 
 /**
- * The extension a picture is stored under, from the browser's own idea of the
- * file's type rather than its name.
- *
- * The type is what the panel filtered on and what the bytes actually are; a name
- * is a label, and a screenshot pasted out of the clipboard arrives with no name
- * at all. The name is only fallen back to for a type the browser could not
- * work out.
- */
-const EXTENSIONS: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-  "image/svg+xml": "svg",
-  "image/avif": "avif",
-  "image/bmp": "bmp",
-  "image/x-icon": "ico",
-  "image/tiff": "tiff",
-  "application/pdf": "pdf",
-  "video/mp4": "mp4",
-  "video/webm": "webm",
-  "audio/mpeg": "mp3",
-  "audio/wav": "wav",
-  "audio/ogg": "ogg",
-  "text/plain": "txt",
-}
-
-/**
  * The ceiling on a file dropped into a note.
  *
  * A note is a page of writing, and this copies whatever it is handed into the
@@ -60,10 +32,20 @@ export const MAX_UPLOAD_BYTES = 64 * 1024 * 1024
  * limit is stated once. */
 export const MAX_UPLOAD_LABEL = `${MAX_UPLOAD_BYTES / (1024 * 1024)} MB`
 
-/** The extension for a file, without the dot. Falls back to `bin`, which is a
- * name the store accepts and a type nothing will try to decode. */
+/**
+ * The extension a file is stored under, without the dot.
+ *
+ * From the browser's own idea of the type rather than the file's name: the type
+ * is what the panel filtered on and what the bytes actually are, while a name is
+ * a label — and a screenshot pasted out of the clipboard arrives with no name at
+ * all. The table is in `shared/note-files.ts` because the main process reads it
+ * the other way round to serve the file back.
+ *
+ * The name is fallen back to for a type this app has no entry for, and `bin`
+ * after that: a name the store accepts and a type nothing will try to decode.
+ */
 function extensionOf(file: File): string {
-  const known = EXTENSIONS[file.type.toLowerCase()]
+  const known = extensionForType(file.type)
   if (known) return known
 
   const suffix = file.name.split(".").pop() ?? ""

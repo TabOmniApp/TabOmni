@@ -45,7 +45,24 @@ const DRAWING_ID = "44444444-4444-4444-8444-444444444444"
  * resolving them before the page is rendered. */
 const PICTURE = "55555555-5555-4555-8555-555555555555.png"
 const MISSING_PICTURE = "66666666-6666-4666-8666-666666666666.png"
-const PICTURE_DATA_URL = "data:image/png;base64,iVBORw0KGgo="
+
+/** A clip and a sound, which are the files that are *not* inlined: a player
+ * cannot seek inside a `data:` URL, so these are served on a request of their
+ * own. And an attachment, which is a link for the same reason. */
+const CLIP = "77777777-7777-4777-8777-777777777777.mp4"
+const SOUND = "88888888-8888-4888-8888-888888888888.mp3"
+const ATTACHMENT = "99999999-9999-4999-8999-999999999999.pdf"
+
+/** The bytes behind each of them. Long enough that a range can be asked for a
+ * middle slice of one. */
+const FILES: Record<string, Buffer> = {
+  [PICTURE]: Buffer.from("iVBORw0KGgo=", "base64"),
+  [CLIP]: Buffer.from("a video, as far as this test is concerned"),
+  [SOUND]: Buffer.from("a sound"),
+  [ATTACHMENT]: Buffer.from("%PDF-1.7 not really"),
+}
+
+const PICTURE_DATA_URL = `data:image/png;base64,${FILES[PICTURE]!.toString("base64")}`
 
 /** A document with one of everything the page has a case for. */
 const BLOCKS: NoteBlock[] = [
@@ -148,6 +165,18 @@ const BLOCKS: NoteBlock[] = [
     type: "image",
     props: { url: noteFileUrl(MISSING_PICTURE), caption: "gone" },
   },
+  {
+    type: "video",
+    props: { url: noteFileUrl(CLIP), name: "demo.mp4", caption: "the repro" },
+  },
+  { type: "audio", props: { url: noteFileUrl(SOUND), name: "call.mp3" } },
+  // A video the editor was told not to preview, which is the one case that is
+  // still a link rather than a player.
+  {
+    type: "video",
+    props: { url: noteFileUrl(CLIP), name: "demo.mp4", showPreview: false },
+  },
+  { type: "file", props: { url: noteFileUrl(ATTACHMENT), name: "spec.pdf" } },
   // The one block whose text must not become markup: a note is the user's own
   // writing, and someone writing about HTML writes tags.
   {
@@ -197,7 +226,8 @@ const preview = new NotePreview({
     id === DRAWING_ID
       ? '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
       : "",
-  noteFileDataUrl: async (name) => (name === PICTURE ? PICTURE_DATA_URL : ""),
+  noteFile: async (name) => FILES[name] ?? null,
+  hasNoteFile: async (name) => name in FILES,
 })
 
 async function main() {
@@ -304,6 +334,114 @@ async function main() {
     !html.includes("note-file://") &&
       html.includes('<p class="missing">gone</p>'),
     html.match(/note-file:[^"]*/)?.[0]
+  )
+
+  section("video and audio")
+  const clipUrl = `/${token}/file/${CLIP}`
+  check(
+    "a clip is a player, not a link",
+    html.includes(
+      `<figure class="media"><video controls preload="metadata" src="${clipUrl}"></video>`
+    ),
+    html.match(/<figure class="media">[\s\S]*?<\/figure>/)?.[0]
+  )
+  check("with its caption", html.includes("<figcaption>the repro</figcaption>"))
+  check(
+    "a sound is one too",
+    html.includes(
+      `<audio controls preload="metadata" src="/${token}/file/${SOUND}">`
+    ),
+    html.match(/<audio[^>]*>/)?.[0]
+  )
+  check(
+    "neither is inlined — a data URL cannot be seeked within",
+    !html.includes("data:video") && !html.includes("data:audio")
+  )
+  check(
+    "one the editor was told not to preview stays a link",
+    html.includes(`<p class="file"><a href="${clipUrl}"`),
+    html.match(/<p class="file">[\s\S]*?<\/p>/)?.[0]
+  )
+  check(
+    "and an attachment is a link that now resolves",
+    html.includes(`<a href="/${token}/file/${ATTACHMENT}"`) &&
+      html.includes("spec.pdf"),
+    html.match(/<p class="file">[\s\S]*?<\/p>/g)?.join(" ")
+  )
+
+  section("the file route")
+  const file = await fetch(at(clipUrl))
+  check("serves the bytes", file.status === 200, file.status)
+  check(
+    "as what its extension says it is",
+    file.headers.get("content-type") === "video/mp4",
+    file.headers.get("content-type")
+  )
+  check(
+    "says it takes ranges",
+    file.headers.get("accept-ranges") === "bytes",
+    file.headers.get("accept-ranges")
+  )
+  check(
+    "and will not be sniffed into something else",
+    file.headers.get("x-content-type-options") === "nosniff"
+  )
+  check(
+    "the bytes are the file's own",
+    (await file.text()) === FILES[CLIP]!.toString(),
+    "the body was not the file"
+  )
+
+  const ranged = await fetch(at(clipUrl), { headers: { range: "bytes=2-6" } })
+  check("answers a range with 206", ranged.status === 206, ranged.status)
+  check(
+    "says which bytes those were",
+    ranged.headers.get("content-range") ===
+      `bytes 2-6/${FILES[CLIP]!.byteLength}`,
+    ranged.headers.get("content-range")
+  )
+  check(
+    "and sends exactly them — a player that cannot seek is the failure here",
+    (await ranged.text()) === FILES[CLIP]!.subarray(2, 7).toString(),
+    "the slice was not the bytes asked for"
+  )
+
+  const suffix = await fetch(at(clipUrl), { headers: { range: "bytes=-4" } })
+  check(
+    "a suffix range is the end of the file",
+    suffix.status === 206 &&
+      (await suffix.text()) === FILES[CLIP]!.subarray(-4).toString(),
+    suffix.headers.get("content-range")
+  )
+
+  const past = await fetch(at(clipUrl), { headers: { range: "bytes=9999-" } })
+  check(
+    "a range past the end is 416",
+    past.status === 416 &&
+      past.headers.get("content-range") ===
+        `bytes */${FILES[CLIP]!.byteLength}`,
+    past.status
+  )
+
+  const wrongTokenFile = await fetch(
+    at(`/${"0".repeat(token.length)}/file/${CLIP}`)
+  )
+  check(
+    "the token guards the files too",
+    wrongTokenFile.status === 404,
+    wrongTokenFile.status
+  )
+  const strayFile = await fetch(at(`/${token}/file/${MISSING_PICTURE}`))
+  check(
+    "a name nothing was written under is not found",
+    strayFile.status === 404,
+    strayFile.status
+  )
+  const fileTraversal = await fetch(at(`/${token}/file/..%2Fmanifest.json`))
+  check(
+    "and neither is a path out of the directory",
+    fileTraversal.status === 404,
+    fileTraversal.status
   )
 
   section("what the page will not do")
