@@ -126,12 +126,13 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   whether it is present. The picker is built from it so it cannot offer
   something that would not start.
 
-AI features (`ai-filter.ts`, `ai-import.ts`) both go through `askClaude` in
-`ai-cli.ts`, which shells out to `claude -p` — the CLI already installed for the
-Terminal panel — rather than an API needing a key. What comes back is treated as
-untrusted: every proposed filter condition is checked
-against the columns and operators that actually exist, so a hallucinated column
-yields one fewer condition rather than a broken clause.
+There are no `claude -p` one-shots left. The Data tab's AI filter and the API
+panel's AI import both went through an `askClaude` in `ai-cli.ts`, and all of
+it — the two features, that helper, and the `claudeExec`/`shellPath` lookups
+that only existed to spawn the CLI outside a pty — was removed rather than left
+hidden. The only thing that still runs `claude` is a Terminal session, which
+runs it interactively in a pty. Adding an AI feature back means adding that
+plumbing back, not finding it.
 
 ## Renderer (`src/renderer/`)
 

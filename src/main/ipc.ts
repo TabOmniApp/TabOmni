@@ -17,7 +17,6 @@ import {
   CLAUDE_PERMISSION_MODE_KEY,
   IPC,
   type AgentKind,
-  type AiFilterColumn,
   type ClaudeModel,
   type ClaudePermissionMode,
   type DatabaseConnectionInput,
@@ -38,10 +37,7 @@ import {
   agentCommandWith,
   agentInstallCommand,
   agentToolStatuses,
-  claudeExec,
 } from "./agent-tools"
-import { aiFilter } from "./ai-filter"
-import { aiImportApi } from "./ai-import"
 import { claudeSlashCommands } from "./claude-commands"
 import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
@@ -435,30 +431,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.setSetting, (_event, key: string, value: string) =>
     store.setSetting(key, value)
   )
-
-  ipcMain.handle(
-    IPC.aiFilter,
-    async (_event, request: string, columns: AiFilterColumn[]) =>
-      // No folder: a database belongs to the workspace rather than to any one
-      // repository, so there is no directory this is "about". The agent is
-      // given the columns it may name and nothing else.
-      aiFilter({
-        ...(await claudeExec()),
-        cwd: process.cwd(),
-        request,
-        columns,
-      })
-  )
-
-  ipcMain.handle(IPC.aiImportApi, async (_event, folderId: string) => {
-    const dir = await store.folderDirOf(folderId)
-    return aiImportApi({
-      ...(await claudeExec()),
-      // The agent reads the folder it was asked about, and runs there so it
-      // picks up that repository's own configuration.
-      cwd: dir ?? process.cwd(),
-    })
-  })
 
   ipcMain.handle(IPC.listDatabases, () => store.listDatabases())
 

@@ -4,7 +4,7 @@ import type {
   ClaudeModel,
   ClaudePermissionMode,
 } from "../shared/api"
-import { locate, quote, shellPath, withoutAgentSession } from "./shell-env"
+import { locate, quote } from "./shell-env"
 
 type AgentTool = {
   /**
@@ -35,50 +35,6 @@ const AGENT_TOOLS: Record<AgentKind, AgentTool> = {
 }
 
 const KINDS = Object.keys(AGENT_TOOLS) as AgentKind[]
-
-/**
- * The Claude Code CLI, for the callers that are not sessions: the `claude -p`
- * one-shots behind the AI filter, API import, commit message and review. Same
- * command a `claude` session runs, so a custom install is configured in one
- * place.
- */
-const CLAUDE_COMMAND = AGENT_TOOLS.claude.command as string
-
-/** Where it resolved to, looked up once: the lookup costs a login shell. */
-let claudePath: Promise<string | null> | null = null
-
-/**
- * The same CLI as something `execFile` can spawn.
- *
- * A session gets the bare name because a login shell resolves it; the `-p`
- * callers spawn it directly, where the only PATH is the one launchd handed the
- * app — `/usr/bin:/bin:/usr/sbin:/sbin`, which holds none of the places this
- * CLI installs itself into. That is `spawn claude ENOENT` from a packaged
- * build while the same command works in the user's terminal, so both halves of
- * the answer come from the shell: the path to spawn, and the PATH to spawn it
- * with.
- */
-export async function claudeExec(): Promise<{
-  command: string
-  env: NodeJS.ProcessEnv
-}> {
-  claudePath ??= locate(CLAUDE_COMMAND)
-  const [resolved, path] = await Promise.all([claudePath, shellPath()])
-
-  return {
-    // A failed lookup falls through to the bare name rather than throwing:
-    // the app's own PATH may still have it (a `bun dev` started from a
-    // terminal), and if it does not, the caller's "check that it is installed"
-    // is the message to end on anyway.
-    command: resolved ?? CLAUDE_COMMAND,
-    // Same inheritance as a pty's: the AI features shell out to this CLI too,
-    // and a `claude` that thinks it is nested behaves differently.
-    env: withoutAgentSession({
-      ...process.env,
-      ...(path ? { PATH: path } : {}),
-    }),
-  }
-}
 
 /** What a session of `kind` runs, or undefined for a plain shell. */
 export function agentCommand(kind: AgentKind): string | undefined {

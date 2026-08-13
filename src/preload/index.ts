@@ -53,9 +53,6 @@ const api: DesktopApi = {
 
   dockerStatus: () => ipcRenderer.invoke(IPC.dockerStatus),
 
-  aiFilter: (request, columns) =>
-    ipcRenderer.invoke(IPC.aiFilter, request, columns),
-  aiImportApi: (folderId) => ipcRenderer.invoke(IPC.aiImportApi, folderId),
   listDatabases: () => ipcRenderer.invoke(IPC.listDatabases),
   createDatabase: (input) => ipcRenderer.invoke(IPC.createDatabase, input),
   updateDatabase: (id, input) =>

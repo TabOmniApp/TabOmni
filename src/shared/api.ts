@@ -186,51 +186,6 @@ export type FilterSet = {
   conditions: Filter[]
 }
 
-/** Just enough of a column for the agent to filter on it. */
-export type AiFilterColumn = {
-  name: string
-  type: string
-}
-
-/** One endpoint the agent found while reading a folder's own source. */
-export type ApiImportRequest = {
-  name: string
-  method: string
-  url: string
-  /** Headers the source suggests — auth, content-type, anything read off the
-   * route/controller. Empty when nothing in the code implied one. */
-  headers?: { name: string; value: string }[]
-  /** A sample body, when the method takes one and the source implies a shape
-   * (a DTO, an interface, a schema). Left out for GET/HEAD and whenever
-   * nothing in the code suggests a shape. */
-  body?: string
-}
-
-/**
- * A resource/controller-shaped group of endpoints, found by reading the
- * folder rather than a fixed spec parser.
- *
- * Flat, not nested: `HttpFolder.parentId` could nest arbitrarily deep, but an
- * import groups by "what file/controller this came from", which has no
- * sub-groups of its own. Every folder built from this lands at the top level.
- */
-export type ApiImportFolder = {
-  name: string
-  requests: ApiImportRequest[]
-}
-
-/**
- * What "AI import" proposes after reading a folder. Nothing here is trusted
- * yet — see `aiImportApi`'s doc comment — and nothing is saved until the user
- * confirms in the dialog that shows this.
- */
-export type ApiImportResult = {
-  folders: ApiImportFolder[]
-  /** Endpoints found with no folder to place them in. Imported at the top
-   * level. */
-  requests: ApiImportRequest[]
-}
-
 /** What can be changed about an existing connection. */
 export type UpdateDatabaseInput = {
   name: string
@@ -1078,21 +1033,6 @@ export type DesktopApi = {
   dbReset: (databaseId: string) => Promise<void>
 
   /**
-   * Turns a sentence into filter conditions, using the Claude Code CLI on this
-   * machine. The result is a proposal: nothing is applied until the user says
-   * so, and anything naming a column that does not exist is dropped.
-   */
-  aiFilter: (request: string, columns: AiFilterColumn[]) => Promise<FilterSet>
-
-  /**
-   * Reads one folder's own source with the Claude Code CLI and proposes API
-   * folders/requests to import — routes, controllers, OpenAPI/Swagger specs,
-   * GraphQL schemas, whatever it finds. A proposal only: nothing is saved
-   * until the user confirms in the import dialog.
-   */
-  aiImportApi: (folderId: string) => Promise<ApiImportResult>
-
-  /**
    * The Explorer's reads and writes, over the workspace's own folders.
    *
    * Every one of these takes an absolute path and is refused unless that path
@@ -1412,8 +1352,6 @@ export const IPC = {
   clipboardImagePath: "files:clipboard-image-path",
   menuCommand: "menu:command",
   dockerStatus: "docker:status",
-  aiFilter: "db:ai-filter",
-  aiImportApi: "api:ai-import",
   listDatabases: "databases:list",
   createDatabase: "databases:create",
   updateDatabase: "databases:update",

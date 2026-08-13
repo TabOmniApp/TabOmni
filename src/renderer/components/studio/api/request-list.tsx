@@ -49,7 +49,6 @@ import {
   Plus,
   Send,
   Settings2,
-  Sparkles,
   Trash2,
 } from "lucide-react"
 
@@ -66,12 +65,10 @@ import {
   useApi,
   variablesFrom,
 } from "@/lib/http/store"
-import { useStudio } from "@/lib/store"
 import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
 import { RenameDialog } from "../db/rename-dialog"
 import { SideRow } from "../side-row"
-import { ApiImportDialog } from "./api-import-dialog"
 
 /** A method's colour, so a list of them can be read down the left edge. */
 export const METHOD_TONES: Record<string, string> = {
@@ -100,10 +97,6 @@ type PendingDelete =
 type DragItem = { kind: "request" | "folder"; id: string }
 
 export function RequestList() {
-  // Only the AI import needs this: it reads a repository's source, and there
-  // is nothing for it to read until the workspace has one. Named apart from
-  // the `folders` below, which are this panel's own groups of requests.
-  const workspaceFolders = useStudio((state) => state.folders)
   const requests = useApi((state) => state.requests)
   const selectedId = useApi((state) => state.selectedId)
   const refresh = useApi((state) => state.refresh)
@@ -126,11 +119,6 @@ export function RequestList() {
   const selectEnvironment = useApi((state) => state.selectEnvironment)
 
   const [query, setQuery] = useState("")
-  /** `undefined` when closed; otherwise the folder id to import into, or
-   * `null` for the top level. */
-  const [importTarget, setImportTarget] = useState<string | null | undefined>(
-    undefined
-  )
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null)
   const [renaming, setRenaming] = useState<HttpRequestRecord | null>(null)
   const [renamingFolder, setRenamingFolder] = useState<HttpFolder | null>(null)
@@ -401,14 +389,6 @@ export function RequestList() {
           <IconButton label="New request" onClick={() => void create()}>
             <Plus />
           </IconButton>
-
-          <IconButton
-            label="AI import"
-            disabled={workspaceFolders.length === 0}
-            onClick={() => setImportTarget(null)}
-          >
-            <Sparkles />
-          </IconButton>
         </PanelHeader>
 
         {hasAnything && (
@@ -542,13 +522,6 @@ export function RequestList() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-
-        {importTarget !== undefined && (
-          <ApiImportDialog
-            initialFolderId={importTarget}
-            onClose={() => setImportTarget(undefined)}
-          />
-        )}
       </div>
 
       {menuTarget && (
@@ -604,12 +577,6 @@ export function RequestList() {
                 New folder
               </ContextMenuItem>
               <ContextMenuItem
-                onClick={() => setImportTarget(menuTarget.folder.id)}
-              >
-                <Sparkles />
-                AI import…
-              </ContextMenuItem>
-              <ContextMenuItem
                 onClick={() => setRenamingFolder(menuTarget.folder)}
               >
                 <Pencil />
@@ -644,10 +611,6 @@ export function RequestList() {
               <ContextMenuItem onClick={() => createFolder(null)}>
                 <FolderPlus />
                 New folder
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => setImportTarget(null)}>
-                <Sparkles />
-                AI import…
               </ContextMenuItem>
             </>
           )}

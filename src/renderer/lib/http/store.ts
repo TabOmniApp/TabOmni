@@ -1,7 +1,6 @@
 import { create } from "zustand"
 
 import type {
-  ApiImportResult,
   HttpCookie,
   HttpEnvironment,
   HttpFolder,
@@ -123,15 +122,6 @@ type ApiState = {
   update: (id: string, patch: Partial<HttpRequestRecord>) => void
   remove: (id: string) => void
   duplicate: (id: string) => void
-  /** Turns an AI import's proposal into real folders/requests and saves them,
-   * nested under `targetFolderId` (top level when null — the default).
-   * Additive: a re-run appends rather than diffing against what is already
-   * there, same as `create`/`createFolder` never dedupe either — the import
-   * dialog is where the user sees the proposal and can back out first. */
-  importFromAi: (
-    result: ApiImportResult,
-    targetFolderId?: string | null
-  ) => void
 
   select: (id: string) => void
   close: (id: string) => void
@@ -238,26 +228,6 @@ function blankRequest(
     url: "{{baseUrl}}/",
     headers: [],
     body: "",
-    folderId,
-    createdAt: now(),
-    updatedAt: now(),
-  }
-}
-
-function blankImportedRequest(
-  item: ApiImportResult["requests"][number],
-  folderId: string | null
-): HttpRequestRecord {
-  return {
-    id: crypto.randomUUID(),
-    name: item.name,
-    method: item.method,
-    url: item.url,
-    headers: (item.headers ?? []).map((header) => ({
-      ...header,
-      enabled: true,
-    })),
-    body: item.body ?? "",
     folderId,
     createdAt: now(),
     updatedAt: now(),
@@ -734,34 +704,6 @@ export const useApi = create<ApiState>((set, get) => {
       const folder = blankFolder(parentId)
       commitFolders([...get().folders, folder])
       return folder
-    },
-
-    importFromAi(result, targetFolderId = null) {
-      const { folders, requests } = get()
-
-      const newFolders: HttpFolder[] = result.folders.map((group) => ({
-        id: crypto.randomUUID(),
-        name: group.name,
-        parentId: targetFolderId,
-        headers: [],
-        params: [],
-        createdAt: now(),
-        updatedAt: now(),
-      }))
-
-      const newRequests: HttpRequestRecord[] = [
-        ...result.folders.flatMap((group, index) =>
-          group.requests.map((item) =>
-            blankImportedRequest(item, newFolders[index]!.id)
-          )
-        ),
-        ...result.requests.map((item) =>
-          blankImportedRequest(item, targetFolderId)
-        ),
-      ]
-
-      if (newFolders.length > 0) commitFolders([...folders, ...newFolders])
-      if (newRequests.length > 0) commit([...requests, ...newRequests])
     },
 
     renameFolder(id, name) {

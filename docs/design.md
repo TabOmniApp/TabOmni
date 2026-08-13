@@ -579,9 +579,7 @@ selected, whichever panel it belonged to.
 
 Folder management lives here rather than in a menu above the rail because this
 is the only panel that works _in_ a folder: the databases, the saved requests
-and the captures are the workspace's, and the API panel's AI import is the one
-other thing that reads the list — it scans a repository for endpoints, which is
-reading a folder, not owning one. The File menu opens the same Add folder
+and the captures are the workspace's. The File menu opens the same Add folder
 dialog, so a rail with this section hidden is not a rail with no way to add
 one.
 

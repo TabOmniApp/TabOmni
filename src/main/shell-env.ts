@@ -91,44 +91,6 @@ export async function locate(command: string): Promise<string | null> {
   }
 }
 
-/**
- * PATH as the user's own shell has it, looked up once.
- *
- * `locate` is only half of finding a CLI: a tool installed by npm starts with
- * `#!/usr/bin/env node`, and the bare PATH a GUI app inherits has no node in it
- * either — so spawning a resolved path with the app's own environment fails one
- * step later, saying `env: node: No such file or directory` instead. Anything
- * the CLI shells out to has the same problem. Cached, because the lookup costs
- * a login shell.
- */
-let path: Promise<string | null> | null = null
-
-export function shellPath(): Promise<string | null> {
-  path ??= readShellPath()
-  return path
-}
-
-async function readShellPath(): Promise<string | null> {
-  // A Windows GUI app is launched with the user's real PATH already, so there
-  // is nothing here a shell would add.
-  if (process.platform === "win32") return process.env.PATH ?? null
-
-  const { file, args } = shell(`printf '%s\\n' "$PATH"`)
-  try {
-    const { stdout } = await run(file, args, {
-      timeout: 10_000,
-      maxBuffer: 1024 * 1024,
-      windowsHide: true,
-    })
-    // Interactive rc files can be chatty, and PATH holds no newline of its
-    // own — the same "last line is the answer" as `locate`.
-    const lines = stdout.split("\n").filter((line) => line.trim() !== "")
-    return lines.at(-1)?.trim() || null
-  } catch {
-    return null
-  }
-}
-
 /** Markers a running `claude` exports for whatever it spawns, none of which
  * any shell profile sets. */
 const AGENT_SESSION_VARS = new Set([

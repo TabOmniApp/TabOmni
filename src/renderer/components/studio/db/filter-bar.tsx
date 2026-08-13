@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
-import { Filter as FilterIcon, Plus, Sparkles, Trash2 } from "lucide-react"
+import { Filter as FilterIcon, Plus, Trash2 } from "lucide-react"
 
 import { takesValue } from "@/lib/db/engines/filters"
 import type {
@@ -100,10 +100,6 @@ export function FilterBar({
   const [applied, setApplied] = useState(filters)
   const [draft, setDraft] = useState(filters)
 
-  const [request, setRequest] = useState("")
-  const [asking, setAsking] = useState(false)
-  const [aiError, setAiError] = useState<string | null>(null)
-
   // The applied set changed underneath us: another table was opened, or it was
   // cleared from outside. Adjusted during render rather than in an effect,
   // which would show one frame of the old draft first.
@@ -129,31 +125,6 @@ export function FilterBar({
   function apply() {
     if (!dirty) return
     onChange(draft)
-  }
-
-  /** Asks the agent for conditions and puts them in the draft. */
-  async function describe() {
-    const question = request.trim()
-    if (!question) return
-
-    setAsking(true)
-    setAiError(null)
-    try {
-      const proposed = await window.desktop.aiFilter(
-        question,
-        columns.map((column) => ({ name: column.name, type: column.type }))
-      )
-      if (proposed.conditions.length === 0) {
-        setAiError("Nothing in that matched a column of this table.")
-        return
-      }
-      setDraft(proposed)
-      setRequest("")
-    } catch (problem) {
-      setAiError(problem instanceof Error ? problem.message : String(problem))
-    } finally {
-      setAsking(false)
-    }
   }
 
   function add() {
@@ -191,42 +162,6 @@ export function FilterBar({
         }
       />
       <PopoverContent align="start" className="w-[34rem] p-2">
-        {/* Proposes, never applies: what comes back lands in the draft below
-            for the user to read and correct, and Apply is still theirs to
-            press. A filter nobody checked is a wrong answer that looks like a
-            table. */}
-        <form
-          className="mb-2 flex items-center gap-1.5"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void describe()
-          }}
-        >
-          <Input
-            value={request}
-            onChange={(event) => setRequest(event.target.value)}
-            placeholder="Describe the rows you want…"
-            disabled={asking}
-            aria-label="Describe a filter"
-            className="h-7 flex-1 text-xs md:text-xs"
-          />
-          <Button
-            type="submit"
-            size="xs"
-            variant="outline"
-            disabled={asking || request.trim() === ""}
-          >
-            <Sparkles data-icon="inline-start" />
-            {asking ? "Asking…" : "Ask"}
-          </Button>
-        </form>
-
-        {aiError && (
-          <p className="mb-2 max-h-24 overflow-auto font-mono text-[0.65rem] whitespace-pre-wrap text-destructive">
-            {aiError}
-          </p>
-        )}
-
         {conditions.length === 0 ? (
           <p className="px-1 py-2 text-xs text-muted-foreground">
             No filters. Rows are read straight from the table.

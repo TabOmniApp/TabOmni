@@ -798,17 +798,6 @@ export class Store {
     return this.enqueue(async () => (await this.folderOf(folderId)).path)
   }
 
-  /** A folder's directory, or null when the workspace has no such folder. */
-  folderDirOf(folderId: string): Promise<string | null> {
-    return this.enqueue(async () => {
-      const { workspace } = await this.readManifest()
-      const folder = workspace.folders.find(
-        (candidate) => candidate.id === folderId
-      )
-      return folder?.path ?? null
-    })
-  }
-
   /** Where one of the workspace's Docker-managed databases keeps its data. */
   databaseDataDir(databaseId: string): string {
     return path.join(this.workspaceDir, DB_DIR, databaseId)
