@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 **TabOmni**: an Electron studio that collapses a project's tooling into one tab
-strip — its folders, its databases, its HTTP endpoints, its mail and webhooks,
-and the agent and shell sessions run against them. The premise is that those are four or
+strip — its folders, its databases, its HTTP endpoints, its mail, and the agent
+and shell sessions run against them. The premise is that those are four or
 five separate applications today, each with a window layout of its own, and
 that switching between them costs more than any one of them saves.
 
@@ -14,8 +14,8 @@ There is one **workspace**, holding any number of **folders** — directories
 already on this machine, worked on where they are. It is deliberately not
 switchable: someone working across a frontend and its API has two folders open
 at once, and a switch would take one of them, and every tab and session opened
-against it, off the screen. Databases, requests, cookies and the two capture
-servers belong to the workspace; what is per folder is what is genuinely per
+against it, off the screen. Databases, requests, cookies and the capture
+server belong to the workspace; what is per folder is what is genuinely per
 repository — a session's cwd and a branch name. Sign-in will bring a
 second workspace; until then `DEFAULT_WORKSPACE_ID` is a constant.
 
@@ -26,7 +26,7 @@ One package, no workspaces. `src/main/` is the Electron main process,
 
 `docs/design.md` is the design document for the app itself — how the
 workspace's data lives on disk, how the Claude Code chat view works, how the
-filter builder and the capture servers behave. Read it before changing those
+filter builder and the capture server behave. Read it before changing those
 areas.
 
 ## Commands
@@ -66,9 +66,9 @@ bun test/transcript.ts
 `test/inbox.ts` holds a real SMTP conversation over a real socket, rather than
 checking either parser against a hand-written sample. They cover the chat
 view's tail (a read landing mid-line, a multi-byte character split across two
-reads, a file truncated under the watcher) and the two capture servers (a
-`DATA` terminator straddling two packets, a dot-stuffed line, a boundary that
-also occurs inside a part's own content).
+reads, a file truncated under the watcher) and the SMTP sink (a `DATA`
+terminator straddling two packets, a dot-stuffed line, a boundary that also
+occurs inside a part's own content).
 
 ## The IPC contract — the one rule that matters
 
@@ -170,10 +170,10 @@ bring. See the Motion section of `docs/design.md`.
 `bunx shadcn@latest add dialog`. Vite's root is `src/renderer`, so `index.html`
 and `public/` are there too.
 
-The activity rail is Explorer, Database, API, Mail, Webhooks, Terminal and
+The activity rail is Explorer, Database, API, Mail, Terminal and
 Notes, and `components/studio/activity-bar.tsx` is the one list that says so.
-There is no git panel, no code search and no specs panel: all three were removed
-rather than left hidden, and the only thing git is still asked is each folder's
+There is no git panel, no code search, no specs panel and no webhook catcher:
+all four were removed rather than left hidden, and the only thing git is still asked is each folder's
 branch name, shown beside the folder in the Explorer and Terminal sidebars.
 
 Explorer is the workspace's folders as directories — expanded a level at a
@@ -222,21 +222,17 @@ captures belong to the workspace as a whole, so folder management sits beside
 the one thing it changes. The File menu's `add-folder` command opens the same
 dialog, which is what a rail with the Terminal section hidden falls back to.
 
-Mail and Webhooks are the other end of the API panel: two servers on loopback —
-an SMTP sink and a catch-all HTTP endpoint — catching the mail the project sends
-and the callbacks fired at it. `src/main/inbox.ts` is both servers and
-`src/main/mime.ts` the parser; neither pulls in a dependency, so the studio
-does not behave differently depending on what the user happened to have
-installed. A captured request can be replayed verbatim at any URL.
+Mail is the other end of the API panel: an SMTP sink on loopback catching the
+mail the project sends. `src/main/inbox.ts` is the server and `src/main/mime.ts`
+the parser; neither pulls in a dependency, so the studio does not behave
+differently depending on what the user happened to have installed.
 
-They are **two rail sections and one implementation**, which is why
-`components/studio/inbox/` and `lib/inbox/store.ts` are singular while the rail
-is not. The panels are separate because they replace separate applications and
-are read in different frames of mind; the servers, the capped list of captures
-and the file holding it are one of each, and two stores would mean two
-subscriptions to the same event. `CaptureList` and `ServerSettings` take a
-`server` prop; each panel starts, stops and clears only its own. See
-`docs/design.md`.
+A **Webhooks** panel — a catch-all HTTP endpoint, with replay — used to sit
+beside it, and was removed rather than hidden, as the git, code search and specs
+panels were. The `inbox` naming it shared is still here, along with a
+`kind: "mail"` on every capture and a one-time read of `inbox.json` in
+`Store.listInbox` that carries old mail into `mail.json`; the design doc says
+which of that is load-bearing before any of it is tidied away.
 
 ## Conventions
 

@@ -23,7 +23,6 @@ import {
   NotebookPen,
   Send,
   SquareTerminal,
-  Webhook,
 } from "lucide-react"
 
 import { unreadCount, useInbox } from "@/lib/inbox/store"
@@ -31,7 +30,7 @@ import { useRail } from "@/lib/rail"
 import type { Pane } from "@/lib/store"
 
 /**
- * Top-level areas of the workbench — the same seven as `Pane`, and now the same
+ * Top-level areas of the workbench — the same six as `Pane`, and now the same
  * type.
  *
  * They were two identical unions, which meant a section added to one list and
@@ -61,11 +60,6 @@ export type Section = Pane
  * ids in this list's own order, which puts them where they would have gone
  * anyway.
  *
- * Mail and Webhooks are two sections rather than one because they replace two
- * applications and are read in two different frames of mind — a rendered email
- * and a signature header have nothing to say to each other. What they share is
- * a pair of servers and a store, not a panel.
- *
  * `Icon` is typed by the one prop the rail passes rather than as a Lucide icon,
  * so a hand-drawn mark could sit beside the glyphs.
  */
@@ -78,7 +72,6 @@ export const SECTIONS: {
   { id: "database", label: "Database", Icon: Database },
   { id: "api", label: "API", Icon: Send },
   { id: "mail", label: "Mail", Icon: Mail },
-  { id: "webhook", label: "Webhooks", Icon: Webhook },
   { id: "terminal", label: "Terminal", Icon: SquareTerminal },
   { id: "note", label: "Notes", Icon: NotebookPen },
 ]
@@ -94,7 +87,6 @@ export const SECTION_ACCENT: Record<Section, string> = {
   database: "var(--section-database)",
   api: "var(--section-api)",
   mail: "var(--section-mail)",
-  webhook: "var(--section-webhook)",
   terminal: "var(--section-terminal)",
   note: "var(--section-note)",
 }
@@ -151,14 +143,10 @@ export function ActivityBar({
   section: Section
   onSelect: (section: Section) => void
 }) {
-  // The two sections with something to say while they are closed: mail and
-  // callbacks arrive whether or not anybody is looking, and an inbox nobody is
-  // told about is a log. Counted per section — a badge on Webhooks that
-  // included unread mail would send the user to the wrong panel.
-  const unreadMail = useInbox((state) => unreadCount(state.messages, "mail"))
-  const unreadHooks = useInbox((state) =>
-    unreadCount(state.messages, "webhook")
-  )
+  // The one section with something to say while it is closed: mail arrives
+  // whether or not anybody is looking, and an inbox nobody is told about is a
+  // log.
+  const unreadMail = useInbox((state) => unreadCount(state.messages))
 
   const order = useRail((state) => state.order)
   const hidden = useRail((state) => state.hidden)
@@ -236,8 +224,7 @@ export function ActivityBar({
         {visible.map((id, index) => {
           const { label, Icon } = SECTIONS.find((entry) => entry.id === id)!
           const active = section === id
-          const unread =
-            id === "mail" ? unreadMail : id === "webhook" ? unreadHooks : 0
+          const unread = id === "mail" ? unreadMail : 0
           return (
             <div
               key={id}

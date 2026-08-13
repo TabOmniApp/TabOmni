@@ -1,4 +1,3 @@
-import type { InboxKind } from "@shared/api"
 import { useExplorer, type OpenTab } from "./db/explorer-store"
 import type { Relation } from "./db/engines/types"
 import { useFiles } from "./files/store"
@@ -10,7 +9,7 @@ import { arrange, bare, kindOf, neighbour, PREFIX } from "./tabs"
 import { activeSessionOf, liveSessions, useTerminal } from "./terminal/store"
 
 /**
- * The seven panels' tabs, addressed alike.
+ * The six panels' tabs, addressed alike.
  *
  * The strip above the pane is one strip, so everything about a tab that is not
  * its label and its icon is the same question whichever panel it came from:
@@ -23,7 +22,7 @@ import { activeSessionOf, liveSessions, useTerminal } from "./terminal/store"
  *
  * So the panels keep what is genuinely theirs — a table's rows, a session's
  * pty, a note's editor — and the tab logic lives here, once. A panel joins the
- * strip by adding an entry to `PANELS`: seven small functions, none of which
+ * strip by adding an entry to `PANELS`: six small functions, none of which
  * mention any other panel.
  *
  * Ids here are the strip's prefixed ones (`db:public.users`) at the edges and
@@ -77,14 +76,10 @@ const apiActive = (state: ApiState): string | null =>
     ? state.selectedId
     : null
 
-const captureActive =
-  (server: InboxKind) =>
-  (state: InboxState): string | null => {
-    const selected = state.selectedId[server]
-    return selected && state.openIds[server].includes(selected)
-      ? selected
-      : null
-  }
+const mailActive = (state: InboxState): string | null =>
+  state.selectedId && state.openIds.includes(state.selectedId)
+    ? state.selectedId
+    : null
 
 const noteActive = (state: NoteState): string | null =>
   state.selectedId && state.openIds.includes(state.selectedId)
@@ -95,20 +90,6 @@ const noteActive = (state: NoteState): string | null =>
 // live session, and the strip has to mark the same one it draws.
 const terminalActive = (state: TerminalState): string | null =>
   activeSessionOf(state.sessions, state.activeId)?.id ?? null
-
-/** Mail's and Webhooks' tabs are one store's, reached by kind, so their entry
- * is written once and built twice. */
-function captureTabs(server: InboxKind): PanelTabs {
-  return {
-    open: () => useInbox.getState().openIds[server],
-    active: () => captureActive(server)(useInbox.getState()),
-    select: (id) => useInbox.getState().select(server, id),
-    close: (id) => useInbox.getState().close(server, id),
-    closeOthers: (id) => useInbox.getState().closeOthers(server, id),
-    closeAll: () => useInbox.getState().closeAll(server),
-    reorder: (ids) => useInbox.getState().reorder(server, ids),
-  }
-}
 
 const PANELS: Record<Pane, PanelTabs> = {
   files: {
@@ -148,8 +129,15 @@ const PANELS: Record<Pane, PanelTabs> = {
     closeAll: () => useApi.getState().closeAll(),
     reorder: (ids) => useApi.getState().reorder(ids),
   },
-  mail: captureTabs("mail"),
-  webhook: captureTabs("webhook"),
+  mail: {
+    open: () => useInbox.getState().openIds,
+    active: () => mailActive(useInbox.getState()),
+    select: (id) => useInbox.getState().select(id),
+    close: (id) => useInbox.getState().close(id),
+    closeOthers: (id) => useInbox.getState().closeOthers(id),
+    closeAll: () => useInbox.getState().closeAll(),
+    reorder: (ids) => useInbox.getState().reorder(ids),
+  },
   terminal: {
     // A closed session is a row in the Terminal sidebar and nothing else: it
     // has no pty, so there is no pane for a tab here to switch to.
@@ -297,8 +285,7 @@ export function useActiveTabId(pane: Pane): string | null {
     files: useFiles(filesActive),
     database: useExplorer(dbActive),
     api: useApi(apiActive),
-    mail: useInbox(captureActive("mail")),
-    webhook: useInbox(captureActive("webhook")),
+    mail: useInbox(mailActive),
     terminal: useTerminal(terminalActive),
     note: useNotes(noteActive),
   }[pane]
@@ -314,14 +301,13 @@ export function useHasOpenTabs(): boolean {
   const files = useFiles((state) => state.openIds.length > 0)
   const database = useExplorer((state) => dbOpen(state).length > 0)
   const api = useApi((state) => state.openIds.length > 0)
-  const mail = useInbox((state) => state.openIds.mail.length > 0)
-  const webhook = useInbox((state) => state.openIds.webhook.length > 0)
+  const mail = useInbox((state) => state.openIds.length > 0)
   const terminal = useTerminal(
     (state) => liveSessions(state.sessions).length > 0
   )
   const note = useNotes((state) => state.openIds.length > 0)
 
-  return files || database || api || mail || webhook || terminal || note
+  return files || database || api || mail || terminal || note
 }
 
 /** A relation tab is addressed by the relation it shows; a query tab by its

@@ -52,9 +52,7 @@ function paneView(pane: Pane) {
     case "api":
       return <ApiWorkspace />
     case "mail":
-      return <CaptureWorkspace server="mail" />
-    case "webhook":
-      return <CaptureWorkspace server="webhook" />
+      return <CaptureWorkspace />
     case "note":
       return <NoteWorkspace />
     case "terminal":
@@ -146,7 +144,7 @@ function Workbench() {
    * stack below. */
   const [mounted, setMounted] = useState<Pane[]>([])
 
-  // The panel on screen — or none, which `NothingOpen` answers for all seven.
+  // The panel on screen — or none, which `NothingOpen` answers for all six.
   //
   // A panel is drawn only when it has a tab to draw: each one used to answer
   // "nothing selected" for itself, which meant whoever opened the app to read
@@ -211,9 +209,7 @@ function Workbench() {
             ) : section === "api" ? (
               <RequestList />
             ) : section === "mail" ? (
-              <CaptureList server="mail" />
-            ) : section === "webhook" ? (
-              <CaptureList server="webhook" />
+              <CaptureList />
             ) : section === "note" ? (
               <NoteList />
             ) : (

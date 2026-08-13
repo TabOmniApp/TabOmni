@@ -112,12 +112,7 @@
   --section-files: oklch(0.56 0.13 200);
   --section-database: oklch(0.55 0.17 250);
   --section-api: oklch(0.58 0.21 320);
-  /* Webhooks is the awkward one: it is placed by *rail adjacency* rather than
-       by distance on the wheel, which is what the eye actually compares. At
-       350 it sits 125 from Mail above it and 190 from Terminal below; its
-       nearest hue overall is API at 320, which is two rows away. */
   --section-mail: oklch(0.6 0.16 115);
-  --section-webhook: oklch(0.58 0.2 350);
   --section-terminal: oklch(0.56 0.14 160);
   /* Notes takes the amber nobody else had: its nearest neighbour is Mail at
        115, and it sits below Terminal on the rail, 95 away. */
@@ -175,7 +170,6 @@
   --section-database: oklch(0.7 0.15 250);
   --section-api: oklch(0.72 0.18 320);
   --section-mail: oklch(0.76 0.16 115);
-  --section-webhook: oklch(0.72 0.18 350);
   --section-terminal: oklch(0.74 0.14 160);
   --section-note: oklch(0.76 0.14 65);
 

@@ -9,7 +9,6 @@ import {
   Plus,
   Settings2,
   Terminal,
-  Webhook,
 } from "lucide-react"
 
 import { useExplorer, type OpenTab } from "@/lib/db/explorer-store"
@@ -17,7 +16,7 @@ import { isDirty, useFiles } from "@/lib/files/store"
 import { iconFor } from "@/lib/files/icons"
 import { isImage } from "@/lib/files/viewers"
 import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
-import { messagesOf, SETTINGS_TAB, useInbox } from "@/lib/inbox/store"
+import { SETTINGS_TAB, useInbox } from "@/lib/inbox/store"
 import { useNotes } from "@/lib/note/store"
 import {
   closeAllTabs,
@@ -79,45 +78,29 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
   const inboxMessages = useInbox((state) => state.messages)
   const inboxOpenIds = useInbox((state) => state.openIds)
 
-  /** Mail's and Webhooks' tabs are built the same way from the same store, so
-   * the strip asks for them by kind rather than spelling the run out twice. */
-  const captureItems = (server: "mail" | "webhook"): TabStripItem[] =>
-    inboxOpenIds[server].flatMap((id) => {
-      if (id === SETTINGS_TAB[server]) {
-        return [
-          {
-            id: PREFIX[server] + id,
-            label: server === "mail" ? "Mail settings" : "Webhook settings",
-            icon: (
-              <Settings2 className="size-3.5 shrink-0 text-muted-foreground" />
-            ),
-          },
-        ]
-      }
-      const message = messagesOf(inboxMessages, server).find(
-        (candidate) => candidate.id === id
-      )
-      if (!message) return []
+  const captureItems: TabStripItem[] = inboxOpenIds.flatMap((id) => {
+    if (id === SETTINGS_TAB) {
       return [
         {
-          id: PREFIX[server] + id,
-          label: message.summary,
-          title:
-            message.kind === "mail"
-              ? `${message.mail.from} \u2192 ${message.mail.to.join(", ")}`
-              : message.webhook.path,
-          copyText:
-            message.kind === "webhook" ? message.webhook.path : undefined,
-          copyLabel: message.kind === "webhook" ? "Copy path" : undefined,
-          icon:
-            message.kind === "mail" ? (
-              <Mail className="size-3.5 shrink-0" />
-            ) : (
-              <Webhook className="size-3.5 shrink-0" />
-            ),
+          id: PREFIX.mail + id,
+          label: "Mail settings",
+          icon: (
+            <Settings2 className="size-3.5 shrink-0 text-muted-foreground" />
+          ),
         },
       ]
-    })
+    }
+    const message = inboxMessages.find((candidate) => candidate.id === id)
+    if (!message) return []
+    return [
+      {
+        id: PREFIX.mail + id,
+        label: message.summary,
+        title: `${message.mail.from} \u2192 ${message.mail.to.join(", ")}`,
+        icon: <Mail className="size-3.5 shrink-0" />,
+      },
+    ]
+  })
 
   const notes = useNotes((state) => state.notes)
   const noteOpenIds = useNotes((state) => state.openIds)
@@ -200,8 +183,7 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
         },
       ]
     }),
-    ...captureItems("mail"),
-    ...captureItems("webhook"),
+    ...captureItems,
     ...sessions.map((session, index) => {
       const { icon: Icon } = SESSION_TYPES[session.kind]
       const label = sessionTitle(sessions, index)

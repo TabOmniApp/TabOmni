@@ -135,15 +135,13 @@ const api: DesktopApi = {
   writeDrawingSvg: (id, svg) =>
     ipcRenderer.invoke(IPC.writeDrawingSvg, id, svg),
 
-  inboxStart: (server, port) =>
-    ipcRenderer.invoke(IPC.inboxStart, server, port),
-  inboxStop: (server) => ipcRenderer.invoke(IPC.inboxStop, server),
+  inboxStart: (port) => ipcRenderer.invoke(IPC.inboxStart, port),
+  inboxStop: () => ipcRenderer.invoke(IPC.inboxStop),
   inboxStatus: () => ipcRenderer.invoke(IPC.inboxStatus),
   inboxMessages: () => ipcRenderer.invoke(IPC.inboxMessages),
   inboxMarkRead: (id) => ipcRenderer.invoke(IPC.inboxMarkRead, id),
   inboxDelete: (id) => ipcRenderer.invoke(IPC.inboxDelete, id),
-  inboxClear: (server) => ipcRenderer.invoke(IPC.inboxClear, server),
-  inboxReplay: (id, url) => ipcRenderer.invoke(IPC.inboxReplay, id, url),
+  inboxClear: () => ipcRenderer.invoke(IPC.inboxClear),
 
   onInboxMessage: (listener) =>
     subscribe<InboxEvent>(IPC.inboxMessage, listener),

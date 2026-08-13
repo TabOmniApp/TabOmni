@@ -824,16 +824,6 @@ export type NoteBlock = {
 }
 
 /**
- * Which of the Inbox panel's two servers caught something.
- *
- * One panel rather than two because they are the same job seen from both
- * sides: what the code sends out that never leaves the machine (mail), and
- * what someone else sends in that has nowhere to arrive (a webhook). The API
- * panel makes requests; this catches them.
- */
-export type InboxKind = "mail" | "webhook"
-
-/**
  * One file carried by a captured mail.
  *
  * `dataUrl` is the bytes, and null for anything past the inline ceiling — a
@@ -872,45 +862,28 @@ export type InboxMail = {
   raw: string
 }
 
-export type InboxWebhook = {
-  method: string
-  /** Path and query string exactly as requested — the panel is a catch-all,
-   * so the path is data rather than routing. */
-  path: string
-  query: { name: string; value: string }[]
-  headers: { name: string; value: string }[]
-  /** The payload as text, or empty when it was bytes; `isText` says which. */
-  body: string
-  isText: boolean
-  /** Bytes received, whether or not they were kept as text. */
-  size: number
-}
-
-type InboxCapture = {
+/**
+ * One mail the SMTP sink caught.
+ *
+ * `kind` survives the Webhooks panel it was a union with: the captures on disk
+ * predate that removal, and the field is what tells one of those apart from a
+ * mail without inspecting its shape. Nothing else discriminates on it.
+ */
+export type InboxMessage = {
   id: string
   /** ISO-8601, so the renderer decides how to say it. */
   receivedAt: string
-  /** The one line the list shows: a subject, or a method and path. */
+  /** The one line the list shows. */
   summary: string
   /** Cleared when the message is opened. What makes the panel an inbox rather
    * than a log. */
   unread: boolean
+  kind: "mail"
+  mail: InboxMail
 }
 
 /**
- * One thing either server caught.
- *
- * A union on `kind` rather than two nullable fields, so a mail view cannot be
- * handed a webhook by a component that forgot to check.
- */
-export type InboxMessage = InboxCapture &
-  (
-    | { kind: "mail"; mail: InboxMail }
-    | { kind: "webhook"; webhook: InboxWebhook }
-  )
-
-/**
- * Whether one of the two servers is up.
+ * Whether the SMTP sink is up.
  *
  * `error` is almost always a port already in use — the one failure this panel
  * has to be able to say out loud, since the fix is to pick another number
@@ -922,33 +895,19 @@ export type InboxServerStatus = {
   error: string | null
 }
 
-/**
- * Both servers at once.
- *
- * Reported together even though the Mail and Webhooks panels are separate and
- * each starts its own: they are two entries in one map on one manager, and a
- * panel handed only its own half would have no way to notice the other going
- * down.
- */
-export type InboxStatus = Record<InboxKind, InboxServerStatus>
-
-/** Where the two servers' ports and auto-start choices are kept — see
+/** Where the sink's port and auto-start choice are kept — see
  * `CLAUDE_MODEL_KEY` for why this is shared by both sides rather than a key
  * spelled out twice. */
 export const INBOX_CONFIG_KEY = "inbox.config"
 
-/** Mailpit's SMTP port, and one beside it for the webhook catcher. What each
- * panel's settings tab starts from. */
-export const INBOX_DEFAULT_PORTS: Record<InboxKind, number> = {
-  mail: 1025,
-  webhook: 1026,
-}
+/** Mailpit's SMTP port. What the panel's settings tab starts from. */
+export const INBOX_DEFAULT_PORT = 1025
 
-/** A message either server has just caught. */
+/** A message the sink has just caught. */
 export type InboxEvent = { message: InboxMessage }
 
-/** Sent whenever either server starts, stops, or falls over on its own. */
-export type InboxStatusEvent = { status: InboxStatus }
+/** Sent whenever the sink starts, stops, or falls over on its own. */
+export type InboxStatusEvent = { status: InboxServerStatus }
 
 /**
  * The machine's headroom, and this app's share of it, over the interval since
@@ -1303,47 +1262,26 @@ export type DesktopApi = {
   httpSend: (input: HttpSendInput) => Promise<HttpResponseResult>
 
   /**
-   * Binds one of the two capture servers and resolves with the state of both.
+   * Binds the SMTP sink and resolves with its state.
    *
-   * One at a time, because Mail and Webhooks are separate panels with separate
-   * switches: the webhook catcher is worth leaving up all day, and the SMTP
-   * sink is generally only wanted while mail is being worked on. Never
-   * rejects — a port already in use comes back as `error` on that server,
-   * since the fix is to pick another number rather than to try again.
+   * Never rejects — a port already in use comes back as `error`, since the fix
+   * is to pick another number rather than to try again.
    */
-  inboxStart: (server: InboxKind, port: number) => Promise<InboxStatus>
-  /** Closes one, keeping what it caught. */
-  inboxStop: (server: InboxKind) => Promise<InboxStatus>
-  inboxStatus: () => Promise<InboxStatus>
+  inboxStart: (port: number) => Promise<InboxServerStatus>
+  /** Closes it, keeping what it caught. */
+  inboxStop: () => Promise<InboxServerStatus>
+  inboxStatus: () => Promise<InboxServerStatus>
 
-  /**
-   * Everything both servers have caught, newest first.
-   *
-   * Both kinds in one list, filtered by whichever panel is asking: they share
-   * a file and a cap, and two calls that each had to be told about the other's
-   * half would be one more thing to keep in step.
-   */
+  /** Everything the sink has caught, newest first. */
   inboxMessages: () => Promise<InboxMessage[]>
   /** Marks one message as having been opened. */
   inboxMarkRead: (id: string) => Promise<void>
   inboxDelete: (id: string) => Promise<void>
-  /** Deletes one kind's captures, leaving the other panel's alone. */
-  inboxClear: (server: InboxKind) => Promise<void>
-  /**
-   * Sends a captured webhook on to `url`, verbatim — same method, body and
-   * headers, minus the hop-by-hop ones the new connection has to write for
-   * itself.
-   *
-   * The point of catching one at all: a payment provider fires an event once,
-   * and the handler that mishandled it can be run against that exact request
-   * as many times as it takes. Rejects for a mail, which is not a request.
-   */
-  inboxReplay: (id: string, url: string) => Promise<HttpResponseResult>
+  inboxClear: () => Promise<void>
 
-  /** Subscribes to captures from either server. Returns an unsubscribe
-   * function. */
+  /** Subscribes to captures. Returns an unsubscribe function. */
   onInboxMessage: (listener: (event: InboxEvent) => void) => () => void
-  /** Subscribes to either server going up or down. */
+  /** Subscribes to the sink going up or down. */
   onInboxStatus: (listener: (event: InboxStatusEvent) => void) => () => void
 
   /** Runs a command in one of the folders; resolves with its process id. */
@@ -1535,7 +1473,6 @@ export const IPC = {
   inboxMarkRead: "inbox:mark-read",
   inboxDelete: "inbox:delete",
   inboxClear: "inbox:clear",
-  inboxReplay: "inbox:replay",
   inboxMessage: "inbox:message",
   inboxStatusChanged: "inbox:status-changed",
   startProcess: "process:start",

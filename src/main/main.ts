@@ -241,7 +241,7 @@ app.on("before-quit", (event) => {
         terminals.killAll(),
         docker.stopAll(),
         sqlConnections.closeAll(),
-        inbox.stopAll(),
+        inbox.stop(),
         preview.stop(),
       ]),
       // A wedged daemon must not leave the app unquittable.

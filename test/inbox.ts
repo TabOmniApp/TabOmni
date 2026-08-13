@@ -1,7 +1,6 @@
 /**
- * The Inbox panel's two servers, spoken to the way a mailer and a webhook
- * sender speak to them: a real SMTP conversation over a real socket, and a
- * real HTTP request.
+ * The Mail panel's SMTP sink, spoken to the way a mailer speaks to it: a real
+ * conversation over a real socket.
  *
  * Nothing here checks the parser against a message this file made up and then
  * handed straight to `parseMail`. The failures worth catching live in the
@@ -13,13 +12,12 @@
 import { connect } from "node:net"
 
 import type { InboxMessage } from "../src/shared/api"
-import { InboxServers, replayInput } from "../src/main/inbox"
+import { InboxServers } from "../src/main/inbox"
 import { decodeWords, parseMail, parseParameters } from "../src/main/mime"
 import { check, finish, section } from "./harness"
 
-/** Two ports well clear of anything a development machine runs. */
+/** A port well clear of anything a development machine runs. */
 const MAIL_PORT = 34_025
-const WEBHOOK_PORT = 34_026
 
 /** A capture is filed after the wire has been answered, so a test that asked
  * for one has to wait for it rather than read straight after the response. */
@@ -98,25 +96,18 @@ async function main() {
     }
   )
 
-  await inbox.start("mail", MAIL_PORT)
-  const status = await inbox.start("webhook", WEBHOOK_PORT)
+  const status = await inbox.start(MAIL_PORT)
 
-  section("servers")
-  check("SMTP is listening", status.mail.listening, status.mail.error)
-  check(
-    "the webhook catcher is listening",
-    status.webhook.listening,
-    status.webhook.error
-  )
+  section("server")
+  check("SMTP is listening", status.listening, status.error)
 
-  if (!status.mail.listening || !status.webhook.listening) {
-    await inbox.stopAll()
+  if (!status.listening) {
+    await inbox.stop()
     finish()
     return
   }
 
   await mailSession(captured)
-  await webhookSession(captured)
   await ports(inbox)
 
   section("storage")
@@ -125,22 +116,14 @@ async function main() {
     captured: captured.length,
   })
 
-  // Two panels with one Clear between them would be a button that deleted
-  // something the user could not see.
-  await inbox.clear("mail")
-  const left = await inbox.messages()
+  await inbox.clear()
   check(
-    "clearing Mail leaves the captured requests alone",
-    left.length > 0 && left.every((message) => message.kind === "webhook"),
-    left.map((message) => message.kind)
-  )
-  check(
-    "and the file is rewritten without them",
-    saved.every((message) => message.kind === "webhook"),
-    saved.map((message) => message.kind)
+    "clearing empties the list and rewrites the file",
+    (await inbox.messages()).length === 0 && saved.length === 0,
+    saved.length
   )
 
-  await inbox.stopAll()
+  await inbox.stop()
 
   units()
   finish()
@@ -355,128 +338,35 @@ function decode(reply: string): string {
   return Buffer.from(reply.slice(4).trim(), "base64").toString("utf8")
 }
 
-async function webhookSession(captured: InboxMessage[]) {
-  section("webhook")
-
-  const response = await fetch(
-    `http://127.0.0.1:${WEBHOOK_PORT}/hooks/stripe?id=evt_1&retry=2`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "stripe-signature": "t=1,v1=deadbeef",
-      },
-      body: JSON.stringify({ type: "payment_intent.succeeded" }),
-    }
-  )
-  check("the catcher answers 200", response.status === 200, response.status)
-
-  const preflight = await fetch(`http://127.0.0.1:${WEBHOOK_PORT}/hooks`, {
-    method: "OPTIONS",
-  })
-  check(
-    "a preflight is allowed through",
-    preflight.status === 204 &&
-      preflight.headers.get("access-control-allow-origin") === "*",
-    preflight.status
-  )
-
-  const entry = await waitFor(
-    () => captured.find((candidate) => candidate.kind === "webhook"),
-    "a captured request"
-  )
-  if (entry.kind !== "webhook") return
-
-  const hook = entry.webhook
-  check("the method is kept", hook.method === "POST", hook.method)
-  check(
-    "the path keeps its query string",
-    hook.path === "/hooks/stripe?id=evt_1&retry=2",
-    hook.path
-  )
-  check(
-    "query parameters are split out",
-    hook.query.map((item) => `${item.name}=${item.value}`).join("&") ===
-      "id=evt_1&retry=2",
-    hook.query
-  )
-  check(
-    "a signature header survives verbatim",
-    hook.headers.some(
-      (header) =>
-        header.name.toLowerCase() === "stripe-signature" &&
-        header.value === "t=1,v1=deadbeef"
-    ),
-    hook.headers
-  )
-  check(
-    "a JSON body is kept as text",
-    hook.isText && JSON.parse(hook.body).type === "payment_intent.succeeded",
-    hook.body
-  )
-  check(
-    "the summary is the method and path",
-    entry.summary === "POST /hooks/stripe",
-    entry.summary
-  )
-
-  section("replay")
-  const replay = replayInput(hook, "http://localhost:3000/webhooks/stripe")
-  check(
-    "the hop-by-hop headers are dropped",
-    !replay.headers.some((header) =>
-      ["host", "content-length", "connection"].includes(
-        header.name.toLowerCase()
-      )
-    ),
-    replay.headers
-  )
-  check(
-    "the signature header is not",
-    replay.headers.some(
-      (header) => header.name.toLowerCase() === "stripe-signature"
-    )
-  )
-  check("the body goes back out as captured", replay.body === hook.body)
-}
-
 /**
- * The two servers are independent: that is the whole reason Mail and Webhooks
- * are separate panels rather than one, and it is worth a check that stopping
- * the switch on one of them does not quietly take the other down.
+ * Stop has to free the port, not merely report itself stopped — a second
+ * server binding it is the only thing that actually proves that, and a Stop
+ * that left the port held would fail the user on the next Start rather than
+ * here.
  */
 async function ports(inbox: InboxServers) {
-  section("one server at a time")
+  section("stop and start")
 
-  const stopped = await inbox.stop("mail")
-  check(
-    "stopping Mail leaves the webhook catcher up",
-    !stopped.mail.listening && stopped.webhook.listening,
-    stopped
-  )
+  const stopped = await inbox.stop()
+  check("stopping reports it down", !stopped.listening, stopped)
 
-  // The port really has to be free, not merely reported as stopped.
   const rival = new InboxServers(
     { message: () => undefined, status: () => undefined },
     { load: async () => [], save: async () => undefined }
   )
-  const borrowed = await rival.start("mail", MAIL_PORT)
-  check("and really releases its port", borrowed.mail.listening, borrowed.mail)
+  const borrowed = await rival.start(MAIL_PORT)
+  check("and really releases its port", borrowed.listening, borrowed)
 
-  const clash = await rival.start("webhook", WEBHOOK_PORT)
+  const clash = await inbox.start(MAIL_PORT)
   check(
     "a port still held is reported rather than thrown",
-    !clash.webhook.listening && Boolean(clash.webhook.error),
-    clash.webhook
+    !clash.listening && Boolean(clash.error),
+    clash
   )
-  await rival.stopAll()
+  await rival.stop()
 
-  const again = await inbox.start("mail", MAIL_PORT)
-  check(
-    "Mail comes back on the port it let go of",
-    again.mail.listening && again.webhook.listening,
-    again
-  )
+  const again = await inbox.start(MAIL_PORT)
+  check("and the port is takeable again once freed", again.listening, again)
 }
 
 /** The parts of `mime.ts` a socket cannot reach. */

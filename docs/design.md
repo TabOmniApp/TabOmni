@@ -2,7 +2,7 @@
 
 The studio as an Electron app: a workspace points at real directories on disk
 rather than rows in a browser database, and every tool over them — database,
-API, mail, webhooks, terminal, agent — is a tab in one window rather than an
+API, mail, terminal, agent — is a tab in one window rather than an
 application of its own.
 
 ## Layout
@@ -30,7 +30,7 @@ for; the manifest records an absolute path and the files stay yours.
     environments.json
     folders.json    the groups those requests are filed under
     cookies.json
-    inbox.json      what the two capture servers caught
+    mail.json       what the SMTP sink caught
     notes.json      the Notes panel's listing
     note-folders.json
     notes/<note-id>.md   one note's own markdown
@@ -47,7 +47,7 @@ it — off the screen. Adding a folder brings its files into view; removing one
 takes its sessions with it and leaves the directory untouched.
 
 Everything else belongs to the workspace rather than to a folder: the
-databases, the saved requests, the cookie jar, the two capture servers. A
+databases, the saved requests, the cookie jar, the capture server. A
 project's database is generally the same database its frontend and its API both
 talk to, and filing it under one of the two would only decide which panel is
 allowed to see it. What _is_ per folder is what is genuinely per repository — a
@@ -870,29 +870,24 @@ A request carrying its own `Cookie` header sends that instead — the more
 specific instruction wins, and a header the user can read should say what is
 sent.
 
-## Mail and Webhooks
+## Mail
 
-The API panel sends requests out. These two panels catch what comes the other
-way — the mail the project's own code sends, and the callbacks a provider fires
-at it — with two servers bound to `127.0.0.1` and nothing else:
+The API panel sends requests out. This one catches what comes the other way —
+the mail the project's own code sends — with an **SMTP sink** on 1025, bound to
+`127.0.0.1` and nothing else. It accepts a message and keeps it. Nothing is ever
+delivered. That is the point: an app configured against this cannot mail a
+customer by accident, which is the failure a development mail server exists to
+prevent. Any username and password are accepted, because a framework configured
+with credentials will not send without being asked for them, and there is
+nothing here for credentials to protect. TLS is not offered.
 
-- an **SMTP sink** on 1025, which accepts a message and keeps it. Nothing is
-  ever delivered. That is the point: an app configured against this cannot mail
-  a customer by accident, which is the failure a development mail server exists
-  to prevent. Any username and password are accepted, because a framework
-  configured with credentials will not send without being asked for them, and
-  there is nothing here for credentials to protect. TLS is not offered.
-- a **catch-all HTTP endpoint** on 1026, which accepts every method on every
-  path, answers `200` with a JSON body, and allows cross-origin requests so a
-  callback fired from a browser is not refused by a preflight.
-
-Both are written here rather than pulled in: a mail catcher that has to be
-installed first is a panel that works on the machine it was written on. `src/main/inbox.ts` is the two servers,
-`src/main/mime.ts` is the parsing that follows — enough of MIME to read what a
-framework mailer sends (`multipart/alternative` inside `multipart/mixed`,
-base64 and quoted-printable bodies, RFC 2047 subjects, RFC 2231 filenames) and
-no more. A part it cannot make sense of is shown as an attachment rather than
-dropped.
+It is written here rather than pulled in: a mail catcher that has to be
+installed first is a panel that works on the machine it was written on.
+`src/main/inbox.ts` is the server, `src/main/mime.ts` is the parsing that
+follows — enough of MIME to read what a framework mailer sends
+(`multipart/alternative` inside `multipart/mixed`, base64 and quoted-printable
+bodies, RFC 2047 subjects, RFC 2231 filenames) and no more. A part it cannot
+make sense of is shown as an attachment rather than dropped.
 
 Everything structural in the parser runs on the message decoded as latin1, which
 maps one byte to one character: that is what lets a boundary be found by string
@@ -901,40 +896,30 @@ charset a part declares is applied to those bytes afterwards, per part — the
 only order that works when one message carries a UTF-8 body and a Shift_JIS
 attachment name.
 
-Captures are kept in `inbox.json` under the studio's own directory, newest first and capped at
-200, so an inbox survives a restart without becoming the slowest thing the panel
-does. A mail's HTML is rendered in an iframe with `sandbox=""` and a CSP that
-allows only `data:` URIs — a template with a script in it must not run inside
-the studio, and a remote image must not load, because in a mail that image is a
-tracking pixel and fetching it would tell a server the message was read.
+Captures are kept in `mail.json` under the studio's own directory, newest first
+and capped at 200, so an inbox survives a restart without becoming the slowest
+thing the panel does. A mail's HTML is rendered in an iframe with `sandbox=""`
+and a CSP that allows only `data:` URIs — a template with a script in it must
+not run inside the studio, and a remote image must not load, because in a mail
+that image is a tracking pixel and fetching it would tell a server the message
+was read.
 
-A captured request can be **replayed** at any URL, verbatim: same method, same
-body, same headers minus the hop-by-hop ones the new connection writes for
-itself. That is the reason to catch one rather than log it — a provider fires an
-event once, and the handler that mishandled it can be run against that exact
-request, signature header included, as many times as it takes.
+**There was a Webhooks panel beside this one**, a catch-all HTTP endpoint on
+1026 that answered every method on every path, with a replay button that sent a
+captured request back out verbatim. It was removed rather than hidden, the way
+the git, code search and specs panels were. What it left behind is deliberate
+and small: a capture still carries `kind: "mail"`, which is the field that tells
+one of its records apart from a mail in a file written by that build, and
+`Store.listInbox` reads `inbox.json` once to carry the mail across to
+`mail.json` before removing it. The settings blob under `inbox.config` still
+nests the port under a `mail` key for the same reason.
 
-Two panels, not one. They started as a single "Inbox" with a filter across the
-top, which saved a slot on the rail and cost more than it saved: the filter was
-an admission that the two are read apart, and one Start button meant the webhook
-catcher — worth leaving up all day — could not stay up while the SMTP sink was
-stopped. So each has its own rail section, its own pane, its own settings tab
-and its own switch.
-
-What stayed shared is everything below the panels: one `InboxServers` managing
-both, one capped list of captures, one file. `src/renderer/components/studio/inbox/` holds
-`CaptureList` and `ServerSettings`, each taking a `server` prop — the two
-sidebars are the same list of arrivals, and writing them twice is how two
-sidebars drift a pixel apart. Each panel starts, stops and clears only its own
-half; `inboxClear` takes a kind, because a Clear that deleted something the user
-could not see would be a poor button.
-
-The ports are the workspace's, in `manifest.json` settings under
-`inbox.config`, along with whether to bind each one at launch. One pair of
-servers rather than one per folder: a port can only be bound once, and the code
-that sends the mail and the code that receives the callback are usually two
-folders of the same project anyway. Nothing sent while a server is down can be
-caught afterwards, which is what that switch is for.
+The port is the workspace's, in `manifest.json` settings under `inbox.config`,
+along with whether to bind it at launch. One server rather than one per folder:
+a port can only be bound once, and the code that sends the mail is usually one
+folder of a project whose other folders would want the same sink anyway. Nothing
+sent while it is down can be caught afterwards, which is what that switch is
+for.
 
 ## Notes
 
@@ -1412,7 +1397,7 @@ Plain `bun` scripts under `test/`, with no test framework behind them — see
 adding one is dropping a file in.
 
 They cover the places where being wrong is expensive and noticing would
-otherwise be slow: the chat view's tail, the two capture servers, the tab
+otherwise be slow: the chat view's tail, the SMTP sink, the tab
 strip's ordering. Those run against the real thing rather than a fixture — `test/transcript.ts` appends to a file while the mirror watches it,
 `test/inbox.ts` holds an SMTP conversation over a socket — because a
 hand-written sample would only check the parser against my memory of the

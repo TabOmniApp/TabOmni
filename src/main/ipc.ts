@@ -28,7 +28,6 @@ import {
   type HttpFolder,
   type HttpRequestRecord,
   type HttpSendInput,
-  type InboxKind,
   type NewDatabaseInput,
   type NoteBody,
   type NoteFolder,
@@ -50,7 +49,7 @@ import * as files from "./files"
 import { MAX_INDEXED_FILES } from "./files"
 import { currentBranch } from "./git"
 import { sendHttp } from "./http"
-import { InboxServers, replayInput } from "./inbox"
+import { InboxServers } from "./inbox"
 import { NotePreview } from "./preview"
 import { ProcessManager } from "./process"
 import { claudeUsageLimits } from "./claude-usage"
@@ -686,13 +685,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.notePreviewUrl, (_event, id: string) => preview.urlOf(id))
 
-  ipcMain.handle(IPC.inboxStart, (_event, server: InboxKind, port: number) =>
-    inbox.start(server, port)
-  )
+  ipcMain.handle(IPC.inboxStart, (_event, port: number) => inbox.start(port))
 
-  ipcMain.handle(IPC.inboxStop, (_event, server: InboxKind) =>
-    inbox.stop(server)
-  )
+  ipcMain.handle(IPC.inboxStop, () => inbox.stop())
 
   ipcMain.handle(IPC.inboxStatus, () => inbox.status())
 
@@ -702,19 +697,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.inboxDelete, (_event, id: string) => inbox.remove(id))
 
-  ipcMain.handle(IPC.inboxClear, (_event, server: InboxKind) =>
-    inbox.clear(server)
-  )
-
-  ipcMain.handle(IPC.inboxReplay, async (_event, id: string, url: string) => {
-    const messages = await inbox.messages()
-    const message = messages.find((candidate) => candidate.id === id)
-    if (!message) throw new Error("That message is no longer in the inbox.")
-    if (message.kind !== "webhook") {
-      throw new Error("Only a captured request can be replayed.")
-    }
-    return sendHttp(replayInput(message.webhook, url))
-  })
+  ipcMain.handle(IPC.inboxClear, () => inbox.clear())
 
   ipcMain.handle(IPC.agentTools, () => agentToolStatuses())
 

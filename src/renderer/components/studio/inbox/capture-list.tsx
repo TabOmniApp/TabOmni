@@ -23,72 +23,30 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { cn } from "@/lib/utils"
-import {
-  Mail,
-  Paperclip,
-  Play,
-  Settings2,
-  Square,
-  Trash2,
-  Webhook,
-} from "lucide-react"
+import { Mail, Paperclip, Play, Settings2, Square, Trash2 } from "lucide-react"
 
-import type { InboxKind, InboxMessage } from "@shared/api"
-import { messagesOf, receivedLabel, useInbox } from "@/lib/inbox/store"
+import type { InboxMessage } from "@shared/api"
+import { receivedLabel, useInbox } from "@/lib/inbox/store"
 import { SECTION_ACCENT } from "../activity-bar"
-import { METHOD_TONES } from "../api/request-list"
 import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
 import { SideRow } from "../side-row"
 
-/**
- * The sidebar for Mail and for Webhooks.
- *
- * One component with a `server` rather than two files: the two panels are the
- * same list of arrivals — same header, same status strip, same start/stop, same
- * unread treatment — and only the row and the wording differ. Writing it twice
- * is how two sidebars drift a pixel apart, which is the reason `SideRow` and
- * `PanelHeader` exist at all.
- *
- * What is *not* shared is anything above this: two rail sections, two panes,
- * two settings tabs, two switches. They replace two applications and are used
- * in two different frames of mind.
- */
-const PANEL: Record<
-  InboxKind,
-  {
-    title: string
-    Icon: typeof Mail
-    /** What the header's start/stop is binding, for its tooltip. */
-    server: string
-    waiting: string
-    stopped: string
-  }
-> = {
-  mail: {
-    title: "Mail",
-    Icon: Mail,
-    server: "SMTP server",
-    waiting:
-      "Point the project's mailer at this port. Nothing is delivered onward — every message it accepts lands here.",
-    stopped:
-      "Start the SMTP server to catch what the project sends. Mail sent while it is down goes wherever it was already configured to go.",
-  },
-  webhook: {
-    title: "Webhooks",
-    Icon: Webhook,
-    server: "webhook catcher",
-    waiting:
-      "Point a provider — or your own code — at this port. Every method on every path is caught and answered with a 200.",
-    stopped:
-      "Start the catcher to bind the port. A callback fired while it is down cannot be caught after the fact.",
-  },
+/** The sidebar for Mail: the arrivals, and the switch that binds the port. */
+const PANEL = {
+  title: "Mail",
+  /** What the header's start/stop is binding, for its tooltip. */
+  server: "SMTP server",
+  waiting:
+    "Point the project's mailer at this port. Nothing is delivered onward — every message it accepts lands here.",
+  stopped:
+    "Start the SMTP server to catch what the project sends. Mail sent while it is down goes wherever it was already configured to go.",
 }
 
-export function CaptureList({ server }: { server: InboxKind }) {
+export function CaptureList() {
   const messages = useInbox((state) => state.messages)
-  const status = useInbox((state) => state.status[server])
-  const selectedId = useInbox((state) => state.selectedId[server])
+  const status = useInbox((state) => state.status)
+  const selectedId = useInbox((state) => state.selectedId)
   const refresh = useInbox((state) => state.refresh)
   const start = useInbox((state) => state.start)
   const stop = useInbox((state) => state.stop)
@@ -98,8 +56,7 @@ export function CaptureList({ server }: { server: InboxKind }) {
   const clear = useInbox((state) => state.clear)
 
   const [clearing, setClearing] = useState(false)
-  const panel = PANEL[server]
-  const accent = SECTION_ACCENT[server]
+  const accent = SECTION_ACCENT.mail
 
   // Once for the window: the captures are the workspace's, and there is no
   // longer anything they can be re-read in response to.
@@ -107,34 +64,29 @@ export function CaptureList({ server }: { server: InboxKind }) {
     void refresh()
   }, [refresh])
 
-  const own = messagesOf(messages, server)
-
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader title={panel.title}>
+      <PanelHeader title={PANEL.title}>
         <IconButton
           label={
             status.listening
-              ? `Stop the ${panel.server}`
-              : `Start the ${panel.server}`
+              ? `Stop the ${PANEL.server}`
+              : `Start the ${PANEL.server}`
           }
-          onClick={() => void (status.listening ? stop(server) : start(server))}
+          onClick={() => void (status.listening ? stop() : start())}
           className={status.listening ? "hover:text-current" : undefined}
           style={status.listening ? { color: accent } : undefined}
         >
           {status.listening ? <Square /> : <Play />}
         </IconButton>
         <IconButton
-          label={`Clear ${panel.title.toLowerCase()}`}
-          disabled={own.length === 0}
+          label={`Clear ${PANEL.title.toLowerCase()}`}
+          disabled={messages.length === 0}
           onClick={() => setClearing(true)}
         >
           <Trash2 />
         </IconButton>
-        <IconButton
-          label="Port and endpoint"
-          onClick={() => openSettings(server)}
-        >
+        <IconButton label="Port and endpoint" onClick={() => openSettings()}>
           <Settings2 />
         </IconButton>
       </PanelHeader>
@@ -144,7 +96,7 @@ export function CaptureList({ server }: { server: InboxKind }) {
           tab that the empty state would otherwise have to point at. */}
       <button
         type="button"
-        onClick={() => openSettings(server)}
+        onClick={() => openSettings()}
         className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-left text-[0.65rem] text-muted-foreground hover:bg-muted/60"
       >
         <span
@@ -155,19 +107,17 @@ export function CaptureList({ server }: { server: InboxKind }) {
             !status.listening && "bg-muted-foreground/40"
           )}
         />
-        <span className="font-mono">
-          {server === "mail" ? "smtp" : "http"}://127.0.0.1:{status.port}
-        </span>
+        <span className="font-mono">smtp://127.0.0.1:{status.port}</span>
         <span className="ml-auto">
           {status.listening ? "listening" : "stopped"}
         </span>
       </button>
 
       <div className="min-h-0 flex-1 overflow-auto py-1">
-        {own.length === 0 ? (
-          <Nothing server={server} running={status.listening} />
+        {messages.length === 0 ? (
+          <Nothing running={status.listening} />
         ) : (
-          own.map((message) => (
+          messages.map((message) => (
             <ContextMenu key={message.id}>
               <ContextMenuTrigger
                 render={
@@ -176,7 +126,7 @@ export function CaptureList({ server }: { server: InboxKind }) {
                       message={message}
                       accent={accent}
                       active={message.id === selectedId}
-                      onClick={() => select(server, message.id)}
+                      onClick={() => select(message.id)}
                     />
                   </div>
                 }
@@ -199,13 +149,12 @@ export function CaptureList({ server }: { server: InboxKind }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Clear {panel.title.toLowerCase()}?
+              Clear {PANEL.title.toLowerCase()}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              All {own.length} captured{" "}
-              {own.length === 1 ? "message" : "messages"} in this panel are
-              deleted. The other panel keeps its own, and the server keeps
-              running — anything sent after this still arrives.
+              All {messages.length} captured{" "}
+              {messages.length === 1 ? "message" : "messages"} are deleted. The
+              server keeps running — anything sent after this still arrives.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -213,7 +162,7 @@ export function CaptureList({ server }: { server: InboxKind }) {
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
-                void clear(server)
+                void clear()
                 setClearing(false)
               }}
             >
@@ -229,9 +178,8 @@ export function CaptureList({ server }: { server: InboxKind }) {
 /**
  * One capture.
  *
- * Two lines rather than one: who it went to, or how big the payload was, is
- * what tells two events from the same provider apart when their first lines
- * are identical.
+ * Two lines rather than one: who it went to is what tells two messages from the
+ * same sender apart when their subjects are identical.
  */
 function MessageRow({
   message,
@@ -240,8 +188,8 @@ function MessageRow({
   onClick,
 }: {
   message: InboxMessage
-  /** The panel's own hue, so an unread mark matches the rail item it is
-   * counted on. */
+  /** The panel's hue, so an unread mark matches the rail item it is counted
+   * on. */
   accent: string
   active: boolean
   onClick: () => void
@@ -261,22 +209,7 @@ function MessageRow({
               message.unread ? "font-medium" : "text-muted-foreground"
             )}
           >
-            {message.kind === "webhook" ? (
-              <>
-                <span
-                  className={cn(
-                    "font-mono text-[0.6rem] font-semibold",
-                    METHOD_TONES[message.webhook.method] ??
-                      "text-muted-foreground"
-                  )}
-                >
-                  {message.webhook.method}
-                </span>{" "}
-                {message.webhook.path}
-              </>
-            ) : (
-              message.summary
-            )}
+            {message.summary}
           </span>
           {message.unread && (
             <span
@@ -289,11 +222,9 @@ function MessageRow({
 
         <span className="flex min-w-0 items-center gap-1.5 text-[0.65rem] text-muted-foreground">
           <span className="truncate">
-            {message.kind === "mail"
-              ? message.mail.to.join(", ") || message.mail.from
-              : `${message.webhook.size} bytes`}
+            {message.mail.to.join(", ") || message.mail.from}
           </span>
-          {message.kind === "mail" && message.mail.attachments.length > 0 && (
+          {message.mail.attachments.length > 0 && (
             <Paperclip className="size-2.5 shrink-0" />
           )}
           <span className="ml-auto shrink-0">
@@ -305,17 +236,16 @@ function MessageRow({
   )
 }
 
-function Nothing({ server, running }: { server: InboxKind; running: boolean }) {
-  const panel = PANEL[server]
+function Nothing({ running }: { running: boolean }) {
   return (
     <Empty className="p-4">
       <EmptyHeader>
         <EmptyMedia variant="icon">
-          <panel.Icon />
+          <Mail />
         </EmptyMedia>
         <EmptyTitle>{running ? "Waiting" : "Not listening"}</EmptyTitle>
         <EmptyDescription className="text-xs">
-          {running ? panel.waiting : panel.stopped}
+          {running ? PANEL.waiting : PANEL.stopped}
         </EmptyDescription>
       </EmptyHeader>
     </Empty>

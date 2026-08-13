@@ -8,12 +8,8 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024
 /**
  * Content types read back as text. Anything else is reported by size — an
  * image or a zip rendered into a `<pre>` is noise at best.
- *
- * Exported for the Inbox panel's webhook catcher, which faces the same
- * question from the other end of the wire: one answer, so a payload the API
- * panel would show is one the Inbox panel shows too.
  */
-export function isTextual(contentType: string): boolean {
+function isTextual(contentType: string): boolean {
   const type = contentType.toLowerCase()
   return (
     type.startsWith("text/") ||

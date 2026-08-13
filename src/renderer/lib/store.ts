@@ -8,14 +8,13 @@ import * as repo from "./workspace"
 /** Where the strip's arrangement and the pane on screen are kept. */
 const STRIP_KEY = "workbench.strip"
 
-/** Every pane there is — the list `lib/panels.ts` walks to reach all seven
+/** Every pane there is — the list `lib/panels.ts` walks to reach all six
  * panels' tabs without naming any of them. */
 export const PANES: Pane[] = [
   "files",
   "database",
   "api",
   "mail",
-  "webhook",
   "terminal",
   "note",
 ]
@@ -40,8 +39,7 @@ function isRememberedStrip(value: unknown): value is RememberedStrip {
  * What sets this is picking something to look at — a tab, a table in the tree,
  * a request, a session — wherever that pick was made.
  */
-export type Pane =
-  "files" | "database" | "api" | "mail" | "webhook" | "terminal" | "note"
+export type Pane = "files" | "database" | "api" | "mail" | "terminal" | "note"
 
 type StudioState = {
   /** Storage is open and the workspace has been read. */
@@ -76,7 +74,7 @@ type StudioState = {
   /**
    * Which sidebar the rail is showing.
    *
-   * The same seven ids as `Pane`, and deliberately a separate value: the rail
+   * The same six ids as `Pane`, and deliberately a separate value: the rail
    * moves this on its own, so a sidebar can be read while another panel's tab
    * stays on screen. What is *not* symmetric is the other direction — picking
    * something moves both, because a selection nobody can see the sidebar for is

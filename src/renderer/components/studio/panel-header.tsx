@@ -12,7 +12,6 @@ const ACCENT_BY_TITLE: Record<string, Section> = {
   Database: "database",
   API: "api",
   Mail: "mail",
-  Webhooks: "webhook",
   Terminal: "terminal",
   Notes: "note",
 }

@@ -74,7 +74,6 @@ const HUES = [
   "var(--section-database)",
   "var(--section-api)",
   "var(--section-mail)",
-  "var(--section-webhook)",
   "var(--section-terminal)",
 ]
 

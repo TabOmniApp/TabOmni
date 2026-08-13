@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { defaultFilter } from "cmdk"
-import { File, FileText, Mail, Webhook } from "lucide-react"
+import { File, FileText, Mail } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import {
@@ -13,13 +13,12 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
-import type { InboxKind } from "@shared/api"
 import { useDatabases } from "@/lib/db/databases-store"
 import { useDbTree } from "@/lib/db/tree-store"
 import { useFiles } from "@/lib/files/store"
 import { shortlist } from "@/lib/files/search"
 import { useApi } from "@/lib/http/store"
-import { messagesOf, useInbox } from "@/lib/inbox/store"
+import { useInbox } from "@/lib/inbox/store"
 import { nameOf } from "@/lib/files/paths"
 import { useNotes } from "@/lib/note/store"
 import { isStudioShortcut } from "@/lib/shortcuts"
@@ -56,7 +55,7 @@ type Notice = { tone: "muted" | "destructive"; text: string }
 /**
  * Search the workspace, and open what comes back.
  *
- * The studio has one strip of tabs and seven sidebars, so the thing being looked
+ * The studio has one strip of tabs and six sidebars, so the thing being looked
  * for is only ever a few clicks away — but only if the rail is already on the
  * section that lists it. A table in a database whose branch is collapsed, a
  * request three folders deep and a note filed last week are each a trip through
@@ -355,34 +354,22 @@ function useEntries(query: string): Group[] {
       }
     })
 
-    /** Mail's and Webhooks' rows come from the one store, as their tabs do. */
-    const captures = (server: InboxKind): Entry[] =>
-      messagesOf(messages, server).map((message) => ({
-        value: PREFIX[server] + message.id,
-        label: message.summary,
-        // Nothing for a webhook: its summary is already the method and the
-        // path, and a second line saying either again is noise.
-        hint: message.kind === "mail" ? message.mail.from : undefined,
-        keywords:
-          message.kind === "mail"
-            ? [
-                message.summary,
-                message.mail.from,
-                message.mail.headerFrom,
-                ...message.mail.to,
-              ]
-            : [message.summary, message.webhook.path, message.webhook.method],
-        icon:
-          message.kind === "mail" ? (
-            <Mail className="size-3.5 shrink-0" />
-          ) : (
-            <Webhook className="size-3.5 shrink-0" />
-          ),
-        open: async () => {
-          useInbox.getState().select(server, message.id)
-          return null
-        },
-      }))
+    const captures: Entry[] = messages.map((message) => ({
+      value: PREFIX.mail + message.id,
+      label: message.summary,
+      hint: message.mail.from,
+      keywords: [
+        message.summary,
+        message.mail.from,
+        message.mail.headerFrom,
+        ...message.mail.to,
+      ],
+      icon: <Mail className="size-3.5 shrink-0" />,
+      open: async () => {
+        useInbox.getState().select(message.id)
+        return null
+      },
+    }))
 
     // The running sessions, which is what the strip holds too: a closed one has
     // no pty, so there is no pane for the palette to send anyone to.
@@ -429,8 +416,7 @@ function useEntries(query: string): Group[] {
       { heading: "Files", entries: fileEntries },
       { heading: "Database", entries: tables },
       { heading: "API", entries: apiEntries },
-      { heading: "Mail", entries: captures("mail") },
-      { heading: "Webhooks", entries: captures("webhook") },
+      { heading: "Mail", entries: captures },
       { heading: "Terminal", entries: terminals },
       { heading: "Notes", entries: noteEntries },
       // A heading with nothing under it reads as something having failed to

@@ -104,13 +104,17 @@ export const ENVIRONMENTS_FILE = "environments.json"
 export const FOLDERS_FILE = "folders.json"
 
 /**
- * What the Inbox panel's two servers caught.
+ * What the Mail panel's SMTP sink caught.
  *
  * Capped by `InboxServers` before it reaches here — this file is rewritten
  * whole on every capture, and an uncapped one would grow until it was the
  * slowest thing the panel did.
  */
-export const INBOX_FILE = "inbox.json"
+export const MAIL_FILE = "mail.json"
+
+/** What that file was called while the Webhooks panel shared it. Read once, to
+ * carry the mail across; see `listInbox`. */
+const LEGACY_INBOX_FILE = "inbox.json"
 
 /** The workspace's notes — their listing; each body is a file of its own. */
 export const NOTES_FILE = "notes.json"
@@ -753,15 +757,40 @@ export class Store {
     })
   }
 
-  listInbox(): Promise<InboxMessage[]> {
-    return this.readList(INBOX_FILE)
+  /**
+   * The captured mail, carrying `inbox.json` over the first time it is asked.
+   *
+   * That file held the Webhooks panel's captures too, and those records have no
+   * `mail` to render — so they are dropped here rather than left for a view
+   * that would read a field they do not have. Done on read rather than at
+   * launch because a workspace that never opens Mail should not pay for it, and
+   * the old file is removed once the new one is written so this happens once.
+   */
+  async listInbox(): Promise<InboxMessage[]> {
+    const messages = await this.readList<InboxMessage>(MAIL_FILE)
+    if (messages.length > 0) return messages
+
+    const legacy = await this.readList<InboxMessage>(LEGACY_INBOX_FILE)
+    if (legacy.length === 0) return messages
+
+    const mail = legacy.filter((message) => message.kind === "mail")
+    await this.saveInbox(mail)
+    await this.enqueue(async () => {
+      // A workspace left with both files would migrate again on the next run
+      // and undo whatever was deleted in between. Failing to remove it is not
+      // worth reporting: the mail is already safe under the new name.
+      await rm(path.join(this.workspaceDir, LEGACY_INBOX_FILE), {
+        force: true,
+      })
+    })
+    return mail
   }
 
   saveInbox(messages: InboxMessage[]): Promise<void> {
     // Not pretty-printed, unlike its neighbours: nobody reads a captured mail's
     // base64 attachment by hand, and the indentation is a real cost on a file
     // rewritten on every capture.
-    return this.writeList(INBOX_FILE, messages, false)
+    return this.writeList(MAIL_FILE, messages, false)
   }
 
   /** Where a folder's commands and sessions run. */

@@ -29,12 +29,11 @@ Note the limit of this: `safeStorage` protects the manifest against another
 _user_ on the machine, not against code running as you. Anything you can run,
 TabOmni can run.
 
-**The capture servers.** The Mail and Webhooks panels bind an SMTP sink and a
-catch-all HTTP endpoint to `127.0.0.1` only (`src/main/inbox.ts`), and both are
-off until started. They accept anything — that is the point of a sink — so do
-not expose them beyond loopback, and be aware that captured requests and mail
-are stored unencrypted, because they are test traffic and treating them as
-secrets would make the panel useless for reading them.
+**The capture server.** The Mail panel binds an SMTP sink to `127.0.0.1` only
+(`src/main/inbox.ts`), and it is off until started. It accepts anything — that
+is the point of a sink — so do not expose it beyond loopback, and be aware that
+captured mail is stored unencrypted, because it is test traffic and treating it
+as a secret would make the panel useless for reading it.
 
 **The pty daemon.** Terminal sessions run in a detached per-machine daemon
 spoken to over a Unix socket (a named pipe on Windows). Anything that can open

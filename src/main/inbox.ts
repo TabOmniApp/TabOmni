@@ -1,33 +1,16 @@
 import { randomUUID } from "node:crypto"
 import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type Server as HttpServer,
-  type ServerResponse,
-} from "node:http"
-import {
   createServer as createTcpServer,
   type Server as TcpServer,
   type Socket,
 } from "node:net"
 
-import type {
-  HttpSendInput,
-  InboxKind,
-  InboxMessage,
-  InboxServerStatus,
-  InboxStatus,
-  InboxWebhook,
-} from "../shared/api"
-import { isTextual } from "./http"
+import type { InboxMessage, InboxServerStatus } from "../shared/api"
 import { parseMail } from "./mime"
 
 /**
- * The two servers behind the Mail and Webhooks panels: an SMTP sink and a
- * catch-all HTTP endpoint, each bound to the loopback interface and each
- * started and stopped on its own — the panels are separate and so are their
- * switches. What they share is this manager, one capped list of captures, and
- * one file to keep it in.
+ * The server behind the Mail panel: an SMTP sink bound to the loopback
+ * interface, with one capped list of captures and one file to keep it in.
  *
  * Written here rather than pulled in, for the same reason `search.ts` is not
  * ripgrep: a mail catcher the user has to `brew install` first is a panel that
@@ -43,21 +26,21 @@ import { parseMail } from "./mime"
  * development mail server exists to prevent.
  */
 
-/** Bound to loopback and nothing else. A catch-all endpoint that answers 200
- * to anything is not something to put on a network. */
+/** Bound to loopback and nothing else. A sink that accepts anything is not
+ * something to put on a network. */
 const HOST = "127.0.0.1"
 
-/** What either server will hold for one message. Past it, SMTP refuses the
- * message with a 552 and the webhook catcher answers 413 — a truncated capture
- * that looked complete would be worse than a refusal. */
+/** What the server will hold for one message. Past it the message is refused
+ * with a 552 — a truncated capture that looked complete would be worse than a
+ * refusal. */
 const MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 /**
  * How many captures the workspace keeps.
  *
- * An inbox is read newest first and nobody scrolls to the four hundredth
- * webhook, while the whole list is held in memory and written to disk on every
- * capture. `Clear` is one button away for the rest.
+ * An inbox is read newest first and nobody scrolls to the four hundredth mail,
+ * while the whole list is held in memory and written to disk on every capture.
+ * `Clear` is one button away for the rest.
  */
 const MAX_MESSAGES = 200
 
@@ -72,7 +55,7 @@ const SMTP_IDLE_MS = 60_000
 
 type Emit = {
   message: (message: InboxMessage) => void
-  status: (status: InboxStatus) => void
+  status: (status: InboxServerStatus) => void
 }
 
 /** Where captures survive a restart. Injected rather than imported so this
@@ -83,17 +66,14 @@ type Storage = {
 }
 
 type Inbox = {
-  /** One entry per kind, each started and stopped on its own — the Mail and
-   * Webhooks panels have a switch each. */
-  servers: Record<InboxKind, TcpServer | HttpServer | null>
+  server: TcpServer | null
   /** Open SMTP conversations. `net.Server.close` waits for every one of them,
    * and a mailer holding an idle socket would otherwise keep Stop waiting the
    * full idle timeout. */
   sockets: Set<Socket>
-  status: InboxStatus
+  status: InboxServerStatus
   /** Newest first, which is the order the panel shows and the order the cap
-   * drops from the end of. Both kinds together: they share a file, and each
-   * panel filters to its own. Null until read from disk. */
+   * drops from the end of. Null until read from disk. */
   messages: InboxMessage[] | null
   /** In flight while the first read is happening, so two captures landing
    * together cannot each start one and file against a different array. */
@@ -106,17 +86,16 @@ function idle(port: number): InboxServerStatus {
 
 export class InboxServers {
   private readonly inbox: Inbox = {
-    servers: { mail: null, webhook: null },
+    server: null,
     sockets: new Set(),
-    status: { mail: idle(0), webhook: idle(0) },
+    status: idle(0),
     messages: null,
     loading: null,
   }
   /** Writes are serialised so two captures landing together cannot both
    * read-modify-write the same file. */
   private queue: Promise<unknown> = Promise.resolve()
-  /** One chain for both servers, so a start and a stop cannot overlap — see
-   * `serialise`. */
+  /** So a start and a stop cannot overlap — see `serialise`. */
   private chain: Promise<unknown> = Promise.resolve()
 
   constructor(
@@ -124,44 +103,33 @@ export class InboxServers {
     private readonly storage: Storage
   ) {}
 
-  status(): InboxStatus {
+  status(): InboxServerStatus {
     return this.inbox.status
   }
 
-  /**
-   * Binds one server, replacing whatever that kind already had bound.
-   *
-   * One at a time because the two panels have a switch each: stopping Mail to
-   * free 1025 must leave the webhook catcher exactly where it was.
-   */
-  start(server: InboxKind, port: number): Promise<InboxStatus> {
+  /** Binds the sink, replacing whatever was already bound. */
+  start(port: number): Promise<InboxServerStatus> {
     return this.serialise(async () => {
-      await this.unbind(server)
+      await this.unbind()
 
-      const bound =
-        server === "mail"
-          ? createTcpServer((socket) => this.serveSmtp(socket))
-          : createHttpServer((request, response) =>
-              this.serveWebhook(request, response)
-            )
+      const bound = createTcpServer((socket) => this.serveSmtp(socket))
 
-      const status = await listen(bound, port)
-      this.inbox.status = { ...this.inbox.status, [server]: status }
-      this.inbox.servers[server] = status.listening ? bound : null
+      this.inbox.status = await listen(bound, port)
+      this.inbox.server = this.inbox.status.listening ? bound : null
 
       // A server that falls over after it came up — the port taken from under
       // it by something else, a socket error with nowhere to go — must not
       // leave the panel claiming it is still listening.
-      bound.on("error", (error) => this.fail(server, error))
+      bound.on("error", (error) => this.fail(error))
 
       this.emit.status(this.inbox.status)
       return this.inbox.status
     })
   }
 
-  stop(server: InboxKind): Promise<InboxStatus> {
+  stop(): Promise<InboxServerStatus> {
     return this.serialise(async () => {
-      await this.unbind(server)
+      await this.unbind()
       this.emit.status(this.inbox.status)
       return this.inbox.status
     })
@@ -170,12 +138,10 @@ export class InboxServers {
   /**
    * Runs one bind or unbind at a time.
    *
-   * Both a panel and its own auto-start can ask for a start, and two of them
-   * interleaving would have one server's `listen` land after the other's
-   * `close` — leaving a port bound by a server nothing holds a reference to,
-   * and the panel reporting the one that failed. One chain for both servers
-   * rather than one each: they never contend, and sharing it is what makes
-   * "stop both" on quit a queue rather than a race.
+   * Both the panel and its own auto-start can ask for a start, and two of them
+   * interleaving would have one `listen` land after the other's `close` —
+   * leaving a port bound by a server nothing holds a reference to, and the
+   * panel reporting the one that failed.
    */
   private serialise<T>(task: () => Promise<T>): Promise<T> {
     const next = this.chain.then(task, task)
@@ -183,26 +149,14 @@ export class InboxServers {
     return next
   }
 
-  /** Closes one kind's server, leaving the other and the captures alone. */
-  private async unbind(server: InboxKind): Promise<void> {
-    // Only SMTP holds conversations this has to break; the HTTP side answers
-    // and hangs up, and `closeAllConnections` in `close` covers keep-alive.
-    if (server === "mail") {
-      for (const socket of this.inbox.sockets) socket.destroy()
-      this.inbox.sockets.clear()
-    }
+  /** Closes the server, leaving the captures alone. */
+  private async unbind(): Promise<void> {
+    for (const socket of this.inbox.sockets) socket.destroy()
+    this.inbox.sockets.clear()
 
-    await close(this.inbox.servers[server])
-    this.inbox.servers[server] = null
-    this.inbox.status = {
-      ...this.inbox.status,
-      [server]: idle(this.inbox.status[server].port),
-    }
-  }
-
-  /** Closes both servers, for a quit that leaves no port held. */
-  async stopAll(): Promise<void> {
-    await Promise.all([this.stop("mail"), this.stop("webhook")])
+    await close(this.inbox.server)
+    this.inbox.server = null
+    this.inbox.status = idle(this.inbox.status.port)
   }
 
   async messages(): Promise<InboxMessage[]> {
@@ -233,25 +187,17 @@ export class InboxServers {
     this.write(this.inbox.messages)
   }
 
-  /** Empties one panel's half. The other keeps everything it caught — two
-   * panels with one Clear between them would be a button that deleted
-   * something the user could not see. */
-  async clear(server: InboxKind): Promise<void> {
+  async clear(): Promise<void> {
     await this.messages()
-    this.inbox.messages = (this.inbox.messages ?? []).filter(
-      (message) => message.kind !== server
-    )
+    this.inbox.messages = []
     this.write(this.inbox.messages)
   }
 
-  private fail(which: InboxKind, error: Error) {
+  private fail(error: Error) {
     this.inbox.status = {
-      ...this.inbox.status,
-      [which]: {
-        listening: false,
-        port: this.inbox.status[which].port,
-        error: error.message,
-      },
+      listening: false,
+      port: this.inbox.status.port,
+      error: error.message,
     }
     this.emit.status(this.inbox.status)
   }
@@ -467,67 +413,12 @@ export class InboxServers {
       }
     })
   }
-
-  /**
-   * One captured HTTP request.
-   *
-   * Every method and every path is accepted — a catch-all is the point, since
-   * the sender is a provider's dashboard that was given one URL and will not be
-   * asked what it thinks the route should be. The answer is a plain 200 with
-   * CORS open, so a webhook fired from a browser during development is not
-   * refused by a preflight the panel could have allowed.
-   */
-  private serveWebhook(
-    request: IncomingMessage,
-    response: ServerResponse
-  ): void {
-    const cors = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "*",
-      "Access-Control-Allow-Headers": "*",
-    }
-
-    if (request.method === "OPTIONS") {
-      response.writeHead(204, cors)
-      response.end()
-      return
-    }
-
-    const chunks: Buffer[] = []
-    let size = 0
-    let refused = false
-
-    request.on("data", (chunk: Buffer) => {
-      size += chunk.byteLength
-      if (size > MAX_MESSAGE_BYTES) {
-        refused = true
-        response.writeHead(413, cors)
-        response.end()
-        request.destroy()
-        return
-      }
-      chunks.push(chunk)
-    })
-
-    request.on("end", () => {
-      if (refused) return
-
-      const id = randomUUID()
-      void this.record(webhookMessage(id, request, Buffer.concat(chunks)))
-
-      response.writeHead(200, { ...cors, "Content-Type": "application/json" })
-      response.end(JSON.stringify({ ok: true, id }))
-    })
-  }
 }
 
-/** Binds a server, reporting the failure rather than throwing it: a port in
+/** Binds the server, reporting the failure rather than throwing it: a port in
  * use is something the settings tab asks the user about, not a rejected IPC
  * call wrapped in Electron's own wording. */
-function listen(
-  server: TcpServer | HttpServer,
-  port: number
-): Promise<InboxServerStatus> {
+function listen(server: TcpServer, port: number): Promise<InboxServerStatus> {
   return new Promise((resolve) => {
     const onError = (error: Error) => {
       server.off("listening", onListening)
@@ -544,13 +435,12 @@ function listen(
   })
 }
 
-function close(server: TcpServer | HttpServer | null): Promise<void> {
+function close(server: TcpServer | null): Promise<void> {
   if (!server) return Promise.resolve()
   return new Promise((resolve) => {
-    // `close` waits for open connections, and a keep-alive client would
-    // otherwise keep the port past the moment the user pressed Stop. The SMTP
-    // side has no equivalent; its sockets are destroyed by `stop` instead.
-    if ("closeAllConnections" in server) server.closeAllConnections()
+    // `close` waits for every open connection, which is why `unbind` destroys
+    // the sockets first: a mailer holding an idle one would otherwise keep the
+    // port past the moment the user pressed Stop.
     server.close(() => resolve())
   })
 }
@@ -637,88 +527,6 @@ function mailMessage(
       html: parsed.html,
       attachments: parsed.attachments,
       raw: bytes.toString("utf8"),
-    },
-  }
-}
-
-/**
- * Headers a captured request must not carry into a new connection.
- *
- * They describe the hop it arrived on rather than the request itself: a `Host`
- * naming the catcher's own port would reach the wrong virtual host, and a
- * `Content-Length` copied from a body this app re-encodes would truncate it.
- * Everything else goes as it came — a signature header is exactly what makes a
- * replay worth having.
- */
-const HOP_BY_HOP = new Set([
-  "host",
-  "connection",
-  "keep-alive",
-  "upgrade",
-  "expect",
-  "content-length",
-  "transfer-encoding",
-  "accept-encoding",
-])
-
-/** How long a replay waits. Its target is a development server on this
- * machine, which either answers quickly or is not running. */
-const REPLAY_TIMEOUT_MS = 30_000
-
-/** Turns a captured request back into one to send at `url`. */
-export function replayInput(webhook: InboxWebhook, url: string): HttpSendInput {
-  return {
-    method: webhook.method,
-    url,
-    headers: webhook.headers.filter(
-      (header) => !HOP_BY_HOP.has(header.name.toLowerCase())
-    ),
-    // A body is sent only for the methods that carry one, and only when it was
-    // captured as text: bytes the panel did not keep cannot be replayed, and
-    // sending an empty body in their place would look like a request that had
-    // none.
-    body:
-      webhook.isText && webhook.body && !/^(GET|HEAD)$/i.test(webhook.method)
-        ? webhook.body
-        : null,
-    timeoutMs: REPLAY_TIMEOUT_MS,
-  }
-}
-
-function webhookMessage(
-  id: string,
-  request: IncomingMessage,
-  body: Buffer
-): InboxMessage {
-  const target = new URL(request.url ?? "/", "http://localhost")
-  const headers: { name: string; value: string }[] = []
-  // `rawHeaders` rather than `headers`: it keeps the case a sender wrote and
-  // the duplicates it sent, both of which are what someone comparing a
-  // signature header against their own code needs to see.
-  for (let index = 0; index < request.rawHeaders.length; index += 2) {
-    headers.push({
-      name: request.rawHeaders[index]!,
-      value: request.rawHeaders[index + 1] ?? "",
-    })
-  }
-
-  const contentType = request.headers["content-type"] ?? ""
-  const text = isTextual(contentType)
-
-  return {
-    id,
-    kind: "webhook",
-    receivedAt: new Date().toISOString(),
-    summary: `${request.method ?? "GET"} ${target.pathname}`,
-    unread: true,
-    webhook: {
-      method: request.method ?? "GET",
-      path: target.pathname + target.search,
-      query: [...target.searchParams].map(([name, value]) => ({ name, value })),
-      headers,
-      body: text ? body.toString("utf8") : "",
-      isText: text,
-      size: body.byteLength,
     },
   }
 }
