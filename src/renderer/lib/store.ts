@@ -111,6 +111,14 @@ type StudioState = {
   setTabOrder: (ids: string[]) => void
 
   init: () => Promise<void>
+  /**
+   * Re-reads every folder's branch.
+   *
+   * For a checkout made outside the studio — in a Terminal session, or in
+   * somebody's own terminal. The watcher on each folder's `.git` is what calls
+   * this (`lib/files/watch.ts`); nothing else in the app would notice.
+   */
+  refreshBranches: () => Promise<void>
   /** Points the workspace at another folder on this machine. */
   addFolder: (input: { path: string; name: string }) => Promise<void>
   renameFolder: (id: string, name: string) => Promise<void>
@@ -239,6 +247,10 @@ export const useStudio = create<StudioState>((set, get) => {
     init() {
       initPromise ??= bootstrap()
       return initPromise
+    },
+
+    async refreshBranches() {
+      await load(get().folders)
     },
 
     async addFolder(input) {

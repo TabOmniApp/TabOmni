@@ -250,8 +250,10 @@ export async function renamePath(
  * palette answers "which file is called something like this" across the whole
  * workspace, and there is no way to answer that from the directories the tree
  * happens to have open. Built on demand and held by the renderer for the run —
- * see `loadIndex` — rather than maintained, because maintaining it means
- * watching, which this panel deliberately does not do.
+ * see `loadIndex` — rather than maintained: the panel's watchers follow the
+ * directories somebody expanded (`watch.ts`), and keeping this in step would
+ * mean watching everything under the workspace instead, which is the cost the
+ * tree was written to avoid. Refresh rebuilds it.
  *
  * Breadth-first over an explicit queue rather than recursion: the depth of a
  * repository is not this function's to trust, and a queue also makes the

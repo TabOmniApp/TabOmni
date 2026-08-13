@@ -43,7 +43,7 @@ import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
 import * as files from "./files"
 import { MAX_INDEXED_FILES } from "./files"
-import { currentBranch } from "./git"
+import { currentBranch, workingTree } from "./git"
 import { sendHttp } from "./http"
 import { InboxServers } from "./inbox"
 import { NotePreview } from "./preview"
@@ -54,6 +54,7 @@ import { hasTranscript, listSessions, TranscriptMirrors } from "./transcript"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
 import { TerminalManager } from "./terminal"
 import { TsServers } from "./tsserver"
+import { DirectoryWatchers } from "./watch"
 
 /**
  * Resolves a path the user typed, expanding a leading `~`.
@@ -144,6 +145,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   inbox: InboxServers
   preview: NotePreview
   tsServers: TsServers
+  watchers: DirectoryWatchers
 } {
   const store = new Store()
   const sqlConnections = new SqlConnections(async (databaseId) => {
@@ -287,6 +289,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     currentBranch(await store.resolveFolderDir(folderId))
   )
 
+  ipcMain.handle(IPC.gitStatus, async (_event, folderId: string) =>
+    workingTree(await store.resolveFolderDir(folderId))
+  )
+
   /**
    * The one gate in front of the Explorer's reads and writes.
    *
@@ -405,6 +411,31 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       // that slipped through.
       tsServers.definition(await inWorkspace(filePath), line, column)
   )
+
+  /*
+   * The tree follows the disk while it is open — see `main/watch.ts` for why
+   * this watches the expanded directories and nothing above or below them.
+   */
+  const watchers = new DirectoryWatchers((dir) =>
+    send(IPC.directoryChanged, { dir })
+  )
+
+  ipcMain.handle(IPC.watchDirectories, async (_event, dirs: string[]) => {
+    const { folders } = await store.getWorkspace()
+    const roots = folders.map((folder) => folder.path)
+    watchers.set([
+      // Filtered rather than refused: this call carries a whole set, and one
+      // directory belonging to a folder removed while the message was in
+      // flight would otherwise cost the tree every other watcher it asked for.
+      ...dirs.filter((dir) => files.insideAny(roots, dir)),
+      // Each folder's own `.git`, whatever the renderer asked for. A commit or
+      // a checkout in a Terminal session changes the colour of every row and
+      // the branch beside the folder, while touching no directory the tree is
+      // watching. Added here rather than sent from the renderer because this
+      // side is the one that joins a name to a path.
+      ...roots.map((root) => path.join(root, ".git")),
+    ])
+  })
 
   ipcMain.handle(IPC.listWorkspaceFiles, async () => {
     const { folders } = await store.getWorkspace()
@@ -781,5 +812,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     inbox,
     preview,
     tsServers,
+    watchers,
   }
 }

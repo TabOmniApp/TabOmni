@@ -43,6 +43,13 @@ import {
 
 import type { FileEntry, WorkspaceFolder } from "@shared/api"
 import { isDirty, useFiles, viewOf } from "@/lib/files/store"
+import {
+  gitStateOf,
+  GIT_LABELS,
+  GIT_LETTERS,
+  GIT_TONES,
+  useGitStatus,
+} from "@/lib/files/git-status"
 import { iconFor } from "@/lib/files/icons"
 import {
   isImage,
@@ -83,13 +90,17 @@ function failureOf(error: unknown, fallback: string): string {
  * repository holds far more files than anybody wants listed, and the ones under
  * a folded directory are ones nobody has asked about.
  *
- * Nothing watches the disk. A `claude` session writing a file in the Terminal
- * panel does not move a row here until Refresh is pressed — a deliberate line:
- * a watcher over a whole repository is a `node_modules` of file handles and a
- * rebuild of the tree on every `npm install`, and the panel would spend its
- * time reacting to churn nobody is looking at. What is never silently
- * overwritten is an edit: Refresh re-reads only the files with nothing unsaved
- * in them.
+ * What is expanded is watched, and nothing else is — one non-recursive watcher
+ * per open directory, closed again when the row is folded (`main/watch.ts`). A
+ * watcher over a whole repository would be a `node_modules` of file handles and
+ * a rebuild of the tree on every `npm install`; this costs a handle per row
+ * somebody is looking at. Refresh is still in the header, for the filesystems
+ * `fs.watch` is quiet on. What is never silently overwritten either way is an
+ * edit: only the files with nothing unsaved in them are re-read.
+ *
+ * The rows are coloured by what git says about them — new, modified, ignored —
+ * from one `git status` per folder (`lib/files/git-status.ts`). A tracked file
+ * with no changes is the ordinary row and has no colour of its own.
  *
  * **The folders are this panel's, and only this panel's.** Adding, renaming and
  * removing one used to live in the Terminal sidebar as well, which drew the
@@ -154,7 +165,13 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           <IconButton
             label="Refresh"
             disabled={folders.length === 0}
-            onClick={() => void refresh()}
+            // Both halves of what a row shows: what is on disk, and what git
+            // says about it. One button, since "this is out of date" is one
+            // thought.
+            onClick={() => {
+              void refresh()
+              void useGitStatus.getState().refreshAll()
+            }}
           >
             <RotateCw />
           </IconButton>
@@ -204,22 +221,29 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
                     onContextMenu={() =>
                       setMenuTarget({ kind: "root", folder })
                     }
-                    className="flex w-full items-center gap-1.5 px-2 pt-2 pb-1 text-[0.65rem] font-medium tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground"
+                    className="flex w-full items-start gap-1.5 px-2 pt-2 pb-1 text-[0.65rem] font-medium tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground"
                   >
                     <Chevron className="size-3.5 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-left">
-                      {folder.name}
-                    </span>
-                    {/* The one place a folder's branch is always shown — the
-                        Terminal sidebar repeats it on the headings it draws,
-                        beside the sessions being worked in, and has none to
-                        draw in a single-folder workspace. */}
-                    {branches[folder.id] && (
-                      <span className="flex min-w-0 shrink items-center gap-1 normal-case">
-                        <GitBranch className="size-2.5 shrink-0" />
-                        <span className="truncate">{branches[folder.id]}</span>
+                    <span className="flex min-w-0 flex-1 flex-col items-start">
+                      <span className="w-full truncate text-left">
+                        {folder.name}
                       </span>
-                    )}
+                      {/* The one place a folder's branch is always shown — the
+                          Terminal sidebar repeats it on the headings it draws,
+                          beside the sessions being worked in, and has none to
+                          draw in a single-folder workspace. On its own line
+                          rather than beside the name: a branch is as long as
+                          somebody's ticket title, and sharing the row meant a
+                          heading that was all branch and no folder. */}
+                      {branches[folder.id] && (
+                        <span className="flex w-full items-center gap-1 tracking-normal normal-case opacity-70">
+                          <GitBranch className="size-2.5 shrink-0" />
+                          <span className="truncate">
+                            {branches[folder.id]}
+                          </span>
+                        </span>
+                      )}
+                    </span>
                   </button>
                 </h2>
 
@@ -676,6 +700,9 @@ function Row({
   // to find the file they were editing, and a strip with fifteen tabs in it is
   // not.
   const dirty = useFiles((state) => isDirty(state.docs[entry.path]))
+  // A string or null rather than the store's own record, so a row re-renders
+  // when *its* file's state changes and not when any file's does.
+  const git = useGitStatus((state) => gitStateOf(state, entry.path))
 
   const directory = entry.kind === "directory"
   const Icon = directory
@@ -698,7 +725,10 @@ function Row({
       <SideRow
         active={active}
         indent={depth}
-        title={entry.path}
+        // The state in words as well as in colour: the hover line is the only
+        // thing that says what a green name means to somebody who has not
+        // learnt the palette, or who cannot see it.
+        title={git ? `${entry.path} — ${GIT_LABELS[git]}` : entry.path}
         onClick={() =>
           directory
             ? useFiles.getState().toggle(entry.path)
@@ -714,16 +744,59 @@ function Row({
           <span aria-hidden className="size-3.5 shrink-0" />
         )}
         {iconUrl ? (
-          <img src={iconUrl} alt="" aria-hidden className="size-3.5 shrink-0" />
-        ) : (
-          <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <span className={cn("truncate", dirty && "italic")}>{entry.name}</span>
-        {dirty && (
-          <span
-            aria-label="Unsaved changes"
-            className="ml-auto size-1.5 shrink-0 rounded-full bg-foreground/60"
+          <img
+            src={iconUrl}
+            alt=""
+            aria-hidden
+            // The icon recedes with the name for an ignored row: a full-colour
+            // TypeScript logo beside a greyed `dist/bundle.ts` would be the
+            // brightest thing in the subtree it is meant to play down.
+            className={cn(
+              "size-3.5 shrink-0",
+              git === "ignored" && "opacity-40"
+            )}
           />
+        ) : (
+          <Icon
+            className={cn(
+              "size-3.5 shrink-0 text-muted-foreground",
+              git === "ignored" && "opacity-60"
+            )}
+          />
+        )}
+        <span
+          className={cn(
+            "truncate",
+            dirty && "italic",
+            // Git's colour, and only where git has something to say — a
+            // tracked file with no changes is the ordinary row and stays the
+            // sidebar's own foreground.
+            git && GIT_TONES[git]
+          )}
+        >
+          {entry.name}
+        </span>
+        {(dirty || (git && GIT_LETTERS[git])) && (
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
+            {dirty && (
+              <span
+                aria-label="Unsaved changes"
+                className="size-1.5 rounded-full bg-foreground/60"
+              />
+            )}
+            {/* Git's own letter, at the end of the row the way every editor
+                draws it. `aria-hidden` because the row's hover line already
+                says the state in words, and a bare "M" read out is worse than
+                nothing. */}
+            {git && GIT_LETTERS[git] && (
+              <span
+                aria-hidden
+                className={cn("text-[0.7rem] leading-none", GIT_TONES[git])}
+              >
+                {GIT_LETTERS[git]}
+              </span>
+            )}
+          </span>
         )}
       </SideRow>
 

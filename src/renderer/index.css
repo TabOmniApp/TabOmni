@@ -19,6 +19,10 @@
  * in for it (see `titleBarStyle` in electron/main.ts). That makes the header
  * the only thing left to drag the window by, and a drag region swallows clicks
  * unless whatever is clickable inside it opts back out.
+ *
+ * The opt-out below is a backstop, not something to rely on: macOS drops the
+ * `no-drag` rect often enough that the header keeps its buttons outside the
+ * drag region altogether rather than punching holes in it.
  */
 .drag-region {
   -webkit-app-region: drag;

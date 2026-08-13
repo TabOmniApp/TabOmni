@@ -60,3 +60,47 @@
    * `px-3 py-2`, so this only needs to not double up on top of that. */
   padding: 0 !important;
 }
+
+/*
+ * An `@` mention, drawn as a chip.
+ *
+ * A mention is a link to `tabomni://mention/<kind>:<id>` — see
+ * `lib/terminal/mention-text.ts` for why a link rather than a node of our own.
+ * `data-mention` is put there by `linkAttr` in `chat-composer.tsx`, because the
+ * href itself does not survive Milkdown's scheme allowlist. These selectors are
+ * the one place that stops a chip reading as a hyperlink. What is *sent* is the context it stands for; a
+ * chip that looked clickable would be promising to open something.
+ *
+ * The hue is the panel the mention came from, the same tokens the rail and the
+ * menu's own rows use: a table is the Database colour wherever it appears.
+ */
+.composer-prose .ProseMirror a[data-mention] {
+  --mention-hue: var(--muted-foreground);
+  border-radius: 0.25rem;
+  padding: 0.05em 0.3em;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: text;
+  color: var(--mention-hue);
+  /* Tinted from the hue itself rather than a second token per panel, so a
+   * re-hue in `globals.css` moves the chip with the icon. */
+  background-color: color-mix(in oklab, var(--mention-hue) 14%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--mention-hue) 30%, transparent);
+}
+
+.composer-prose .ProseMirror a[data-mention="table"] {
+  --mention-hue: var(--section-database);
+}
+
+.composer-prose .ProseMirror a[data-mention="request"] {
+  --mention-hue: var(--section-api);
+}
+
+.composer-prose .ProseMirror a[data-mention="mail"] {
+  --mention-hue: var(--section-mail);
+}
+
+.composer-prose .ProseMirror a[data-mention="note"] {
+  --mention-hue: var(--section-note);
+}

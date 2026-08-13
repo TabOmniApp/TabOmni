@@ -79,6 +79,39 @@ export type FileIndexEntry = {
 }
 
 /**
+ * What git says about one path.
+ *
+ * The index and the working tree are collapsed into one state on purpose:
+ * nothing in the studio stages anything, so "changed and not committed" is the
+ * whole of what a row can usefully say. `conflicted` is kept apart because it
+ * is the one state where the file on disk is not something anybody wrote.
+ */
+export type GitFileState =
+  "added" | "modified" | "deleted" | "untracked" | "conflicted" | "ignored"
+
+/**
+ * One path git has something to say about.
+ *
+ * `directory` means the entry stands for everything under it: git reports a
+ * wholly untracked or ignored directory as itself rather than as its contents,
+ * which is what keeps one `node_modules` from being a hundred thousand entries.
+ */
+export type GitStatusEntry = {
+  path: string
+  state: GitFileState
+  directory: boolean
+}
+
+/**
+ * A directory the Explorer is watching whose contents changed.
+ *
+ * The directory rather than what happened in it: `fs.watch` reports a rename as
+ * one event or two depending on the platform, and often names only one half of
+ * it, while the tree re-reads the whole listing regardless. See `main/watch.ts`.
+ */
+export type DirectoryChange = { dir: string }
+
+/**
  * What hovering a symbol in the editor says.
  *
  * The pieces tsserver hands back, kept apart rather than pre-rendered into one
@@ -969,6 +1002,16 @@ export type DesktopApi = {
   /** The branch checked out in a folder, or null when it is not a git
    * repository. */
   gitBranch: (folderId: string) => Promise<string | null>
+  /**
+   * What git says about the files in a folder — for the colours Explorer draws
+   * its rows in, and the `deleted` on a tab whose file has gone.
+   *
+   * Empty for a folder that is not a repository, which is an answer and not a
+   * failure. Capped at `MAX_STATUS_ENTRIES`; see `main/git.ts` for why a
+   * wholly untracked or ignored directory arrives as one entry rather than as
+   * its contents.
+   */
+  gitStatus: (folderId: string) => Promise<GitStatusEntry[]>
 
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
@@ -1106,6 +1149,23 @@ export type DesktopApi = {
    * the main process; the renderer asks once and holds it for the run.
    */
   listWorkspaceFiles: () => Promise<FileIndexEntry[]>
+
+  /**
+   * The directories the tree wants told about — every folder it has open, as
+   * one set that replaces whatever was being watched before.
+   *
+   * The whole set rather than a watch/unwatch pair because the renderer already
+   * holds it: `expanded` is what is on screen, and a call that says "these" can
+   * never leave the main process watching a folder that was collapsed while a
+   * message was in flight. Anything outside the workspace's folders is dropped
+   * on arrival, like every other `files:*` call, and each folder's own `.git`
+   * is added to whatever is sent — a commit changes every colour in the tree
+   * and no directory the tree has open.
+   */
+  watchDirectories: (dirs: string[]) => Promise<void>
+  /** Subscribes to those directories changing. Returns an unsubscribe
+   * function. */
+  onDirectoryChanged: (listener: (event: DirectoryChange) => void) => () => void
 
   /** The workspace's saved requests, oldest first. */
   listRequests: () => Promise<HttpRequestRecord[]>
@@ -1358,6 +1418,7 @@ export const IPC = {
   deleteDatabase: "databases:delete",
   testDatabaseConnection: "databases:test-connection",
   gitBranch: "git:branch",
+  gitStatus: "git:status",
   getSetting: "settings:get",
   setSetting: "settings:set",
   dbQuery: "db:query",
@@ -1373,6 +1434,8 @@ export const IPC = {
   revealPath: "files:reveal",
   readImageFile: "files:read-image",
   listWorkspaceFiles: "files:index",
+  watchDirectories: "files:watch",
+  directoryChanged: "files:changed",
   tsOpen: "ts:open",
   tsChange: "ts:change",
   tsClose: "ts:close",

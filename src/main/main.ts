@@ -85,6 +85,7 @@ const {
   inbox,
   preview,
   tsServers,
+  watchers,
 } = registerIpc(() => mainWindow)
 
 function createWindow(): void {
@@ -104,8 +105,8 @@ function createWindow(): void {
       ? { icon: DEV_ICON }
       : {}),
     // macOS only: drop the separate title bar and let the studio's own header
-    // stand in for it, with the traffic lights inset into it (the renderer
-    // leaves room for them — see the `pl-20` in `studio.tsx`). Windows and
+    // stand in for it, with the traffic lights inset into it (the header holds
+    // nothing on that side, so there is nothing for them to overlap). Windows and
     // Linux keep their native frame, which is what their users expect.
     ...(process.platform === "darwin"
       ? {
@@ -224,6 +225,10 @@ app.on("before-quit", (event) => {
     // Child processes with nothing to flush: a TypeScript server holds a
     // project in memory and no state worth writing.
     tsServers.stopAll()
+    // Same kind of thing, and free: file handles the OS would drop anyway, but
+    // a watcher with a debounce pending is a callback into a window that is on
+    // its way out.
+    watchers.closeAll()
 
     await Promise.race([
       // Containers are stopped, not removed: a database's data lives in its

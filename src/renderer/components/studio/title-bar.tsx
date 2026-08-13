@@ -17,9 +17,18 @@ export const IS_MAC = window.desktop.platform === "darwin"
  *
  * Not `pointer-events-none`: a drag region has to be able to take the press.
  * Only use it where the top of the screen holds nothing clickable.
+ *
+ * Stops short of the right edge, which is where the workbench's own header puts
+ * the theme toggle. macOS is known to keep a drag region after the element that
+ * asked for it is gone (electron#20926), and this one is on screen right up
+ * until the workbench fades in underneath it — a stale rect over that corner
+ * would leave the toggle taking no clicks.
  */
 export function TitleBarDragStrip() {
   return (
-    <div aria-hidden className="drag-region fixed inset-x-0 top-0 z-50 h-11" />
+    <div
+      aria-hidden
+      className="drag-region fixed top-0 right-12 left-0 z-50 h-11"
+    />
   )
 }

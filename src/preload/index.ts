@@ -8,6 +8,7 @@ import {
 import {
   IPC,
   type DesktopApi,
+  type DirectoryChange,
   type InboxEvent,
   type InboxStatusEvent,
   type MenuCommand,
@@ -62,6 +63,7 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.testDatabaseConnection, input),
 
   gitBranch: (folderId) => ipcRenderer.invoke(IPC.gitBranch, folderId),
+  gitStatus: (folderId) => ipcRenderer.invoke(IPC.gitStatus, folderId),
 
   listDirectory: (dirPath) => ipcRenderer.invoke(IPC.listDirectory, dirPath),
   readTextFile: (filePath) => ipcRenderer.invoke(IPC.readTextFile, filePath),
@@ -77,6 +79,9 @@ const api: DesktopApi = {
   revealPath: (target) => ipcRenderer.invoke(IPC.revealPath, target),
   readImageFile: (filePath) => ipcRenderer.invoke(IPC.readImageFile, filePath),
   listWorkspaceFiles: () => ipcRenderer.invoke(IPC.listWorkspaceFiles),
+  watchDirectories: (dirs) => ipcRenderer.invoke(IPC.watchDirectories, dirs),
+  onDirectoryChanged: (listener) =>
+    subscribe<DirectoryChange>(IPC.directoryChanged, listener),
 
   tsOpen: (filePath, text) => ipcRenderer.invoke(IPC.tsOpen, filePath, text),
   tsChange: (filePath, text) =>

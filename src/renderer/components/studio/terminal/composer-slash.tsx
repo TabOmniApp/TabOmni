@@ -262,6 +262,10 @@ class ClaudeSlashView implements PluginView {
 
   #onKeyDown = (event: KeyboardEvent) => {
     if (!this.#open) return
+    // Not a chord: ⌘/Ctrl+Enter is the composer's Send, and this handler runs on
+    // the capture phase — unchecked, an open menu answered it by inserting
+    // whatever row happened to be highlighted instead of sending the message.
+    if (event.metaKey || event.ctrlKey || event.altKey) return
 
     switch (event.key) {
       case "ArrowDown":

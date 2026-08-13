@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 
 import { useDatabases } from "@/lib/db/databases-store"
 import { useFiles } from "@/lib/files/store"
+import { watchExpandedDirectories } from "@/lib/files/watch"
 import { useInbox } from "@/lib/inbox/store"
 import { useNotes } from "@/lib/note/store"
 import { useActiveTabId, useHasOpenTabs } from "@/lib/panels"
@@ -38,7 +39,7 @@ import {
   SPLASH_ASSEMBLE_MS,
   SPLASH_FADE_MS,
 } from "./splash"
-import { IS_MAC, TitleBarDragStrip } from "./title-bar"
+import { TitleBarDragStrip } from "./title-bar"
 import { ThemeToggle } from "./theme-toggle"
 import { WorkspaceTabs } from "./workspace-tabs"
 
@@ -177,21 +178,30 @@ function Workbench() {
     []
   )
 
+  // The tree follows the disk for as long as the workbench is up — here rather
+  // than in the Explorer panel, which the rail unmounts every time somebody
+  // reads another one.
+  useEffect(() => watchExpandedDirectories(), [])
+
   return (
     <div className="flex h-svh flex-col overflow-hidden">
-      {/* Doubles as the window's title bar on macOS, where there is no other:
-          draggable, and inset far enough to clear the traffic lights. */}
-      <header
-        className={cn(
-          "drag-region flex h-11 shrink-0 items-center gap-2 border-b px-3",
-          IS_MAC && "pl-24"
-        )}
-      >
-        {/* Deliberately bare. The workspace holds several folders and each
-            one has a branch of its own, so a single line here could only be
-            about one of them — they are listed, with their branches, in
-            Explorer, which is the panel the folders belong to. */}
-        <div className="min-w-0 flex-1" />
+      {/* Doubles as the window's title bar on macOS, where there is no other. */}
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b pr-3">
+        {/*
+          The drag handle — this part of the header and not the whole of it. A
+          clickable thing inside a `-webkit-app-region: drag` box has to opt
+          back out with `no-drag`, and on macOS that subtraction is unreliable:
+          the theme toggle took no clicks at all while its `d` shortcut still
+          worked. So the region ends before the toggle rather than being
+          punched through, and nothing clickable is inside it.
+
+          It starts at the window's left edge, under the traffic lights, since
+          there is nothing here to clear them: deliberately bare, because the
+          workspace holds several folders and each one has a branch of its own,
+          so a single line here could only be about one of them — they are
+          listed, with their branches, in Explorer.
+        */}
+        <div className="drag-region h-full min-w-0 flex-1" />
 
         <ThemeToggle />
       </header>

@@ -28,6 +28,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import {
   ArrowUp,
+  AtSign,
   ImageOff,
   Paperclip,
   RotateCw,
@@ -50,6 +51,10 @@ import {
   CLAUDE_PERMISSION_MODES,
 } from "@/lib/terminal/catalog"
 import { IconButton } from "../icon-button"
+import { linkAttr } from "@milkdown/kit/preset/commonmark"
+import { expandMentions, mentionKindOf } from "@/lib/terminal/mention-text"
+import { lookupMention } from "@/lib/terminal/mentions"
+import { composerMention, configureComposerMention } from "./composer-mention"
 import { claudeSlash, configureClaudeSlash } from "./composer-slash"
 import "@milkdown/crepe/theme/common/style.css"
 import "../milkdown-theme.css"
@@ -136,6 +141,34 @@ function ComposerEditor({
         .config((ctx) => configureClaudeSlash(ctx, commands.read))
         .use(claudeSlash)
     }
+
+    // `@` is the studio's own: the tables, requests, mail and notes the other
+    // panels are holding, one line of context each. Offered to every kind of
+    // session rather than only to `claude` — what it sends is plain text, and a
+    // shell being told what a table's columns are is a comment at worst.
+    crepe.editor.config(configureComposerMention).use(composerMention)
+
+    /*
+     * A mention is a link to `tabomni://mention/…`, and Milkdown renders a
+     * link's `href` through an allowlist of schemes — ours is not one, so the
+     * attribute reaches the DOM empty and CSS has nothing to select on. (The
+     * mark still holds it, which is why the send path can still expand it.)
+     *
+     * `linkAttr` is the preset's own hook for adding attributes to a rendered
+     * link, so the kind travels as `data-mention` instead, which is what
+     * `chat-composer.css` colours the chip by. Composed with whatever is already
+     * set rather than replacing it: Crepe's link tooltip configures this too.
+     */
+    crepe.editor.config((ctx) => {
+      const existing = ctx.get(linkAttr.key)
+      ctx.set(linkAttr.key, (mark) => {
+        const kind = mentionKindOf(mark.attrs.href)
+        return {
+          ...existing(mark),
+          ...(kind === null ? {} : { "data-mention": kind }),
+        }
+      })
+    })
 
     return crepe
     // Built once and kept, with no dependency on `commands`: it reads the
@@ -450,13 +483,42 @@ function ComposerBody({
    * the start of a message.
    */
   function insertSlash() {
+    insertTrigger("/")
+  }
+
+  /**
+   * Types `@` for the person who did not know they could.
+   *
+   * A leading space when there is text already, because the mention query only
+   * fires at the start of a word — typing the button's `@` onto the end of
+   * "why is" would otherwise be a character that opens nothing.
+   */
+  function insertMention() {
+    insertTrigger("@", { spaceBefore: true })
+  }
+
+  function insertTrigger(
+    character: string,
+    { spaceBefore = false }: { spaceBefore?: boolean } = {}
+  ) {
     const editor = getInstance()
     if (!editor) return
 
     editor.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       view.focus()
-      view.dispatch(view.state.tr.insertText("/"))
+
+      // The character before the caret, read *within* the paragraph rather than
+      // by document position: position 0 is before the paragraph node itself,
+      // and `doc.textBetween` across that boundary throws — which took the whole
+      // action with it and inserted nothing at all.
+      const { $from } = view.state.selection
+      const before =
+        $from.parentOffset > 0
+          ? $from.parent.textBetween($from.parentOffset - 1, $from.parentOffset)
+          : ""
+      const pad = spaceBefore && before !== "" && before !== " " ? " " : ""
+      view.dispatch(view.state.tr.insertText(pad + character))
     })
   }
 
@@ -567,14 +629,23 @@ function ComposerBody({
     })
   }
 
-  function send() {
+  /**
+   * Sends what the composer holds, with every `@` chip replaced by the context
+   * it stands for.
+   *
+   * Async only for that expansion — a note's body may be a file that has not been
+   * read yet. The editor is cleared after it, so the message that goes and the
+   * message that disappears are the same one.
+   */
+  async function send() {
     if (!canSend) return
     const editor = getInstance()
     if (!editor) return
 
     const markdown = editor.action(getMarkdown()).trim()
+    const expanded = await expandMentions(markdown, lookupMention)
     const paths = attachments.map((attachment) => attachment.path).join("\n")
-    const message = [markdown, paths].filter(Boolean).join("\n\n")
+    const message = [expanded, paths].filter(Boolean).join("\n\n")
 
     onSend(message)
     editor.action(replaceAll(""))
@@ -601,7 +672,7 @@ function ComposerBody({
       onKeyDown={(event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
           event.preventDefault()
-          send()
+          void send()
           return
         }
         // Bubbles up from the editor and everything else in the composer —
@@ -662,6 +733,16 @@ function ComposerBody({
               <Slash />
             </IconButton>
           )}
+
+          {/* For every kind of session: what this inserts is text, and the
+              panels it reads are the workspace's rather than a session's. */}
+          <IconButton
+            label="Mention a table, request, mail or note"
+            onClick={insertMention}
+            disabled={disabled}
+          >
+            <AtSign />
+          </IconButton>
 
           {claudeFolderId !== null && (
             <>
@@ -732,7 +813,7 @@ function ComposerBody({
               title="Send  (⌘↵)"
               className="size-8 rounded-full"
               disabled={!canSend}
-              onClick={send}
+              onClick={() => void send()}
             >
               <ArrowUp />
             </Button>

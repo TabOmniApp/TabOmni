@@ -13,7 +13,8 @@ import {
 } from "lucide-react"
 
 import { useExplorer, type OpenTab } from "@/lib/db/explorer-store"
-import { isDirty, useFiles } from "@/lib/files/store"
+import { isDirty, isMissing, useFiles } from "@/lib/files/store"
+import { gitStateOf, GIT_TONES, useGitStatus } from "@/lib/files/git-status"
 import { iconFor } from "@/lib/files/icons"
 import { isImage } from "@/lib/files/viewers"
 import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
@@ -118,29 +119,49 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
 
   const fileOpenIds = useFiles((state) => state.openIds)
   const fileDocs = useFiles((state) => state.docs)
+  const fileEntries = useFiles((state) => state.entries)
+  // The whole record rather than one lookup: this builds every tab in a loop,
+  // and the store changes only when a `git status` comes back.
+  const gitStatus = useGitStatus()
   const chats = useConversations((state) => state.open)
 
   /** Every open tab, grouped by panel — the order a strip nobody has dragged
    * in is shown in, and the fallback `arrange` places new tabs against. */
   const grouped: TabStripItem[] = [
-    ...fileOpenIds.map((filePath) => ({
-      id: PREFIX.files + filePath,
-      // The file's name, not its path: a strip of absolute paths is a strip of
-      // one repeated prefix. The path is on the tab's own hover line, and in
-      // the pane's header above the editor.
-      label: nameOf(filePath),
-      title: filePath,
-      copyText: filePath,
-      copyLabel: "Copy path",
-      // The same icon the tree draws, so a tab and the row it came from are
-      // recognisably the same file.
-      icon: iconOf(filePath),
-      // The same dot the tree marks the row with: whichever of the two is
-      // being looked at says the file has edits that are not on disk. The
-      // strip has had this since it was the editor's own — no panel until now
-      // had a tab that could be unsaved.
-      dirty: isDirty(fileDocs[filePath]),
-    })),
+    ...fileOpenIds.map((filePath) => {
+      const git = gitStateOf(gitStatus, filePath)
+      // A tab is the one place a deleted file is still visible — the tree
+      // lists what is on disk, so the row went with the file. Either source
+      // answers: git knows a tracked file was deleted, and the listing the
+      // tree holds knows an untracked one was, which git stops mentioning the
+      // moment it is gone.
+      const deleted =
+        git === "deleted" || isMissing({ entries: fileEntries }, filePath)
+
+      return {
+        id: PREFIX.files + filePath,
+        // The file's name, not its path: a strip of absolute paths is a strip
+        // of one repeated prefix. The path is on the tab's own hover line, and
+        // in the pane's header above the editor.
+        label: nameOf(filePath),
+        title: filePath,
+        copyText: filePath,
+        copyLabel: "Copy path",
+        // The same icon the tree draws, so a tab and the row it came from are
+        // recognisably the same file.
+        icon: iconOf(filePath),
+        // The same dot the tree marks the row with: whichever of the two is
+        // being looked at says the file has edits that are not on disk. The
+        // strip has had this since it was the editor's own — no panel until now
+        // had a tab that could be unsaved.
+        dirty: isDirty(fileDocs[filePath]),
+        // And the same colour, so a tab and its row agree about what the file
+        // is. `deleted` wins whatever git last said, because it is the state
+        // that makes the tab the only thing left of the file.
+        tone: deleted ? GIT_TONES.deleted : git ? GIT_TONES[git] : undefined,
+        note: deleted ? "deleted" : undefined,
+      }
+    }),
     // Beside the files because they are the same pane's — a conversation opened
     // from the Explorer sidebar, read and not run. The session icon, since it is
     // the same kind of thing as a `claude` tab; what says it is not running is

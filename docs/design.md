@@ -324,12 +324,70 @@ read when it is expanded, one `readdir` at a time, so pointing the workspace at
 a repository with a `node_modules` in it costs nothing until somebody opens
 that row.
 
-**Nothing watches the disk.** A `claude` session writing files two panels away
-does not move a row here until Refresh is pressed. A watcher over a whole
-repository is a file handle per directory and a rebuilt tree on every
-`npm install`, and the panel would spend its time reacting to churn nobody is
-reading. Refresh re-reads every open directory and every open file — except the
+**What is expanded is watched, and nothing else is.** A folder opened in the
+tree gets one non-recursive `fs.watch` for as long as it stays open, and closing
+the row closes it (`main/watch.ts`, `lib/files/watch.ts`). This is the narrow
+version of a watcher rather than the usual one: a watch over a whole repository
+is a file handle per directory and a rebuilt tree on every `npm install`, and
+the panel would spend its time reacting to churn nobody is reading, while this
+costs one handle per row somebody is actually looking at and reports a
+directory the tree was drawing anyway.
+
+The renderer sends the whole set — `expanded` itself — rather than a
+watch/unwatch pair, so the main process cannot end up holding a watcher for a
+folder that was collapsed while a message was in flight. What comes back names
+the directory and not the change: `fs.watch` reports a rename as one event or
+two depending on the platform, and often names only one half of it, while the
+answer is a `readdir` of that directory either way. `syncDirs` in the files
+store re-reads the listing and the files in it that are on screen — except the
 ones with unsaved edits, which are never overwritten by it.
+
+**The rows are coloured by what git says about them, and lettered at the end
+the way an editor does it** — `M`, `U`, `A`, `D`, `C`. One `git status` per
+folder (`main/git.ts`, held in `lib/files/git-status.ts`), and four things to
+read off a row without opening anything: a new file is green, an edited one the
+familiar tan, a deleted or conflicted one red, and everything ignored recedes
+into the theme's own grey — `node_modules` and `dist` stop being the same weight
+as `src`, which is most of what the colour is for. The values are the editors'
+own git decoration colours rather than a set chosen here: this is the one part
+of the studio somebody arrives already knowing, and a green that means "new"
+everywhere else must not mean something else in this tree.
+
+Ignored has no letter, deliberately. The letter is for a state somebody might
+act on, and there are hundreds of ignored rows to one modified file — a column
+of them down the whole of `node_modules` would be the loudest thing on the
+screen, saying the least. A tracked file with nothing changed in it is the
+ordinary row and has neither colour nor letter, so the tree is mostly plain and
+the marks mean something. The hover line says the state in words as well, since
+a palette nobody was taught is not information.
+
+The index and the working tree are collapsed into one state deliberately:
+nothing in the studio stages anything, so "changed and not committed" is the
+whole of what a row can usefully say. A wholly untracked or ignored _directory_
+arrives as one entry — git reports `node_modules/` rather than its contents,
+which is the difference between one line and a hundred thousand — and the
+renderer reads it as a prefix, which is also how a folder gets a colour without
+anything aggregating its children.
+
+A deleted file has no row, because the tree is what is on disk. Where it shows
+is the tab: a file that has gone keeps its tab, drawn in the deleted colour with
+`deleted` written on it, so the editor is plainly showing something that is no
+longer there rather than looking like every other tab. Either source answers —
+git knows a tracked file was deleted, and the listing the tree already holds
+knows an untracked one was, which git stops mentioning the moment it is gone.
+
+The status is re-read when the folders load, when Refresh is pressed, and —
+debounced, so a checkout is one read and not fifty — whenever a watched
+directory reports something. Each folder's `.git` is watched for exactly this:
+a commit made in a Terminal session changes the colour of every row and the
+branch beside the folder, while touching no directory the tree has open.
+
+**Refresh is still in the header**, because a watcher is the fast path and not
+the reliable one: `fs.watch` misses writes on network and virtualised
+filesystems, the same caveat the transcript mirror polls around. It re-reads
+every open directory and every open file, and rebuilds the palette's index,
+which nothing watches at all — keeping that in step would mean watching
+everything under the workspace, which is the cost this avoids.
 
 **A path is the identity.** Tabs elsewhere are addressed by an id this app
 made up; a file has only the name the filesystem gave it, so `file:` + the
@@ -358,7 +416,10 @@ carry the same three actions on its own copy of the folder list, which meant two
 answers to "where do I remove a folder" and a sidebar that was this one plus a
 session row; it now lists sessions and leaves the folders alone. Each heading
 carries the folder's branch, and this is the one list that always shows it — the
-Terminal sidebar has no heading to put it on in a single-folder workspace.
+Terminal sidebar has no heading to put it on in a single-folder workspace. It
+sits on a line of its own under the name rather than at the right of it: branch
+names run as long as the ticket they were cut for, and a row shared with one of
+those was all branch and no folder.
 
 Removing a folder takes the studio's record of where it is, along with the
 sessions open against it, and leaves the directory exactly as it is — the
@@ -789,6 +850,95 @@ the view that is not the one you answer in.
 What the composer sends goes into the pty as bracketed paste — so a `/…` line
 is run as a command, and Stop sends the Escape the CLI reads as "end this
 turn".
+
+#### `@` — the other panels, in the prompt
+
+**The one thing only a studio can offer an agent.** An agent in an editor sees
+the files and the terminal output; it cannot see the schema of the database this
+project talks to, the request that reproduces a bug, or the mail the app just
+sent, because those live in other applications. Here they live in the same
+window, so `@` in the composer is a menu of them: a table with its columns, a
+saved request resolved against the active environment, a captured mail, a note.
+`lib/terminal/mentions.ts` is the catalogue.
+
+**Everything is read from what the renderer already holds** — a table's columns
+are the ones the schema read brought back, a request's URL goes through the same
+`resolveUrl` the send path uses. No query is run and no IPC is invented to answer
+a keystroke, which is also why tables appear only once a database is open: a menu
+opening is not consent to connect. What _is_ asked for is the three panels that
+load lazily (`primeMentions`), because a menu that was empty until you had
+visited the API panel reads as a broken feature rather than an empty workspace.
+
+**Picking one inserts a chip — the thing's own name, in the panel's colour — and
+the context it stands for replaces it on the way out.** Pasting the context
+inline was the first version and it read badly: a note's body or a table's two
+dozen columns pushed the sentence being written off the screen, and the prompt
+stopped being something anybody could re-read before sending it. `expandMentions`
+in `lib/terminal/mention-text.ts` does the replacing, called by the composer's
+`send`; long values are collapsed to one line and cut there, saying how much was
+dropped.
+
+The chip is **a link to a private scheme**, `tabomni://mention/<kind>:<id>`,
+rather than a ProseMirror node of this app's own. The composer is a Crepe
+document serialized to markdown at send time, so a custom node would need its own
+serializer and node view, while a link is already in the commonmark schema,
+already serializes, and carries the id in its href — which is what makes the
+expansion possible at all. Nothing can open a `tabomni://` link, deliberately:
+the href is an identifier, not an address.
+
+Milkdown renders a link's `href` through an allowlist of schemes, so ours reaches
+the DOM empty — the _mark_ still holds it, which is why the send path still works,
+but CSS has nothing to select on. The kind therefore travels as a `data-mention`
+attribute added through `linkAttr`, the preset's own hook for attributes on a
+rendered link, composed with whatever Crepe's link tooltip has already set there.
+`chat-composer.css` colours the chip from that, in the same token the rail uses
+for that panel: a table is the Database hue wherever it appears.
+
+Nothing is read when a row is picked — resolution happens at send — so picking
+cannot fail, and a mention whose thing has gone by then falls back to the label
+the chip was showing rather than sending an href the agent can do nothing with.
+The trigger is `@` at the start of a word, so `someone@example.com` typed into a
+prompt opens nothing, and an open menu ignores ⌘/Ctrl+Enter so that Send still
+sends rather than inserting whichever row was highlighted.
+
+The same `@milkdown/plugin-slash` machinery as the `/` menu beside it — that
+plugin is "a menu on a trigger character", and neither of its two uses here is
+Crepe's own block menu, which this composer turns off. What differs is the
+trigger, the rows, and that picking one inserts context rather than a command.
+
+#### What the turn changed
+
+**The transcript says which files changed, and says it first.** The CLI
+records every tool call it makes with the arguments it made it with, so an `Edit`
+is a line naming the file it edited: `writtenPaths` in `lib/terminal/touched.ts`
+reads them out of the transcript the chat view is already tailing. A strip under
+the conversation lists them, newest last, and clicking one opens it in Explorer.
+
+Two things follow. The first is that the files are named at all — the `Edit`
+cards are in the transcript in order, and are the first thing "Show tool calls"
+switches off, so "what did it change" used to be a scroll back through the turn
+or a `git status` in the terminal view. The second is that Explorer follows
+along: `syncPaths` in the files store re-reads exactly those paths — the open
+directories they are in, and the open files themselves, skipping any with unsaved
+edits, which are what somebody typed and not the session's to discard. The effect
+lives in `terminal-session-view.tsx` rather than in the chat view, because a turn
+is usually watched in the terminal view and the tree should not be stale
+depending on which of the two is on screen.
+
+This is kept alongside the tree's own watchers rather than replaced by them. It
+names the file as the tool call is recorded rather than after a debounce, it
+reaches a folder mounted into a container or held over a network — where
+`fs.watch` says nothing — and the strip is a list of what the turn did, which is
+a thing to read rather than a mechanism for keeping a listing fresh.
+
+Only writes count. `Read`, `Grep` and `Glob` name files and change nothing, so
+counting them would turn "what changed" into "what was looked at" and re-read
+half a repository per turn. `Bash` is the honest gap — `sed -i`, a build, a
+`git checkout` all write and none of them says so in a way this can read — so a
+turn that only ran commands is picked up by the tree's watchers, and by Refresh
+where those cannot see it. A read-only conversation shows the same strip and syncs nothing: those
+writes happened whenever it ran, and a tree refreshed from a transcript days old
+would be answering a question nobody asked.
 
 A bar along the bottom of both views shows what the conversation has spent,
 read off the `usage` the CLI copies onto every assistant line. The figure that

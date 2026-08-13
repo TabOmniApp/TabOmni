@@ -38,6 +38,7 @@ import type {
 } from "@shared/api"
 import { useTerminal } from "@/lib/terminal/store"
 import { relativeTime } from "@/lib/terminal/conversations"
+import { writtenPaths } from "@/lib/terminal/touched"
 import {
   ASK_USER_QUESTION,
   parseAnswers,
@@ -48,6 +49,7 @@ import { parseUserMessage } from "@/lib/terminal/slash-command"
 import { clamp, describeInput } from "@/lib/terminal/tool-input"
 import { Meter } from "../meter"
 import { MarkdownView } from "../markdown-view"
+import { TouchedFiles } from "./touched-files"
 import "./slash-command.css"
 
 /** Whether tool calls show up in the transcript at all, remembered across
@@ -302,11 +304,37 @@ export function useTranscript(session: {
     [target]
   )
 
+  /**
+   * The files this conversation has written, from its own tool calls.
+   *
+   * Derived here rather than in the chat view because two things want it and
+   * neither is that view: the strip that lists them, and the session's own
+   * effect that re-reads them off disk — which has to run while the *terminal*
+   * view is the one on screen, since that is where a turn is usually watched.
+   *
+   * Keyed on the held entries rather than the rendered ones so the identity is
+   * stable between renders: an effect depending on this must not fire again
+   * because a render produced a second empty array.
+   */
+  const touched = useMemo(
+    () =>
+      onTarget
+        ? writtenPaths(
+            feed.entries.filter(
+              (entry): entry is Extract<Entry, { kind: "tool" }> =>
+                entry.kind === "tool"
+            )
+          )
+        : NO_PATHS,
+    [onTarget, feed.entries]
+  )
+
   return {
     entries,
     pending,
     working,
     target,
+    touched,
     // Both belong to the conversation the pane is on, which is also the one
     // the pty is running — so neither needs qualifying beyond the feed still
     // being the previous conversation's for the render after a switch.
@@ -315,6 +343,10 @@ export function useTranscript(session: {
     markSent,
   }
 }
+
+/** One array for every "nothing here", so an effect keyed on it does not see a
+ * new value on every render. */
+const NO_PATHS: string[] = []
 
 export type Transcript = ReturnType<typeof useTranscript>
 
@@ -426,6 +458,11 @@ export function ChatView({
         showToolCalls={showToolCalls}
         showThinking={showThinking}
       />
+
+      {/* Under the transcript rather than over it: the newest turn is at the
+          bottom, so the file just written is next to the file list that names
+          it — and to the composer below, where the next instruction goes. */}
+      <TouchedFiles paths={transcript.touched} />
     </div>
   )
 }

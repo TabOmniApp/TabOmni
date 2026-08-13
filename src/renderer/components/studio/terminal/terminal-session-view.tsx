@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils"
 import { MessagesSquare, RotateCw, SquareTerminal } from "lucide-react"
 
 import type { AgentKind, ClaudePermissionMode } from "@shared/api"
+import { useFiles } from "@/lib/files/store"
 import { SESSION_TYPES } from "@/lib/terminal/catalog"
 import { useClaudeLimits } from "@/lib/terminal/limits"
 import {
@@ -163,6 +164,27 @@ export function TerminalSessionView({
   // Followed whichever view is on screen: the composer needs to know whether a
   // turn is in flight even while the terminal is what is being shown.
   const transcript = useTranscript(session)
+
+  /*
+   * Explorer follows what the session writes.
+   *
+   * The panel does watch the directories it has open, but only those, and only
+   * after a debounce — so this stays as the earlier and surer answer for the
+   * files a session writes: the transcript names them as the tool call is
+   * recorded, wherever they are. Here rather than in the chat view because a
+   * turn is usually watched in the terminal view, and Explorer should not be
+   * stale depending on which of the two is on screen.
+   *
+   * The joined list is the dependency rather than the array: `syncPaths` writes
+   * to another store, and an effect that fired on every render would re-read the
+   * disk on every keystroke in the composer.
+   */
+  const touched = transcript.touched
+  const touchedKey = touched.join("\n")
+  useEffect(() => {
+    if (touchedKey === "") return
+    void useFiles.getState().syncPaths(touchedKey.split("\n"))
+  }, [touchedKey])
   // Account-wide rather than this session's, and shared with every other tab
   // reading it — see `lib/terminal/limits.ts`.
   const limits = useClaudeLimits()

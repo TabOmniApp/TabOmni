@@ -184,10 +184,22 @@ only thing git is still asked is each folder's branch name, shown beside the
 folder in the Explorer tree.
 
 Explorer is the workspace's folders as directories — expanded a level at a
-time, nothing hidden, nothing watched (Refresh is the header button). Its
+time, nothing hidden, and watched only where it is expanded: one non-recursive
+`fs.watch` per open folder (`src/main/watch.ts`, driven by the `expanded` set
+through `lib/files/watch.ts`), closed again when the row is collapsed. Refresh
+is still the header button, for the filesystems `fs.watch` is quiet on and for
+the palette's index, which nothing watches. Its
 `files:*` calls all go through `insideAny` in `src/main/files.ts`, which is what
 keeps an absolute path from the renderer inside the folders the workspace was
-pointed at; deleting is `shell.trashItem` rather than `unlink`. `⌘P` searches files too — the one index in the palette
+pointed at; deleting is `shell.trashItem` rather than `unlink`. Rows are
+coloured by git and lettered at the end (`M`, `U`, `A`, `D`, `C`; ignored has
+none) in the editors' own decoration colours — new green, modified tan, deleted
+and conflicted red, ignored greyed — from one `git status` per folder (`workingTree` in `src/main/git.ts`, held in
+`lib/files/git-status.ts`, re-read on the watchers' events and on Refresh). A
+wholly untracked or ignored directory arrives as one entry and is read as a
+prefix, so `node_modules` costs one line. A deleted file has no row at all, so
+it is its **tab** that says `deleted`, either because git says so or because
+the listing the tree holds no longer mentions it. `⌘P` searches files too — the one index in the palette
 (`files:index` walks the workspace once per run; `lib/files/search.ts` shortlists
 before cmdk scores). Images open in an image view, and the files that are
 honestly two things — an SVG, and a `.md`, which opens in the editor and has a
@@ -199,6 +211,23 @@ says what is checked in and why it is a subset. A file tab is
 addressed by its own absolute path, and `lib/files/paths.ts` is the one place
 that splits one — it accepts both separators, unlike `lib/runtime/tree.ts`,
 which is for paths this app made up. See the Explorer section of
+`docs/design.md`.
+
+**`@` in the chat composer** offers what the other panels hold — a table with
+its columns, a saved request resolved against the active environment, a captured
+mail, a note — as a **chip**: the thing's own name in that panel's colour, which
+`expandMentions` swaps for one line of context when the message is sent. The chip
+is a link to `tabomni://mention/<kind>:<id>`, and its kind reaches the DOM as
+`data-mention` because Milkdown empties an unknown scheme's href.
+`lib/terminal/mention-text.ts` holds the rules (and is the testable half),
+`lib/terminal/mentions.ts` the catalogue that reads the four stores, and
+`components/studio/terminal/composer-mention.tsx` the menu, built on the same
+`@milkdown/plugin-slash` machinery as the `/` menu. Nothing runs a query. **What a turn changed**
+comes from the same transcript: `writtenPaths` in `lib/terminal/touched.ts` reads
+the write tools' own arguments, a strip under the conversation lists the files,
+and `syncPaths` in the files store re-reads exactly those — kept beside the
+watchers because it names a file as the tool call is recorded, without their
+debounce, and works where `fs.watch` does not. Both are in the Terminal sessions part of
 `docs/design.md`.
 
 **Conversations** is the section under the tree: every `claude` transcript the

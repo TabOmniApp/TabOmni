@@ -31,6 +31,13 @@ export type TabStripItem = {
   /** Marks a tab with work in flight — a dot in place of its close button,
    * the way an editor marks a buffer that is not on disk yet. */
   dirty?: boolean
+  /** A colour for the label, where the panel has something to say about the
+   * thing itself — a file's git state, say. A class, since the palette belongs
+   * to whoever built the tab and not to the strip. */
+  tone?: string
+  /** A word after the label, for a state the colour alone cannot carry:
+   * `deleted` on a file that is no longer on disk. */
+  note?: string
   /** What the menu's copy item puts on the clipboard, when it differs from
    * the label. */
   copyText?: string
@@ -295,7 +302,19 @@ export function TabStrip({
                     <DropLine side="right" />
                   )}
                   {item.icon}
-                  <span className="truncate font-mono">{item.label}</span>
+                  <span className={cn("truncate font-mono", item.tone)}>
+                    {item.label}
+                  </span>
+                  {item.note && (
+                    <span
+                      className={cn(
+                        "shrink-0 text-[0.65rem] tracking-wide uppercase opacity-80",
+                        item.tone
+                      )}
+                    >
+                      {item.note}
+                    </span>
+                  )}
 
                   {item.dirty && (
                     <span

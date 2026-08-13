@@ -12,6 +12,7 @@ import {
   useTranscript,
   useTranscriptDisplay,
 } from "./chat-view"
+import { TouchedFiles } from "./touched-files"
 
 /**
  * What each conversation's own mirror is tagged with.
@@ -114,6 +115,13 @@ export function ConversationView({
         showToolCalls={showToolCalls}
         showThinking={showThinking}
       />
+
+      {/* The files this conversation wrote, listed the same way a live session's
+          are — reading a finished conversation is largely asking what it did.
+          Nothing is re-read off disk for these: the writes happened whenever this
+          conversation ran, and a tree refreshed from a transcript days old would
+          be answering a question nobody asked. */}
+      <TouchedFiles paths={transcript.touched} />
     </div>
   )
 }
