@@ -1,4 +1,5 @@
 import type { NoteBlock } from "../shared/api"
+import { noteFileNameOf } from "../shared/note-files"
 
 /**
  * Reading a note's document in the main process.
@@ -23,6 +24,59 @@ export function parseNote(text: string): NoteBlock[] {
     console.error("Could not read the note's blocks")
     return []
   }
+}
+
+/** Every file of the workspace's own the document points at, each once. The
+ * same question as `drawingIdsIn`, asked of the pictures. */
+export function noteFileNamesIn(blocks: NoteBlock[]): string[] {
+  const names: string[] = []
+
+  const walk = (nodes: NoteBlock[]): void => {
+    for (const node of nodes) {
+      const name = noteFileNameOf(node.props?.url)
+      if (name && !names.includes(name)) names.push(name)
+      if (node.children) walk(node.children)
+    }
+  }
+
+  walk(blocks)
+  return names
+}
+
+/**
+ * The same document with every `note-file://` URL replaced by what `resolved`
+ * holds for it.
+ *
+ * Why the substitution happens here rather than in `note-html.ts`: that file
+ * renders one block at a time and would have to carry the pictures through every
+ * case to reach the two that hold a URL, and its scheme list is the security
+ * boundary — a URL arriving there should already be one a browser can follow. So
+ * the document is resolved first, and what the renderer sees is a `data:` URL
+ * like any other.
+ *
+ * A name with nothing resolved for it is left alone, which is a URL in a scheme
+ * `safeUrl` refuses: a picture whose file has gone renders as the "missing" line
+ * for a file the page cannot reach, rather than a broken image.
+ */
+export function withNoteFileUrls(
+  blocks: NoteBlock[],
+  resolved: ReadonlyMap<string, string>
+): NoteBlock[] {
+  return blocks.map((block) => {
+    const children = block.children
+      ? withNoteFileUrls(block.children, resolved)
+      : block.children
+
+    const url = resolved.get(noteFileNameOf(block.props?.url) ?? "")
+    if (!url) {
+      return children === block.children ? block : { ...block, children }
+    }
+    return {
+      ...block,
+      props: { ...block.props, url },
+      ...(children ? { children } : {}),
+    }
+  })
 }
 
 /** Every drawing the document points at, in the order they appear and each

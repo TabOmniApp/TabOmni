@@ -17,6 +17,7 @@ import type {
   NoteFolder,
   NoteRecord,
 } from "../src/shared/api"
+import { noteFileUrl } from "../src/shared/note-files"
 import { NotePreview } from "../src/main/preview"
 import { check, finish, section } from "./harness"
 
@@ -38,6 +39,13 @@ const NOTE_ID = "11111111-1111-4111-8111-111111111111"
 const EMPTY_ID = "22222222-2222-4222-8222-222222222222"
 const LEGACY_ID = "33333333-3333-4333-8333-333333333333"
 const DRAWING_ID = "44444444-4444-4444-8444-444444444444"
+
+/** A picture the note holds, and one whose file has gone. Both are what a
+ * document says rather than what is on disk, which is the whole point of
+ * resolving them before the page is rendered. */
+const PICTURE = "55555555-5555-4555-8555-555555555555.png"
+const MISSING_PICTURE = "66666666-6666-4666-8666-666666666666.png"
+const PICTURE_DATA_URL = "data:image/png;base64,iVBORw0KGgo="
 
 /** A document with one of everything the page has a case for. */
 const BLOCKS: NoteBlock[] = [
@@ -127,6 +135,19 @@ const BLOCKS: NoteBlock[] = [
     },
   },
   { type: "drawing", props: { drawingId: DRAWING_ID } },
+  // A picture dropped into the note. The document holds a `note-file://` URL,
+  // which is this app's own scheme and means nothing to a browser — so what has
+  // to arrive is the bytes.
+  {
+    type: "image",
+    props: { url: noteFileUrl(PICTURE), name: "shape.png", previewWidth: 320 },
+  },
+  // The same, for a file no longer in the workspace: the caption stays and the
+  // page says so, rather than serving a URL the browser cannot follow.
+  {
+    type: "image",
+    props: { url: noteFileUrl(MISSING_PICTURE), caption: "gone" },
+  },
   // The one block whose text must not become markup: a note is the user's own
   // writing, and someone writing about HTML writes tags.
   {
@@ -176,6 +197,7 @@ const preview = new NotePreview({
     id === DRAWING_ID
       ? '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
       : "",
+  noteFileDataUrl: async (name) => (name === PICTURE ? PICTURE_DATA_URL : ""),
 })
 
 async function main() {
@@ -269,6 +291,19 @@ async function main() {
   check(
     "inlines the drawing",
     html.includes('<figure class="drawing"><svg viewBox=')
+  )
+  check(
+    "inlines a picture the note holds",
+    html.includes(
+      `<figure><img src="${PICTURE_DATA_URL}" alt="shape.png" width="320">`
+    ),
+    html.match(/<figure><img[^>]*>/)?.[0]
+  )
+  check(
+    "says so for a picture whose file has gone",
+    !html.includes("note-file://") &&
+      html.includes('<p class="missing">gone</p>'),
+    html.match(/note-file:[^"]*/)?.[0]
   )
 
   section("what the page will not do")

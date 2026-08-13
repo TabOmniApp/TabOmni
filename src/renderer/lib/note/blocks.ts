@@ -1,4 +1,5 @@
 import { DRAWING_LANGUAGE, type NoteBlock } from "@shared/api"
+import { noteFileNameOf, noteFileUrl } from "@shared/note-files"
 
 /**
  * A note's document, as it is on disk.
@@ -105,6 +106,43 @@ export function adoptDrawingFences(blocks: NoteBlock[]): NoteBlock[] {
     }
 
     return children === block.children ? block : { ...block, children }
+  })
+}
+
+/** Every file of the workspace's own the document points at — the pictures
+ * dropped into it, each once. The same question `drawingIdsIn` asks. */
+export function noteFileNamesIn(blocks: NoteBlock[]): string[] {
+  const names: string[] = []
+  walk(blocks, (block) => {
+    const name = noteFileNameOf(block.props?.url)
+    if (name && !names.includes(name)) names.push(name)
+  })
+  return names
+}
+
+/**
+ * Rewrites the name in every note file URL, keeping the blocks themselves —
+ * `mapDrawingIds` for the pictures, and what duplicating a note needs for the
+ * same reason.
+ */
+export function mapNoteFileNames(
+  blocks: NoteBlock[],
+  replace: (fileName: string) => string
+): NoteBlock[] {
+  return blocks.map((block) => {
+    const name = noteFileNameOf(block.props?.url)
+    const children = block.children
+      ? mapNoteFileNames(block.children, replace)
+      : block.children
+
+    if (!name) {
+      return children === block.children ? block : { ...block, children }
+    }
+    return {
+      ...block,
+      props: { ...block.props, url: noteFileUrl(replace(name)) },
+      ...(children ? { children } : {}),
+    }
   })
 }
 

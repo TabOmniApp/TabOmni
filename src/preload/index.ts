@@ -137,6 +137,12 @@ const api: DesktopApi = {
   writeDrawingSvg: (id, svg) =>
     ipcRenderer.invoke(IPC.writeDrawingSvg, id, svg),
 
+  writeNoteFile: (fileName, bytes) =>
+    ipcRenderer.invoke(IPC.writeNoteFile, fileName, bytes),
+  copyNoteFile: (from, to) => ipcRenderer.invoke(IPC.copyNoteFile, from, to),
+  deleteNoteFiles: (fileNames) =>
+    ipcRenderer.invoke(IPC.deleteNoteFiles, fileNames),
+
   inboxStart: (port) => ipcRenderer.invoke(IPC.inboxStart, port),
   inboxStop: () => ipcRenderer.invoke(IPC.inboxStop),
   inboxStatus: () => ipcRenderer.invoke(IPC.inboxStatus),

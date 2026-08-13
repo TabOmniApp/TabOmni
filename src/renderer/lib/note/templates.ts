@@ -2,8 +2,9 @@ import { create } from "zustand"
 
 import type { NoteBody, NoteTemplate } from "@shared/api"
 import { getSetting, setSetting } from "../workspace"
-import { drawingIdsIn, serializeBody } from "./blocks"
+import { drawingIdsIn, noteFileNamesIn, serializeBody } from "./blocks"
 import { deleteDrawings } from "./drawings"
+import { deleteNoteFiles } from "./uploads"
 import { blocksFromMarkdown, blocksOf } from "./from-markdown"
 import { TEMPLATE_PRESETS } from "./template-presets"
 
@@ -197,9 +198,12 @@ export const useNoteTemplates = create<TemplateState>((set, get) => {
     },
 
     async remove(id) {
-      // Read before it goes: the body is the only record of which drawings
-      // belong to this template, and after the delete there is nothing to ask.
-      const drawings = drawingIdsIn(blocksOf(await get().loadBody(id)))
+      // Read before it goes: the body is the only record of which drawings and
+      // which pictures belong to this template, and after the delete there is
+      // nothing to ask.
+      const blocks = blocksOf(await get().loadBody(id))
+      const drawings = drawingIdsIn(blocks)
+      const files = noteFileNamesIn(blocks)
 
       const timer = pendingBodies.get(id)
       if (timer !== undefined) clearTimeout(timer)
@@ -218,6 +222,9 @@ export const useNoteTemplates = create<TemplateState>((set, get) => {
       })
       await deleteDrawings(drawings).catch((error) => {
         console.error("Could not delete the template's drawings", error)
+      })
+      await deleteNoteFiles(files).catch((error) => {
+        console.error("Could not delete the template's files", error)
       })
     },
 

@@ -5,6 +5,7 @@ import {
   filterSuggestionItems,
 } from "@blocknote/core"
 import {
+  FilePanelController,
   SuggestionMenuController,
   getDefaultReactSlashMenuItems,
   useCreateBlockNote,
@@ -16,8 +17,10 @@ import { Spinner } from "@/components/ui/spinner"
 import { newDrawingId, onDrawingOpened, openDrawing } from "@/lib/note/drawings"
 import type { NoteBody } from "@shared/api"
 import { serializeBody, type NoteBlock } from "@/lib/note/blocks"
+import { uploadNoteFile } from "@/lib/note/uploads"
 import { blocksOf } from "@/lib/note/from-markdown"
 import { DrawingEditor } from "./drawing-editor"
+import { NoteFilePanel } from "./file-panel"
 import { DRAWING_BLOCK, drawingBlockSpec } from "./drawing-block"
 import "@blocknote/core/fonts/inter.css"
 import "@blocknote/shadcn/style.css"
@@ -123,6 +126,11 @@ function BlockEditor({
      */
     pasteHandler: ({ defaultPasteHandler }) =>
       defaultPasteHandler({ prioritizeMarkdownOverHTML: false }),
+    // The Upload half of the image panel, and what makes dropping or pasting a
+    // picture into a note work at all: the panel is built from what the editor
+    // can do, so with no `uploadFile` it offers only a URL to embed. See
+    // `lib/note/uploads.ts`.
+    uploadFile: uploadNoteFile,
   })
 
   return (
@@ -143,6 +151,9 @@ function BlockEditor({
           // Replaced below, so that `/drawing` sits among the defaults rather
           // than in a menu of its own.
           slashMenu={false}
+          // Replaced below too — see `file-panel.tsx` for what BlockNote's own
+          // draws and why it is not this panel's.
+          filePanel={false}
           onChange={() => write.current(editor.document as NoteBlock[])}
         >
           <SuggestionMenuController
@@ -154,6 +165,7 @@ function BlockEditor({
               )
             }
           />
+          <FilePanelController filePanel={NoteFilePanel} />
         </BlockNoteView>
       </div>
 

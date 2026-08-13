@@ -6,7 +6,13 @@ import { ancestorFolderIds } from "../tree"
 import { isRememberedTabs, recall, remember } from "../tab-memory"
 import { descendantFolderIds, isDescendant } from "../tree"
 import { cloneDrawings, deleteDrawings } from "./drawings"
-import { drawingIdsIn, parseBody, serializeBody } from "./blocks"
+import {
+  drawingIdsIn,
+  noteFileNamesIn,
+  parseBody,
+  serializeBody,
+} from "./blocks"
+import { cloneNoteFiles, deleteNoteFiles } from "./uploads"
 import { blocksOf } from "./from-markdown"
 import { useNoteTemplates } from "./templates"
 
@@ -118,7 +124,11 @@ function blankNoteName(index: number): string {
  * migration alive on purpose.
  */
 async function copyOf(body: NoteBody): Promise<string> {
-  return serializeBody(await cloneDrawings(blocksOf(body)))
+  // Drawings and pictures both: either one shared between the copy and the
+  // original is a file deleting either of them takes from the other.
+  return serializeBody(
+    await cloneNoteFiles(await cloneDrawings(blocksOf(body)))
+  )
 }
 
 function blankFolder(parentId: string | null): NoteFolder {
@@ -233,13 +243,13 @@ export const useNotes = create<NoteState>((set, get) => {
   /** Forgets a deleted note's body and stops any save still in flight for it —
    * a write landing after the delete would put the file back. */
   function forgetBodies(ids: Set<string>) {
-    // Before the bodies go: the markdown is the only record of which drawings
-    // belonged to this note, so it is read for their ids while it is still
-    // here. A note never opened this session has no body cached and no
-    // drawings to lose — its file goes either way.
-    const drawings = [...ids].flatMap((id) =>
-      drawingIdsIn(parseBody(get().bodies[id] ?? ""))
-    )
+    // Before the bodies go: the document is the only record of which drawings
+    // and which pictures belonged to this note, so it is read for both while it
+    // is still here. A note never opened this session has no body cached and no
+    // files to lose — its own file goes either way.
+    const bodies = [...ids].map((id) => parseBody(get().bodies[id] ?? ""))
+    const drawings = bodies.flatMap((blocks) => drawingIdsIn(blocks))
+    const files = bodies.flatMap((blocks) => noteFileNamesIn(blocks))
 
     for (const id of ids) {
       const timer = pendingBodies.get(id)
@@ -257,6 +267,9 @@ export const useNotes = create<NoteState>((set, get) => {
     })
     void deleteDrawings(drawings).catch((error) => {
       console.error("Could not delete the drawings", error)
+    })
+    void deleteNoteFiles(files).catch((error) => {
+      console.error("Could not delete the note's files", error)
     })
   }
 

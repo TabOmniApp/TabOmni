@@ -4,7 +4,12 @@ import { BrowserWindow, app, shell } from "electron"
 
 import { registerIpc } from "./ipc"
 import { installMenu } from "./menu"
-import { APP_ORIGIN, registerAppScheme, serveApp } from "./protocol"
+import {
+  APP_ORIGIN,
+  registerAppScheme,
+  serveApp,
+  serveNoteFiles,
+} from "./protocol"
 
 /** Set by scripts/dev.mjs; absent in a packaged app. */
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
@@ -86,6 +91,7 @@ const {
   preview,
   tsServers,
   watchers,
+  noteFilePath,
 } = registerIpc(() => mainWindow)
 
 function createWindow(): void {
@@ -187,6 +193,9 @@ void app.whenReady().then(() => {
   }
 
   if (!DEV_SERVER_URL) serveApp(RENDERER_DIST)
+  // Both builds: a note's pictures are served the same way whether the renderer
+  // came from Vite or from `app://`.
+  serveNoteFiles(noteFilePath)
   // Before the window, so the menu bar is never Electron's default one.
   installMenu(() => mainWindow)
   createWindow()

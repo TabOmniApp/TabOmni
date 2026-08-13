@@ -7,7 +7,12 @@ import {
 } from "node:http"
 
 import type { NoteBlock, NoteBody, NoteFolder, NoteRecord } from "../shared/api"
-import { drawingIdsIn, parseNote } from "./note-blocks"
+import {
+  drawingIdsIn,
+  noteFileNamesIn,
+  parseNote,
+  withNoteFileUrls,
+} from "./note-blocks"
 import { escapeHtml, page, renderMarkdown, renderNote } from "./note-html"
 
 /**
@@ -52,6 +57,9 @@ export type NoteSource = {
   /** The drawing's last export, or "" for a scene that has never been drawn
    * into a picture. */
   drawingSvg: (id: string) => Promise<string>
+  /** One of the note's own pictures as a `data:` URL, or "" for a file that is
+   * not a picture or is no longer there. */
+  noteFileDataUrl: (fileName: string) => Promise<string>
 }
 
 export class NotePreview {
@@ -218,8 +226,12 @@ export class NotePreview {
     if (!note) return send(request, response, 404, "text/plain", "Not found")
 
     const body = await this.source.body(note.id)
-    const blocks = body.format === "blocks" ? parseNote(body.text) : []
-    const drawings = await this.drawingsIn(blocks)
+    const parsed = body.format === "blocks" ? parseNote(body.text) : []
+    const drawings = await this.drawingsIn(parsed)
+    // The note's own pictures are inlined into the document before it is
+    // rendered: this page is one file, and the browser reading it has never
+    // heard of the scheme the studio loads them by.
+    const blocks = withNoteFileUrls(parsed, await this.picturesIn(parsed))
 
     const rendered =
       body.format === "markdown"
@@ -228,7 +240,9 @@ export class NotePreview {
 
     // Over what the page is made of rather than the page itself, which cannot
     // be hashed before it is rendered — and this is the honest input anyway: a
-    // note whose drawing changed has a page that changed.
+    // note whose drawing changed has a page that changed. The pictures are not
+    // in it: a note file is written once, under a name nothing else uses, so a
+    // picture that changed is a document that changed.
     const version = hash(
       `${note.name} ${body.text} ${[...drawings.values()].join("")}`
     )
@@ -257,6 +271,25 @@ export class NotePreview {
       })
     )
     return drawings
+  }
+
+  /** Each picture the document points at, by file name. */
+  private async picturesIn(blocks: NoteBlock[]): Promise<Map<string, string>> {
+    const pictures = new Map<string, string>()
+
+    await Promise.all(
+      noteFileNamesIn(blocks).map(async (name) => {
+        try {
+          const url = await this.source.noteFileDataUrl(name)
+          if (url) pictures.set(name, url)
+        } catch (error) {
+          // A name the store refuses is a document edited by hand, and one
+          // unreadable file is not a page nobody gets to read.
+          console.error("Could not read the note's picture", error)
+        }
+      })
+    )
+    return pictures
   }
 }
 

@@ -1255,6 +1255,26 @@ export type DesktopApi = {
   writeDrawingSvg: (id: string, svg: string) => Promise<void>
 
   /**
+   * A file dropped into a note — a picture, in practice — kept in the workspace
+   * so the note still has it once the file it came from has moved.
+   *
+   * The name is the renderer's, `<uuid>.<ext>`, and is checked before it becomes
+   * a filename for the same reason a note id is. The bytes cross as a
+   * `Uint8Array` rather than base64: this is the one call in the contract that
+   * carries a file's contents, and structured clone already moves bytes without
+   * a third of them being spent on the encoding.
+   *
+   * See `shared/note-files.ts` for the URL the note writes down, and why these
+   * are files rather than data URLs in the document.
+   */
+  writeNoteFile: (fileName: string, bytes: Uint8Array) => Promise<void>
+  /** Copies one — what duplicating a note does, so that the copy and the
+   * original do not share a file either of them can delete. */
+  copyNoteFile: (fromName: string, toName: string) => Promise<void>
+  /** Deletes them, along with the notes that held them. */
+  deleteNoteFiles: (fileNames: string[]) => Promise<void>
+
+  /**
    * Sends one request from the main process rather than the renderer, which
    * puts it outside the page's origin: no CORS preflight, no cookie jar, and
    * headers a browser would refuse to set are sent as typed.
@@ -1467,6 +1487,9 @@ export const IPC = {
   writeDrawing: "drawings:write",
   deleteDrawings: "drawings:delete",
   writeDrawingSvg: "drawings:write-svg",
+  writeNoteFile: "note-files:write",
+  copyNoteFile: "note-files:copy",
+  deleteNoteFiles: "note-files:delete",
   inboxStart: "inbox:start",
   inboxStop: "inbox:stop",
   inboxStatus: "inbox:status",

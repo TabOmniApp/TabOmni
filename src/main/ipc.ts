@@ -146,6 +146,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   preview: NotePreview
   tsServers: TsServers
   watchers: DirectoryWatchers
+  noteFilePath: (fileName: string) => string
 } {
   const store = new Store()
   const sqlConnections = new SqlConnections(async (databaseId) => {
@@ -195,6 +196,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     folders: () => store.listNoteFolders(),
     body: (id) => store.readNote(id),
     drawingSvg: (id) => store.readDrawingSvg(id),
+    noteFileDataUrl: async (name) => {
+      // Only the pictures. A preview page is one file with nothing to fetch, so
+      // an image becomes a `data:` URL in it — and a `data:` link to anything
+      // else is a navigation the browser refuses, which is worse than the
+      // "missing" line `note-html.ts` renders for a file it cannot reach.
+      const mime = IMAGE_MIME_TYPES[path.extname(name).toLowerCase()]
+      if (!mime) return ""
+
+      const bytes = await store.readNoteFile(name)
+      return bytes ? `data:${mime};base64,${bytes.toString("base64")}` : ""
+    },
   })
 
   /** The account a Docker-managed database is created with. */
@@ -686,6 +698,26 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     store.writeDrawingSvg(id, svg)
   )
 
+  ipcMain.handle(
+    IPC.writeNoteFile,
+    // A `Uint8Array` on the way in whatever the renderer built it from: an
+    // `ArrayBuffer` survives structured clone as one, and writing it as-is
+    // would put the string "[object ArrayBuffer]" in the file.
+    (_event, fileName: string, bytes: Uint8Array | ArrayBuffer) =>
+      store.writeNoteFile(
+        fileName,
+        bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+      )
+  )
+
+  ipcMain.handle(IPC.copyNoteFile, (_event, from: string, to: string) =>
+    store.copyNoteFile(from, to)
+  )
+
+  ipcMain.handle(IPC.deleteNoteFiles, (_event, fileNames: string[]) =>
+    store.deleteNoteFiles(fileNames)
+  )
+
   ipcMain.handle(IPC.notePreviewUrl, (_event, id: string) => preview.urlOf(id))
 
   ipcMain.handle(IPC.inboxStart, (_event, port: number) => inbox.start(port))
@@ -813,5 +845,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     preview,
     tsServers,
     watchers,
+    /** For the `note-file://` handler, which is not an IPC call and so cannot
+     * reach the store any other way — see `serveNoteFiles`. */
+    noteFilePath: (fileName: string) => store.noteFilePath(fileName),
   }
 }

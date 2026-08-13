@@ -1213,15 +1213,16 @@ the sizing, kept apart from the colour for the same reason `chat-composer.css`
 is: Crepe's own padding is sized for a full document page, and this pane is one
 half of a split workbench.
 
-Three of Crepe's features are off, each for a reason:
+Two of Crepe's features are off, each for a reason:
 
-- **Image block.** Its uploader hands an inserted file back as a `blob:` URL —
-  bytes held in this window's memory, gone the next time the app opens. A note
-  is a file on disk, so that is the one place the link has to keep working. An
-  `![alt](https://…)` still renders; what is missing is dropping a file in, and
-  a dead image is worse than none.
 - **LaTeX**, which needs KaTeX's stylesheet, not a dependency this app declares.
 - **AI** and the top bar, which are not what this panel is.
+
+The image block used to be off with them — Crepe's uploader handed an inserted
+file back as a `blob:` URL, bytes held in this window's memory and gone the next
+time the app opened, and a dead image is worse than none. That was never a
+decision about images; it was a decision about where the bytes go. **Images**
+below is where they go now.
 
 **A table's columns can be dragged.** Crepe's table block has no resizing, and
 prosemirror-tables' `columnResizing` cannot be switched on to supply it: it
@@ -1335,6 +1336,81 @@ that moment they are ordinary templates: renameable, editable, and gone for good
 when deleted. The guard is a settings flag rather than "is the list empty",
 because deleting every template is a thing someone may mean, and an empty list is
 the one state that would bring the presets back on the next launch.
+
+### Images
+
+A picture goes into a note the three ways one goes into any editor: dropped on
+it, pasted into it, or picked through the image block's **Upload** tab. That tab
+is the whole of the wiring — BlockNote builds the panel out of what the editor
+can do, so an editor with no `uploadFile` offers only "Embed" a URL, and a
+dropped file is ignored. `lib/note/uploads.ts` is that function.
+
+**The panel is the studio's own**, replaced rather than restyled the way the `/`
+menu is (`note/file-panel.tsx`, mounted through `FilePanelController` with
+`filePanel={false}` on the view). BlockNote's shadcn build renders that tab as a
+bare `<input type="file">` — the platform's own grey "Choose File / No file
+chosen", which follows the OS rather than the theme, cannot be dropped onto, and
+has nowhere to put a reason. Restyling it was not the cheaper half: that build
+ships a vendored copy of the shadcn components with tokens of its own, so the
+input to correct was someone else's. What is there instead is a drop zone and a
+URL field built from `components/ui/`, which is what makes the panel follow the
+theme toggle like everything else — and what lets a refused upload say why, since
+`uploadNoteFile` throws a sentence written to be read rather than a flag. The tab
+names and the button still come from BlockNote's dictionary, and the file
+dialog's filter from the block's own `fileBlockAccept`, so a video block's panel
+is right without this file knowing what a video is. A drop on the zone stops
+there: let through, it reaches ProseMirror's own handler as well and lands a
+second block under the one being filled.
+
+**The bytes become a file of the workspace's own**, one per upload under
+`workspace/note-files/`, and the document holds a URL naming it. Neither
+alternative survives contact with the panel:
+
+- **Not a data URL in the block.** A note's body is rewritten on every pause in
+  the typing and crosses the bridge each time, so a photograph pasted into one
+  would be re-encoded, re-sent and re-written for the rest of that note's life.
+- **Not a path into the user's own folders.** The file the picture came from is
+  theirs to move, rename or delete, and a note is expected to still have its
+  picture afterwards.
+
+Which is the trade the drawings already make, and the rest follows the drawings
+too: the name is a fresh UUID plus an extension taken from the browser's idea of
+the file's type — so nothing the user's filesystem named reaches a path of ours,
+and two pictures dropped from two folders cannot be the same file — and `Store`
+checks the shape of that name before it becomes one, the way it checks a note id.
+Duplicating a note **copies** the files and points the copy at the copies
+(`cloneNoteFiles`, beside `cloneDrawings` in the same `copyOf`), because two
+notes sharing one file means deleting either blanks the other. Deleting a note
+takes its pictures with it, read out of the document while it is still there.
+
+**The URL is `note-file://workspace/<name>`, a scheme this app serves**
+(`shared/note-files.ts` is its shape, `main/protocol.ts` the handler). Both sides
+have to be able to say what one means: the renderer puts it in an `img` and
+Chromium fetches it through the handler, streamed off disk with the content type
+its extension gives it, while the preview server renders the same document for a
+browser that has never heard of the scheme and swaps it for the bytes. A privileged
+scheme rather than `file://`, which Chromium will not load as a subresource of
+another origin, and `secure` so it is not mixed content on a page served over
+`app://`. The handler builds no path of its own: it hands the name to the store's
+own `noteFilePath`, which is the same check every other note file goes through.
+
+**A picture is what this is for**, and the honest limit is what happens to
+anything else. A file dropped into a note that is not one — a PDF, an archive —
+is still stored and still named in the note, but nothing will open it again from
+there: BlockNote's Download button hands the URL to `window.open`, and the
+studio denies a `window.open` in any scheme but `http`, `https` and `mailto`
+(`openExternal` in `main.ts`), which is a rule worth more than that button. The
+preview says the same thing in its own way, rendering the "missing" line rather
+than a `data:` link a browser would refuse to navigate to. Making those files
+openable is a save dialog in the main process, not a URL — so it is left undone
+rather than half-done.
+
+An `![alt](https://…)` or an image copied out of a browser — which arrives as a
+`data:` URL on the clipboard's HTML — is left exactly as it is. Those are not the
+workspace's files, and the walks that copy and delete know the difference by
+asking `noteFileNameOf`. `test/note-files.ts` is that seam: the URL both sides
+agree on, and the two walks over it, one per process because neither may import
+the other's.
 
 ### Drawings
 
@@ -1556,6 +1632,17 @@ SVG the renderer exported beside the scene, always in light mode, written
 whenever a drawing is saved and backfilled the first time a scene is read in a
 session — so opening the note once is what gives its diagrams to the preview. A
 drawing that has not been through that says so rather than leaving a gap.
+
+**A picture is inlined too**, as a `data:` URL, because the note holds it under
+`note-file://` — a scheme of this app's, which the browser reading this page has
+never heard of. That happens to the document rather than to the markup:
+`withNoteFileUrls` in `main/note-blocks.ts` swaps the URLs before the walk runs,
+so `note-html.ts` keeps one scheme list and sees a URL a browser can follow like
+any other. Only the pictures — a `data:` link to a PDF is a navigation Chromium
+refuses, so any other kind of file, and any picture whose file has gone, gets the
+same "missing" line as a file the page cannot reach. What is deliberately not in
+the ETag is the pictures: a note file is written once under a name nothing else
+uses, so a picture that changed is a document that changed.
 
 ## The system bar
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import {
+  copyFile,
   mkdir,
   readFile,
   realpath,
@@ -153,6 +154,32 @@ export const NOTE_TEMPLATES_DIR = "note-templates"
  * open. The note keeps only the id, in a fenced block.
  */
 export const DRAWINGS_DIR = "drawings"
+
+/**
+ * Where the pictures dropped into notes are kept, one file per upload.
+ *
+ * Flat and named by id rather than filed under the note that holds one: a
+ * picture can be cut from one note and pasted into another, and a directory per
+ * note would leave the file under a note that no longer mentions it. What owns a
+ * file is the document that points at it — see `shared/note-files.ts`.
+ */
+export const NOTE_FILES_DIR = "note-files"
+
+/**
+ * A note file's name, checked before it becomes a filename.
+ *
+ * The same guard `ownId` is, and it has to be its own because this name carries
+ * an extension: the renderer makes it out of a UUID and the type of the file
+ * that was dropped, and the extension is the one part derived from something the
+ * user's filesystem named. So it is spelled out — a UUID, a dot, and a short run
+ * of letters and digits — and anything else is refused rather than sanitised.
+ */
+function noteFileName(name: string): string {
+  if (!/^[0-9a-f-]{36}\.[a-z0-9]{1,8}$/i.test(name)) {
+    throw new Error(`Not a note file: ${name}`)
+  }
+  return name
+}
 
 /**
  * A renderer-generated id, checked before it becomes a filename.
@@ -687,6 +714,64 @@ export class Store {
     return this.deleteOwnFiles(
       ids.flatMap((id) => [this.drawingPath(id), this.drawingSvgPath(id)])
     )
+  }
+
+  /**
+   * Where one of a note's files is, for the protocol handler that serves it.
+   *
+   * Public, and the only path this class hands out, because the handler is not
+   * IPC: it answers Chromium's own request for an `img` src and so runs outside
+   * everything in `ipc.ts`. It is a name being turned into a path, which is
+   * exactly what `noteFileName` is there to refuse — so the check happens here
+   * rather than at the one call site.
+   */
+  noteFilePath(fileName: string): string {
+    return path.join(this.workspaceDir, NOTE_FILES_DIR, noteFileName(fileName))
+  }
+
+  /** One note file's bytes, or null for a name nothing was written under —
+   * a note pointing at a file somebody removed from the workspace by hand. */
+  readNoteFile(fileName: string): Promise<Buffer | null> {
+    const file = this.noteFilePath(fileName)
+    return this.enqueue(async () => {
+      try {
+        return await readFile(file)
+      } catch (error) {
+        if (isNotFound(error)) return null
+        throw error
+      }
+    })
+  }
+
+  writeNoteFile(fileName: string, bytes: Uint8Array): Promise<void> {
+    const file = this.noteFilePath(fileName)
+    return this.enqueue(async () => {
+      await mkdir(path.dirname(file), { recursive: true })
+      await writeFile(file, bytes)
+    })
+  }
+
+  /** Copied here rather than read and written back through the renderer: the
+   * bytes have no business crossing the bridge twice to end up in a second file
+   * of ours. */
+  copyNoteFile(fromName: string, toName: string): Promise<void> {
+    const from = this.noteFilePath(fromName)
+    const to = this.noteFilePath(toName)
+    return this.enqueue(async () => {
+      await mkdir(path.dirname(to), { recursive: true })
+      try {
+        await copyFile(from, to)
+      } catch (error) {
+        // A duplicate of a note whose picture is already missing is still a
+        // duplicate. The copy has nothing to point at, which is the state the
+        // original was in.
+        if (!isNotFound(error)) throw error
+      }
+    })
+  }
+
+  deleteNoteFiles(fileNames: string[]): Promise<void> {
+    return this.deleteOwnFiles(fileNames.map((name) => this.noteFilePath(name)))
   }
 
   /** One note's blocks. */

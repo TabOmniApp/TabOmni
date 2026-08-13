@@ -264,7 +264,11 @@ delete count, the ancestor chain a selection is revealed through); `lib/http/fol
 cascading headers and params that are the API panel's own. A note's listing is
 `notes.json` and its text is `notes/<id>.md` beside it, so typing rewrites one
 note rather than all of them and what is left on disk is readable without this
-app. The editor is Crepe — the same Milkdown editor as the chat composer, and
+app. A picture dropped, pasted or uploaded into a note is a file of the
+workspace's own under `workspace/note-files/`, and the note holds a
+`note-file://` URL for it — `shared/note-files.ts` is that URL's shape,
+`main/protocol.ts` serves it to the renderer and the preview server inlines it
+for a browser that has never heard of the scheme. The editor is Crepe — the same Milkdown editor as the chat composer, and
 themed by the same `milkdown-theme.css`, so it follows the theme toggle without
 a second palette. See the Notes section of `docs/design.md` before changing it.
 
