@@ -37,6 +37,7 @@ import {
   GitBranch,
   Pencil,
   RotateCw,
+  SquareTerminal,
   Trash2,
 } from "lucide-react"
 
@@ -51,10 +52,13 @@ import {
 } from "@/lib/files/viewers"
 import { parentOf } from "@/lib/files/paths"
 import { useStudio } from "@/lib/store"
+import { useTerminal } from "@/lib/terminal/store"
 import { RenameDialog } from "../db/rename-dialog"
 import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
 import { SideRow } from "../side-row"
+import { ConversationsList } from "./conversations-list"
+import { SessionsList } from "./sessions-list"
 
 /** What the right-click menu is about: a row in the tree, or the workspace
  * folder heading above one. */
@@ -87,11 +91,22 @@ function failureOf(error: unknown, fallback: string): string {
  * overwritten is an edit: Refresh re-reads only the files with nothing unsaved
  * in them.
  *
- * Adding and removing a workspace folder lives here as well as in the Terminal
- * sidebar. Both panels are about the folders — one runs sessions in them, this
- * one opens what is inside them — and neither is the obvious single home for
- * "point the studio at another directory", so the same dialog is reachable
- * from both, and from the File menu.
+ * **The folders are this panel's, and only this panel's.** Adding, renaming and
+ * removing one used to live in the Terminal sidebar as well, which drew the
+ * same folder list a second time to hang the same three actions off it — so a
+ * workspace of three folders with one session running redrew this sidebar over
+ * there with a single extra row in it, and "where do I remove a folder" had two
+ * answers. This is the list that says what the workspace is pointed at, so it
+ * is the one that changes it. The File menu opens the same Add folder dialog,
+ * which is what a rail with this section hidden falls back to.
+ *
+ * `New session here…` on a folder is the other half of that move: with the
+ * Terminal sidebar no longer listing folders that have nothing running, this is
+ * where the first session in one is started — and it is the flow anyway, since
+ * what somebody wants a terminal in is generally the repository they are
+ * reading. The cwd is the folder's own directory, so the item is on the folder
+ * heading rather than on the directory rows under it, which `terminalCreate`
+ * has no way to run in.
  */
 export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
   const folders = useStudio((state) => state.folders)
@@ -155,9 +170,9 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           </IconButton>
         </PanelHeader>
 
-        {/* An empty workspace draws an empty list and no notice, the way the
-            Terminal sidebar does: Add folder is in the header directly above
-            it. */}
+        {/* An empty workspace draws an empty list and no notice: Add folder is
+            in the header directly above it, and a panel that announces its own
+            emptiness announces it again every time the section is opened. */}
         {/* One trigger over the whole tree, rather than one per row: the rows
             are a recursive component, and a trigger inside a trigger inside a
             trigger is a menu nobody can predict the target of. Each row says
@@ -195,11 +210,10 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
                     <span className="min-w-0 flex-1 truncate text-left">
                       {folder.name}
                     </span>
-                    {/* The same branch the Terminal sidebar shows against the
-                        same folder: this is the other list of the workspace's
-                        folders, and one of them saying which branch is checked
-                        out while the other did not would be the more confusing
-                        of the two options. */}
+                    {/* The one place a folder's branch is always shown — the
+                        Terminal sidebar repeats it on the headings it draws,
+                        beside the sessions being worked in, and has none to
+                        draw in a single-folder workspace. */}
                     {branches[folder.id] && (
                       <span className="flex min-w-0 shrink items-center gap-1 normal-case">
                         <GitBranch className="size-2.5 shrink-0" />
@@ -220,6 +234,14 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
             )
           })}
         </ContextMenuTrigger>
+
+        {/* Under the tree rather than inside it: the tree is the directory tree,
+            and neither a session nor a conversation is a file in any folder.
+            Sessions first because they are running now and the conversations are
+            a history; Conversations starts folded, so the panel is still the
+            files first. */}
+        <SessionsList />
+        <ConversationsList />
 
         {creating && (
           <RenameDialog
@@ -328,6 +350,18 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           >
             <FolderPlus />
             New folder…
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          {/* Its own group rather than down with Copy path: opening a terminal
+              in the repository being read is a first-class thing to do with a
+              folder, not a footnote to it. */}
+          <ContextMenuItem
+            onClick={() =>
+              useTerminal.getState().openPicker(menuTarget.folder.id)
+            }
+          >
+            <SquareTerminal />
+            New session here…
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem
@@ -489,9 +523,18 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove this folder?</AlertDialogTitle>
+            {/*
+              Both consequences, because this is now the only place a folder is
+              removed from: the tabs are this panel's own, and the sessions are
+              killed by the terminal store's subscription to the folder list. The
+              Terminal sidebar's dialog used to be the one that mentioned them.
+              And the folder is the user's own — a dialog that left that in doubt
+              would be asking them to gamble a repository on it.
+            */}
             <AlertDialogDescription>
               “{removingFolder?.name}” is removed from the workspace, along with
-              any tabs open on files inside it. The folder itself —{" "}
+              any tabs open on files inside it and any terminal sessions running
+              in it. The folder itself —{" "}
               <code className="font-mono">{removingFolder?.path}</code> — is
               left exactly as it is.
             </AlertDialogDescription>

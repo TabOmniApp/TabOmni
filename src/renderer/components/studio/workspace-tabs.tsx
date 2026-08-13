@@ -7,6 +7,7 @@ import {
   Folder,
   Mail,
   Plus,
+  ScrollText,
   Settings2,
   Terminal,
 } from "lucide-react"
@@ -32,6 +33,7 @@ import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio, type Pane } from "@/lib/store"
 import { arrange, PREFIX } from "@/lib/tabs"
 import { SESSION_TYPES, sessionTitle } from "@/lib/terminal/catalog"
+import { chatTabId, useConversations } from "@/lib/terminal/conversations"
 import { liveSessions, useTerminal } from "@/lib/terminal/store"
 import { KIND_ICONS, KIND_LABELS } from "./db/database-tree"
 import { METHOD_TONES } from "./api/request-list"
@@ -116,6 +118,7 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
 
   const fileOpenIds = useFiles((state) => state.openIds)
   const fileDocs = useFiles((state) => state.docs)
+  const chats = useConversations((state) => state.open)
 
   /** Every open tab, grouped by panel — the order a strip nobody has dragged
    * in is shown in, and the fallback `arrange` places new tabs against. */
@@ -137,6 +140,18 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
       // strip has had this since it was the editor's own — no panel until now
       // had a tab that could be unsaved.
       dirty: isDirty(fileDocs[filePath]),
+    })),
+    // Beside the files because they are the same pane's — a conversation opened
+    // from the Explorer sidebar, read and not run. The session icon, since it is
+    // the same kind of thing as a `claude` tab; what says it is not running is
+    // the pane's own header.
+    ...chats.map((conversation) => ({
+      id: PREFIX.files + chatTabId(conversation.id),
+      label: conversation.title,
+      title: `${conversation.title}\nclaude --resume ${conversation.id}`,
+      copyText: conversation.id,
+      copyLabel: "Copy session id",
+      icon: <ScrollText className="size-3.5 shrink-0 text-muted-foreground" />,
     })),
     ...(databaseId ? dbTabs.map(dbItem) : []),
     ...openIds.flatMap((id) => {

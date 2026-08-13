@@ -9,8 +9,12 @@ import { useStudio } from "@/lib/store"
 import { TerminalSessionView } from "./terminal-session-view"
 
 /**
- * The Terminal panel, given the whole pane instead of a tab in the panel under
- * the editor.
+ * The sessions, given the whole pane instead of a tab in the panel under the
+ * editor.
+ *
+ * A pane with no rail section and no sidebar of its own: sessions are started
+ * and listed in the Explorer sidebar, under the folders they run in, and this
+ * draws whichever of them the strip has selected.
  *
  * Every session stays mounted, whichever folder it belongs to: a session is a
  * pty, so taking it out of the tree would end the conversation rather than
@@ -48,7 +52,7 @@ export function TerminalWorkspace() {
         {!active && (
           <p className="px-3 py-2 text-xs text-muted-foreground">
             {folders.length > 0
-              ? "Start a session with + above: a terminal, or Claude Code."
+              ? "Start a session from the Sessions list in Explorer: a terminal, or Claude Code."
               : "Add a folder to start a session."}
           </p>
         )}

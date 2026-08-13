@@ -6,6 +6,12 @@ import { useInbox } from "./inbox/store"
 import { useNotes } from "./note/store"
 import { PANES, useStudio, type Pane } from "./store"
 import { arrange, bare, kindOf, neighbour, PREFIX } from "./tabs"
+import {
+  chatIdOf,
+  chatTabId,
+  isChatTabId,
+  useConversations,
+} from "./terminal/conversations"
 import { activeSessionOf, liveSessions, useTerminal } from "./terminal/store"
 
 /**
@@ -50,6 +56,7 @@ type PanelTabs = {
  */
 type ExplorerState = ReturnType<typeof useExplorer.getState>
 type FilesState = ReturnType<typeof useFiles.getState>
+type ChatState = ReturnType<typeof useConversations.getState>
 type ApiState = ReturnType<typeof useApi.getState>
 type InboxState = ReturnType<typeof useInbox.getState>
 type NoteState = ReturnType<typeof useNotes.getState>
@@ -66,10 +73,23 @@ const dbActive = (state: ExplorerState): string | null =>
     : (state.activeQueryTabId ??
       (state.selected ? relationId(state.selected) : null))
 
-const filesActive = (state: FilesState): string | null =>
+/*
+ * The Explorer pane is the one panel with two lists behind it: the files, and
+ * the `claude` conversations opened from the sidebar below the tree. They are
+ * separate stores because a file tab is a path and a conversation tab is not —
+ * see `lib/terminal/conversations.ts` — so this is where the pane's tabs are
+ * added up, and `onScreen` is what settles which of the two the pane draws.
+ */
+const fileSelected = (state: FilesState): string | null =>
   state.selectedId && state.openIds.includes(state.selectedId)
     ? state.selectedId
     : null
+
+const chatSelected = (state: ChatState): string | null =>
+  state.onScreen && state.activeId ? chatTabId(state.activeId) : null
+
+const filesActive = (files: FilesState, chats: ChatState): string | null =>
+  chatSelected(chats) ?? fileSelected(files)
 
 const apiActive = (state: ApiState): string | null =>
   state.selectedId && state.openIds.includes(state.selectedId)
@@ -93,17 +113,43 @@ const terminalActive = (state: TerminalState): string | null =>
 
 const PANELS: Record<Pane, PanelTabs> = {
   files: {
-    open: () => useFiles.getState().openIds,
-    // `open` rather than `select`: a tab restored from the last launch, or one
-    // reached from the strip after its document was pruned, has to be read
-    // before the pane has anything to draw. Reading one already held is a
-    // no-op.
-    select: (id) => void useFiles.getState().open(id),
-    active: () => filesActive(useFiles.getState()),
-    close: (id) => useFiles.getState().close(id),
-    closeOthers: (id) => useFiles.getState().closeOthers(id),
-    closeAll: () => useFiles.getState().closeAll(),
-    reorder: (ids) => useFiles.getState().reorder(ids),
+    open: () => [
+      ...useFiles.getState().openIds,
+      ...useConversations.getState().open.map((entry) => chatTabId(entry.id)),
+    ],
+    // `open` rather than `select` for a file: a tab restored from the last
+    // launch, or one reached from the strip after its document was pruned, has
+    // to be read before the pane has anything to draw. Reading one already held
+    // is a no-op. A conversation has nothing to read here — the pane starts its
+    // own transcript mirror.
+    select: (id) =>
+      isChatTabId(id)
+        ? useConversations.getState().select(chatIdOf(id))
+        : void useFiles.getState().open(id),
+    active: () => filesActive(useFiles.getState(), useConversations.getState()),
+    close: (id) =>
+      isChatTabId(id)
+        ? useConversations.getState().close(chatIdOf(id))
+        : useFiles.getState().close(id),
+    // "Others" is the whole pane, so it always clears the other list outright
+    // and keeps the one tab in the list it belongs to.
+    closeOthers: (id) => {
+      if (isChatTabId(id)) {
+        useFiles.getState().closeAll()
+        useConversations.getState().closeOthers(chatIdOf(id))
+      } else {
+        useConversations.getState().closeAll()
+        useFiles.getState().closeOthers(id)
+      }
+    },
+    closeAll: () => {
+      useFiles.getState().closeAll()
+      useConversations.getState().closeAll()
+    },
+    reorder: (ids) => {
+      useFiles.getState().reorder(ids.filter((id) => !isChatTabId(id)))
+      useConversations.getState().reorder(ids.filter(isChatTabId).map(chatIdOf))
+    },
   },
   database: {
     open: () => dbOpen(useExplorer.getState()),
@@ -139,8 +185,8 @@ const PANELS: Record<Pane, PanelTabs> = {
     reorder: (ids) => useInbox.getState().reorder(ids),
   },
   terminal: {
-    // A closed session is a row in the Terminal sidebar and nothing else: it
-    // has no pty, so there is no pane for a tab here to switch to.
+    // A closed session is a row in Explorer's Sessions list and nothing else:
+    // it has no pty, so there is no pane for a tab here to switch to.
     open: () => liveSessions(useTerminal.getState().sessions).map((s) => s.id),
     active: () => terminalActive(useTerminal.getState()),
     select: (id) => useTerminal.getState().select(id),
@@ -215,8 +261,8 @@ export function closeTab(id: string) {
  *
  * `prefer` is the tab that stood beside a closed one; without it the strip is
  * taken from the front. Exported for the panels' own lists, which close tabs
- * without going through the strip — the Terminal sidebar's rows are the ones
- * that can empty a pane this way.
+ * without going through the strip — the rows in Explorer's Sessions list are
+ * the ones that can empty a pane this way.
  */
 export function fillPane(prefer: string | null = null) {
   const { pane } = useStudio.getState()
@@ -281,8 +327,13 @@ export function reorderTabs(ids: string[]) {
  * whether to draw a panel at all.
  */
 export function useActiveTabId(pane: Pane): string | null {
+  // Two subscriptions for the one pane, combined the way `filesActive` does it
+  // for the commands above.
+  const file = useFiles(fileSelected)
+  const chat = useConversations(chatSelected)
+
   const own = {
-    files: useFiles(filesActive),
+    files: chat ?? file,
     database: useExplorer(dbActive),
     api: useApi(apiActive),
     mail: useInbox(mailActive),
@@ -299,6 +350,7 @@ export function useHasOpenTabs(): boolean {
   // array never returns the same reference twice, and would re-render on every
   // write to the store it reads.
   const files = useFiles((state) => state.openIds.length > 0)
+  const chats = useConversations((state) => state.open.length > 0)
   const database = useExplorer((state) => dbOpen(state).length > 0)
   const api = useApi((state) => state.openIds.length > 0)
   const mail = useInbox((state) => state.openIds.length > 0)
@@ -307,7 +359,7 @@ export function useHasOpenTabs(): boolean {
   )
   const note = useNotes((state) => state.openIds.length > 0)
 
-  return files || database || api || mail || terminal || note
+  return files || chats || database || api || mail || terminal || note
 }
 
 /** A relation tab is addressed by the relation it shows; a query tab by its

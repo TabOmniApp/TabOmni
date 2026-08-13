@@ -6,21 +6,23 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 
-import { SECTIONS, SECTION_ACCENT, type Section } from "./activity-bar"
+import { SECTIONS, SECTION_ACCENT } from "./activity-bar"
+import type { Section } from "@/lib/rail"
 
 /**
  * What each section offers somebody with nothing open — the sidebar on the
  * left, named by what is actually in it.
  *
- * Terminal is the one that is not "pick something": its sidebar lists folders,
- * and a session has to be started before there is anything to pick.
+ * There is no hint for a session, because there is no section for one: the
+ * Explorer hint below covers the sidebar a session is started from, and a pane
+ * with no tab in it is never the terminal's.
  */
 const HINTS: Record<Section, string> = {
-  files: "Pick a file from the tree on the left, or add a folder to it.",
+  files:
+    "Pick a file from the tree on the left, or start a session or open a conversation from the lists under it.",
   database: "Pick a table from the list on the left, or open a query tab.",
   api: "Pick a request from the list on the left, or create one.",
   mail: "Mail caught by the SMTP sink on the left opens here.",
-  terminal: "Start a session with + on the left — a shell, or Claude Code.",
   note: "Pick a note from the list on the left, or write a new one.",
 }
 

@@ -145,7 +145,9 @@ relative to `src/renderer/`. Selecting anything brings its own sidebar to the ra
 (`showPane` moves both), opens whatever holds it — each panel's own `select`
 does that, since what "holds" a thing differs per panel — and `SideRow` scrolls
 the active row into view for all of them. The rail moving the sidebar still
-leaves the pane alone; only the other direction is coupled. No panel store
+leaves the pane alone; only the other direction is coupled. A pane that is not a
+rail section — the sessions' — takes the pane and leaves the sidebar alone, since
+the row that was clicked is in the sidebar already showing. No panel store
 clears itself any more: there is no
 switch to clear for, and the only one that follows the folders at all is the
 Terminal store, which drops a removed folder's sessions. Every code editor is
@@ -171,11 +173,15 @@ bring. See the Motion section of `docs/design.md`.
 `bunx shadcn@latest add dialog`. Vite's root is `src/renderer`, so `index.html`
 and `public/` are there too.
 
-The activity rail is Explorer, Database, API, Mail, Terminal and
-Notes, and `components/studio/activity-bar.tsx` is the one list that says so.
-There is no git panel, no code search, no specs panel and no webhook catcher:
-all four were removed rather than left hidden, and the only thing git is still asked is each folder's
-branch name, shown beside the folder in the Explorer and Terminal sidebars.
+The activity rail is Explorer, Database, API, Mail and Notes — five sections,
+`SECTION_IDS` in `lib/rail.ts` is the list and `components/studio/activity-bar.tsx`
+puts a label and an icon against each. **There is no Terminal section**: a
+session is started and listed in the Explorer sidebar and draws in a pane with
+no sidebar of its own, so `Pane` is `Section | "terminal"` and `showPane` leaves
+the rail alone for it. There is no git panel, no code search, no specs panel and
+no webhook catcher either: all four were removed rather than left hidden, and the
+only thing git is still asked is each folder's branch name, shown beside the
+folder in the Explorer tree.
 
 Explorer is the workspace's folders as directories — expanded a level at a
 time, nothing hidden, nothing watched (Refresh is the header button). Its
@@ -194,6 +200,33 @@ addressed by its own absolute path, and `lib/files/paths.ts` is the one place
 that splits one — it accepts both separators, unlike `lib/runtime/tree.ts`,
 which is for paths this app made up. See the Explorer section of
 `docs/design.md`.
+
+**Conversations** is the section under the tree: every `claude` transcript the
+workspace's folders have on disk (`listSessions` in `src/main/transcript.ts`
+reads the directory `--resume` reads), which includes runs this app never
+started — a `claude` in the user's own terminal writes to the same place. A row
+opens read-only in the Explorer pane, with `Resume` handing it to a real session
+and closing the read-only tab. The tabs live in the Explorer pane rather than the
+Terminal one because `showPane` moves the sidebar too and the row is in this
+sidebar; they are their own store (`lib/terminal/conversations.ts`) rather than
+more `openIds` in `lib/files/store.ts`, whose ids are all absolute paths.
+`lib/panels.ts` adds the two lists into the one pane's tabs and `onScreen` is
+what says which of the two is drawn. See the Conversations part of the Explorer
+section in `docs/design.md`.
+
+**The workspace's folders belong to Explorer**, and are added, renamed and
+removed there and nowhere else (`components/studio/files/file-tree.tsx`) — the
+list that says what the workspace is pointed at is the one that changes it. The
+Terminal sidebar used to carry the same three actions on a second copy of the
+folder list — and then stopped existing altogether: **Sessions** is now a
+section under the tree (`components/studio/files/sessions-list.tsx`), listing the
+workspace's sessions under the folder each runs in, with the closed ones dimmed
+below. A folder's right-click menu in the tree also holds `New session here…`.
+Both that and the list's `+` open the picker `studio.tsx` mounts off `picking` in
+`lib/terminal/store.ts` — mounted there rather than in the sidebar, which the
+rail unmounts when it moves. The File menu's `add-folder` command opens the same
+Add folder dialog, which is what a rail with the Explorer section hidden falls
+back to.
 
 Notes is a workspace-wide scratchpad — folders and markdown files, filed and
 right-clicked the way the API panel's requests are. `lib/tree.ts` is the tree
@@ -214,14 +247,6 @@ node behind that fence, and the comment on
 `keepDrawingFencesOutOfCodeBlocks` is the one thing to read before touching it.
 Excalidraw is loaded on demand and its fonts are served by this app rather than
 from a CDN — see the `excalidraw-fonts` plugin in `vite.config.ts`.
-
-The workspace's folders are listed, added and removed in that same sidebar
-(`components/studio/terminal/terminal-sidebar.tsx`), rather than in a menu of
-their own above the rail. Terminal is the only panel that works _in_ a folder —
-a session is a pty in its directory — while the databases, requests and
-captures belong to the workspace as a whole, so folder management sits beside
-the one thing it changes. The File menu's `add-folder` command opens the same
-dialog, which is what a rail with the Terminal section hidden falls back to.
 
 Mail is the other end of the API panel: an SMTP sink on loopback catching the
 mail the project sends. `src/main/inbox.ts` is the server and `src/main/mime.ts`

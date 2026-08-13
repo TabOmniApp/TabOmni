@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 
-import { SECTION_ACCENT, type Section } from "./activity-bar"
+import { SECTION_ACCENT } from "./activity-bar"
+import type { Section } from "@/lib/rail"
 
 /**
  * Every panel's header already carries the label the rail uses for it, so the
@@ -12,7 +13,6 @@ const ACCENT_BY_TITLE: Record<string, Section> = {
   Database: "database",
   API: "api",
   Mail: "mail",
-  Terminal: "terminal",
   Notes: "note",
 }
 

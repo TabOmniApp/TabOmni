@@ -24,13 +24,15 @@ import { useTerminal } from "@/lib/terminal/store"
 import { useStudio } from "@/lib/store"
 
 /**
- * The picker behind the Terminal panel's `+`: which folder to run in, and
- * which kind of session to open.
+ * The picker behind Explorer's `New session here…` on a folder and the `+` on
+ * its Sessions list: which folder to run in, and which kind of session to open.
+ * Mounted by the workbench, off `picking` in the terminal store, rather than by
+ * the sidebar — a dialog a sidebar holds is unmounted when the rail moves.
  *
  * The folder is asked because a pty's cwd is fixed the moment it starts — it
  * cannot be moved afterwards, so this is the only place the choice can be
- * made. It defaults to `preferredFolderId`, which is the folder the last
- * session was opened in.
+ * made. It defaults to `preferredFolderId`, which is the folder that was
+ * right-clicked, or the one the last session was opened in.
  *
  * A kind whose CLI is not on this machine offers to install it instead of to
  * start it — the alternative was a session that opens only to print

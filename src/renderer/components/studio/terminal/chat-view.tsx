@@ -36,7 +36,8 @@ import type {
   TranscriptSessionSummary,
   TranscriptUsage,
 } from "@shared/api"
-import { useTerminal, type TerminalSession } from "@/lib/terminal/store"
+import { useTerminal } from "@/lib/terminal/store"
+import { relativeTime } from "@/lib/terminal/conversations"
 import {
   ASK_USER_QUESTION,
   parseAnswers,
@@ -154,17 +155,27 @@ function applyEntries(current: Entry[], incoming: TranscriptEntry[]): Entry[] {
  * is in flight, and what permission mode it is running under, have to be known
  * above whichever pane happens to be on screen.
  */
-export function useTranscript(session: TerminalSession) {
+export function useTranscript(session: {
+  /**
+   * What the mirror's events are tagged with. A session tab passes its own id;
+   * a read-only conversation tab passes something of its own, since two tabs
+   * may be following the same file.
+   */
+  id: string
+  folderId: string
+  claudeSessionId: string | null
+}) {
   const { id, folderId, claudeSessionId } = session
 
   /**
-   * The conversation on screen, which is always the one the tab's pty is
-   * running.
+   * The conversation being followed.
    *
-   * There is no "view a past conversation" mode: picking one from the drawer
-   * restarts the pty onto it (`resumeSession` in `lib/terminal/store.ts`), so
-   * what is read and what is written to are the same conversation and the
-   * composer is never pointed somewhere other than the pane.
+   * For a session tab this is always the one its own pty is running: picking
+   * another from the drawer restarts the pty onto it (`resumeSession` in
+   * `lib/terminal/store.ts`), so what is read and what is written to are the
+   * same conversation and the composer is never pointed elsewhere. A
+   * conversation opened from the Explorer sidebar has no pty at all and is read
+   * and nothing else — see `conversation-view.tsx`.
    */
   const target = claudeSessionId
 
@@ -325,23 +336,15 @@ export type Transcript = ReturnType<typeof useTranscript>
  * time rather than being typed out, and permission prompts are answered at
  * the CLI's own prompt — in the terminal view — rather than in a dialog here.
  */
-export function ChatView({
-  folderId,
-  transcript,
-  visible,
-  onResume,
-}: {
-  folderId: string
-  transcript: Transcript
-  /** Whether the chat is the view on screen, for the pane that has to follow
-   * the conversation only while someone is reading it. */
-  visible: boolean
-  /** Puts the tab on another of the folder's conversations, restarting its
-   * pty onto it — which is what makes the drawer's pick something you can
-   * then talk to rather than only read. */
-  onResume: (claudeSessionId: string) => void
-}) {
-  const { entries, pending, working, target } = transcript
+/**
+ * How much of a turn is drawn — tool calls and thinking — remembered in the
+ * settings.
+ *
+ * A hook rather than state in `ChatView` because the read-only conversation
+ * view draws the same transcript with the same two switches, and someone who
+ * turned tool calls off did not mean "off in this pane only".
+ */
+export function useTranscriptDisplay() {
   const [showToolCalls, setShowToolCallsState] = useState(true)
   const [showThinking, setShowThinkingState] = useState(true)
 
@@ -370,6 +373,34 @@ export function ChatView({
     void window.desktop.setSetting(SHOW_THINKING_KEY, String(next))
   }
 
+  return {
+    showToolCalls,
+    setShowToolCalls,
+    showThinking,
+    setShowThinking,
+  }
+}
+
+export function ChatView({
+  folderId,
+  transcript,
+  visible,
+  onResume,
+}: {
+  folderId: string
+  transcript: Transcript
+  /** Whether the chat is the view on screen, for the pane that has to follow
+   * the conversation only while someone is reading it. */
+  visible: boolean
+  /** Puts the tab on another of the folder's conversations, restarting its
+   * pty onto it — which is what makes the drawer's pick something you can
+   * then talk to rather than only read. */
+  onResume: (claudeSessionId: string) => void
+}) {
+  const { entries, pending, working, target } = transcript
+  const { showToolCalls, setShowToolCalls, showThinking, setShowThinking } =
+    useTranscriptDisplay()
+
   return (
     <div className="flex h-full flex-col">
       <Header
@@ -382,11 +413,15 @@ export function ChatView({
         showThinking={showThinking}
         onShowThinkingChange={setShowThinking}
       />
-      <Transcript
+      <TranscriptFeed
         entries={entries}
         pending={pending}
         conversation={target}
-        hasSession={target !== null}
+        emptyNotice={
+          target !== null
+            ? "Ask for something below. Anything the agent needs permission for is asked in the Terminal view."
+            : "This session has no transcript to follow. Continue one from Past sessions, or start a new Claude Code session."
+        }
         visible={visible}
         showToolCalls={showToolCalls}
         showThinking={showThinking}
@@ -702,26 +737,6 @@ function Header({
   )
 }
 
-const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" })
-const RELATIVE_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
-  ["year", 365 * 24 * 3600_000],
-  ["month", 30 * 24 * 3600_000],
-  ["day", 24 * 3600_000],
-  ["hour", 3600_000],
-  ["minute", 60_000],
-]
-
-/** How long ago a session was last touched, coarsened to whichever unit
- * reads naturally — a chat picker has no use for "3600 seconds ago". */
-function relativeTime(updatedAt: number): string {
-  const delta = updatedAt - Date.now()
-  for (const [unit, size] of RELATIVE_STEPS) {
-    if (Math.abs(delta) >= size)
-      return RELATIVE.format(Math.round(delta / size), unit)
-  }
-  return "just now"
-}
-
 /**
  * The drawer of past sessions: every conversation the CLI has on disk for
  * this folder, not just the one this tab is running.
@@ -856,11 +871,18 @@ function SessionsButton({
   )
 }
 
-function Transcript({
+/**
+ * The turns themselves, scrolled.
+ *
+ * Exported because the read-only conversation view draws the same list from the
+ * same events — what differs between the two is the strip above it and whether
+ * there is a composer, not how a turn is drawn.
+ */
+export function TranscriptFeed({
   entries,
   pending,
   conversation,
-  hasSession,
+  emptyNotice,
   visible,
   showToolCalls,
   showThinking,
@@ -870,7 +892,10 @@ function Transcript({
   /** Which conversation is on screen, so that switching to another one starts
    * at its newest turn rather than carrying the last one's scroll over. */
   conversation: string | null
-  hasSession: boolean
+  /** What an empty transcript says. The reason differs per caller — a session
+   * with nothing asked of it yet, or a file that has gone — and neither is
+   * this component's to guess at. */
+  emptyNotice: string
   /** Whether this pane is the one on screen — a hidden one keeps its layout,
    * so it can be scrolled, but scrolling it is work nobody sees. */
   visible: boolean
@@ -995,9 +1020,7 @@ function Transcript({
       <div ref={content} className="flex w-full flex-col gap-3">
         {empty ? (
           <p className="mx-auto max-w-sm text-center text-xs text-muted-foreground">
-            {hasSession
-              ? "Ask for something below. Anything the agent needs permission for is asked in the Terminal view."
-              : "This session has no transcript to follow. Continue one from Past sessions, or start a new Claude Code session."}
+            {emptyNotice}
           </p>
         ) : (
           <>

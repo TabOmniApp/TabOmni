@@ -2,7 +2,7 @@ import { create } from "zustand"
 
 import type { WorkspaceFolder } from "@shared/api"
 import { isStringArray, recall, remember } from "./tab-memory"
-import { useRail } from "./rail"
+import { isSection, useRail, type Section } from "./rail"
 import * as repo from "./workspace"
 
 /** Where the strip's arrangement and the pane on screen are kept. */
@@ -19,7 +19,13 @@ export const PANES: Pane[] = [
   "note",
 ]
 
-type RememberedStrip = { tabOrder: string[]; pane: Pane; section?: Pane }
+/**
+ * `section` is held as a plain string rather than a `Section` on the way in: a
+ * build with a Terminal section on the rail wrote `"terminal"` there, and
+ * rejecting the whole record over it would throw away the tab order and the
+ * pane along with it. `bootstrap` is where it is narrowed.
+ */
+type RememberedStrip = { tabOrder: string[]; pane: Pane; section?: string }
 
 function isRememberedStrip(value: unknown): value is RememberedStrip {
   const record = value as Partial<RememberedStrip> | null
@@ -27,7 +33,7 @@ function isRememberedStrip(value: unknown): value is RememberedStrip {
     isStringArray(record?.tabOrder) &&
     PANES.includes(record.pane as Pane) &&
     // Optional: written by a build that did not remember the sidebar yet.
-    (record.section === undefined || PANES.includes(record.section))
+    (record.section === undefined || typeof record.section === "string")
   )
 }
 
@@ -38,8 +44,14 @@ function isRememberedStrip(value: unknown): value is RememberedStrip {
  * sidebar, and changing the sidebar must not take what is open off the screen.
  * What sets this is picking something to look at — a tab, a table in the tree,
  * a request, a session — wherever that pick was made.
+ *
+ * A `Section` and one more: `terminal` is a pane with no rail button and no
+ * sidebar of its own. A session is started and listed in the Explorer sidebar
+ * and draws here, which is why `showPane` leaves the sidebar alone for it —
+ * there is no Terminal sidebar left to bring, and the row that was clicked is
+ * in the one already showing.
  */
-export type Pane = "files" | "database" | "api" | "mail" | "terminal" | "note"
+export type Pane = Section | "terminal"
 
 type StudioState = {
   /** Storage is open and the workspace has been read. */
@@ -74,15 +86,16 @@ type StudioState = {
   /**
    * Which sidebar the rail is showing.
    *
-   * The same six ids as `Pane`, and deliberately a separate value: the rail
-   * moves this on its own, so a sidebar can be read while another panel's tab
-   * stays on screen. What is *not* symmetric is the other direction — picking
-   * something moves both, because a selection nobody can see the sidebar for is
-   * half an answer.
+   * A `Section` rather than a `Pane`, and deliberately a separate value: the
+   * rail moves this on its own, so a sidebar can be read while another panel's
+   * tab stays on screen. What is *not* symmetric is the other direction —
+   * picking something moves both, because a selection nobody can see the
+   * sidebar for is half an answer, except where the thing picked has no sidebar
+   * of its own to move to (a session).
    */
-  section: Pane
+  section: Section
   /** The rail's own pick, which moves the sidebar and nothing else. */
-  setSection: (section: Pane) => void
+  setSection: (section: Section) => void
 
   /**
    * The workbench tab strip's order, as prefixed ids (`db:public.users`).
@@ -103,6 +116,11 @@ type StudioState = {
   renameFolder: (id: string, name: string) => Promise<void>
   /** Drops a folder from the workspace. The directory itself is untouched. */
   removeFolder: (id: string) => Promise<void>
+}
+
+/** A remembered id as a section, or null when it does not name one. */
+function sectionOf(value: string | undefined): Section | null {
+  return value !== undefined && isSection(value) ? value : null
 }
 
 /**
@@ -146,9 +164,11 @@ export const useStudio = create<StudioState>((set, get) => {
       set({
         tabOrder: strip.tabOrder,
         pane: strip.pane,
-        // A layout written before the rail was remembered has no section in
-        // it; the pane's own is the closest thing to where it was left.
-        section: strip.section ?? strip.pane,
+        // A layout written before the rail was remembered has no section in it,
+        // and one written while Terminal was still a section may name it; the
+        // pane's own is the closest thing to where it was left, and Explorer is
+        // where a `terminal` pane's sidebar has gone.
+        section: sectionOf(strip.section) ?? sectionOf(strip.pane) ?? "files",
       })
     }
 
@@ -193,10 +213,15 @@ export const useStudio = create<StudioState>((set, get) => {
     showPane(pane) {
       // Not onto a section taken off the rail: hiding one is saying "this is
       // not a way into the studio for me", and a pick should not put it back.
+      //
+      // And not onto a pane that is not a section at all: a session's pane has
+      // no sidebar of its own, so what is showing — the Explorer sidebar it was
+      // started from — is already the right one.
       const hidden = useRail.getState().hidden
       set((state) => ({
         pane,
-        section: hidden.includes(pane) ? state.section : pane,
+        section:
+          isSection(pane) && !hidden.includes(pane) ? pane : state.section,
       }))
       rememberStrip()
     },

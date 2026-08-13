@@ -11,11 +11,12 @@ import { useFiles } from "@/lib/files/store"
 import { useInbox } from "@/lib/inbox/store"
 import { useNotes } from "@/lib/note/store"
 import { useActiveTabId, useHasOpenTabs } from "@/lib/panels"
+import { useConversations } from "@/lib/terminal/conversations"
 import { useTerminal } from "@/lib/terminal/store"
 import { useRail } from "@/lib/rail"
 import { useStudio, type Pane } from "@/lib/store"
 import { ActivityBar } from "./activity-bar"
-import { TerminalSidebar } from "./terminal/terminal-sidebar"
+import { NewTerminalDialog } from "./terminal/new-terminal-dialog"
 import { TerminalWorkspace } from "./terminal/terminal-workspace"
 import { ApiWorkspace } from "./api/api-workspace"
 import { FileTree } from "./files/file-tree"
@@ -85,6 +86,7 @@ export function Studio() {
     void useInbox.getState().refresh()
     void useNotes.getState().refresh()
     void useFiles.getState().restore()
+    void useConversations.getState().restore()
   }, [])
 
   /*
@@ -129,6 +131,11 @@ function Workbench() {
   const activeTabId = useActiveTabId(pane)
 
   const [adding, setAdding] = useState(false)
+  /** The New session picker, asked for by the Explorer sidebar — the `+` on its
+   * Sessions list, or a folder's own menu — and mounted here rather than in
+   * either, since a dialog held by a sidebar goes when the rail moves. */
+  const picking = useTerminal((state) => state.picking)
+  const closePicker = useTerminal((state) => state.closePicker)
   /*
    * Which sidebar is showing.
    *
@@ -144,7 +151,8 @@ function Workbench() {
    * stack below. */
   const [mounted, setMounted] = useState<Pane[]>([])
 
-  // The panel on screen — or none, which `NothingOpen` answers for all six.
+  // The panel on screen — or none, which `NothingOpen` answers for whichever
+  // sidebar is showing.
   //
   // A panel is drawn only when it has a tab to draw: each one used to answer
   // "nothing selected" for itself, which meant whoever opened the app to read
@@ -159,8 +167,8 @@ function Workbench() {
   if (shown && !mounted.includes(shown)) setMounted([...mounted, shown])
 
   // The File menu is a second way to reach the same dialog — and the only one
-  // left when the Terminal section is taken off the rail. It runs in the main
-  // process and cannot open a dialog itself, so it names the command instead.
+  // left when Explorer is taken off the rail. It runs in the main process and
+  // cannot open a dialog itself, so it names the command instead.
   useEffect(
     () =>
       window.desktop.onMenuCommand((command) => {
@@ -181,19 +189,19 @@ function Workbench() {
       >
         {/* Deliberately bare. The workspace holds several folders and each
             one has a branch of its own, so a single line here could only be
-            about one of them — they are listed, with their branches, in the
-            Terminal panel, which is the one panel that works in a folder. */}
+            about one of them — they are listed, with their branches, in
+            Explorer, which is the panel the folders belong to. */}
         <div className="min-w-0 flex-1" />
 
         <ThemeToggle />
       </header>
 
-      {/* No screen of its own for an empty workspace. A folder is what the
-          Terminal panel works in, and nothing else here is about one — the
-          databases, the requests and the two capture servers belong to the
-          workspace — so a studio held shut until one is added would be holding
-          back four panels that had nothing to wait for. Adding one is a button
-          in the Terminal panel's own header, and the File menu. */}
+      {/* No screen of its own for an empty workspace. A folder is what Explorer
+          lists and what the Terminal panel runs sessions in, and nothing else
+          here is about one — the databases, the requests and the capture server
+          belong to the workspace — so a studio held shut until one is added
+          would be holding back four panels that had nothing to wait for. Adding
+          one is a button in Explorer's own header, and the File menu. */}
       <div className="flex min-h-0 flex-1">
         <ActivityBar section={section} onSelect={setSection} />
 
@@ -202,6 +210,9 @@ function Workbench() {
           className="min-w-0 flex-1"
         >
           <ResizablePanel defaultSize={224} minSize={160} maxSize={420}>
+            {/* The five rail sections, and no fallback: `section` is a
+                `Section`, so this list is exhaustive and a sixth would be a
+                type error rather than a sidebar nobody wrote. */}
             {section === "files" ? (
               <FileTree onAddFolder={() => setAdding(true)} />
             ) : section === "database" ? (
@@ -210,10 +221,8 @@ function Workbench() {
               <RequestList />
             ) : section === "mail" ? (
               <CaptureList />
-            ) : section === "note" ? (
-              <NoteList />
             ) : (
-              <TerminalSidebar onAddFolder={() => setAdding(true)} />
+              <NoteList />
             )}
           </ResizablePanel>
 
@@ -287,6 +296,13 @@ function Workbench() {
       <CommandPalette />
 
       {adding && <AddFolderDialog onClose={() => setAdding(false)} />}
+
+      {picking && (
+        <NewTerminalDialog
+          preferredFolderId={picking.folderId}
+          onClose={closePicker}
+        />
+      )}
     </div>
   )
 }

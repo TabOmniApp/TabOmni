@@ -83,8 +83,8 @@ is its last, and closing that used to leave the pane on the Database panel's
 store asked was the one that had just emptied. Now the tab beside the closed one
 takes over, whichever panel it belongs to (`neighbour` in `lib/tabs.ts`, tested
 there). The panels' own lists close tabs without going through the strip, so
-`fillPane` is the same fallback offered to them: the Terminal sidebar's rows use
-it.
+`fillPane` is the same fallback offered to them: the rows in Explorer's Sessions
+list use it.
 
 **The sidebar follows what the pane is showing.** Because a tab can be picked
 from the strip, from `⌘P`, or by jumping to a definition, the thing on screen is
@@ -92,6 +92,13 @@ regularly one the sidebar has scrolled past, folded away, or is not even the
 sidebar _for_ — and a list marking a row nobody can see has marked nothing. So
 selecting anything brings its own sidebar to the rail, opens whatever holds it,
 and scrolls the row into view.
+
+Except where the thing has no sidebar of its own. **There are five rail sections
+and six panes:** a session draws in a pane with no rail button, because it is
+started and listed in the Explorer sidebar — so `showPane("terminal")` leaves the
+sidebar exactly where it is, which is already the list the row was clicked in.
+`Section` in `lib/rail.ts` is that subset, and `Pane` in `lib/store.ts` is it
+plus `terminal`; they were one union while every pane had a button.
 
 Only that direction. The rail still moves the sidebar on its own without
 touching the pane, which is what lets a tree be read while another panel's tab
@@ -342,6 +349,39 @@ worth defending against is exactly the one where the renderer is wrong.
 Deleting is `shell.trashItem`, not `unlink`. This is somebody's source file, the
 studio has no undo of its own, and every desktop already has one.
 
+**The workspace's folders are this panel's.** Adding one, renaming it and
+removing it are here and nowhere else — a folder heading's right-click menu, and
+`Add folder` in the header, which the File menu's own item and the empty space
+under the tree both reach as well. This is the list that says what the workspace
+is pointed at, so it is the list that changes it. The Terminal sidebar used to
+carry the same three actions on its own copy of the folder list, which meant two
+answers to "where do I remove a folder" and a sidebar that was this one plus a
+session row; it now lists sessions and leaves the folders alone. Each heading
+carries the folder's branch, and this is the one list that always shows it — the
+Terminal sidebar has no heading to put it on in a single-folder workspace.
+
+Removing a folder takes the studio's record of where it is, along with the
+sessions open against it, and leaves the directory exactly as it is — the
+dialog says so, because this is the one destructive action in the studio that
+looks like it might delete somebody's repository.
+
+Renaming a folder is the one rename in the studio that does not touch the thing
+it names. The manifest records an absolute path and a name beside it, and only
+the name changes — the directory keeps whatever it is called on disk, and every
+session already running in it keeps running. The dialog says that too, rather
+than leaving it to be discovered from Finder, which is what the `description` on
+`RenameDialog` is for. The rename directly under it in the same menu, of a file
+or directory _inside_ a folder, does touch the disk, and says which it is.
+
+**`New session here…`** is on a folder as well, opening the Terminal panel's own
+picker with that folder chosen. It is the flow anyway — what somebody wants a
+terminal in is usually the repository they are reading — and since the Terminal
+sidebar no longer draws folders with nothing running in them, it is where the
+first session in one is started. It sits on the folder heading rather than on the
+directory rows under it because `terminalCreate` takes a folder id: a pty's cwd
+is a workspace folder's own directory, and an item promising a shell in
+`src/main/` would be promising something the contract cannot express.
+
 **Rows carry a file-type icon**, in front of the name the way an editor does
 it: the vendored [vscode-icons](https://github.com/vscode-icons/vscode-icons)
 set (MIT), a chosen forty-odd of its fifteen hundred, in
@@ -389,6 +429,54 @@ Two other kinds of file are reported rather than opened: anything with a NUL
 byte in its first 8 KB, and anything over 2 MB. Both come back as results rather than
 errors — "this is a PNG" and "this is a 40 MB log" are things the pane can say
 plainly, and rejecting would file them beside "the disk went away".
+
+### Conversations
+
+**Under the tree, the agent history of each folder — including the parts this
+app had nothing to do with.**
+
+A `claude` conversation is a file the CLI wrote. Every run of it appends to
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, whether it was started
+from a session in this app or typed into Terminal.app, and `listSessions` in
+`src/main/transcript.ts` reads that directory — the one `--resume` itself reads.
+So the studio can list, and draw, conversations it never started and has no
+process for. That is the whole reason this list is worth having: it is the agent
+history of a repository, not the history of this app's use of it, which is
+something an editor's own chat panel cannot offer for a CLI run in a terminal it
+does not own.
+
+It was already possible to reach one and only in the worst place: the **Past
+sessions** drawer, inside a running session's chat view. The way back to
+yesterday's conversation therefore began with starting a new one. Here it is a
+list beside the files, and a click reads it without starting anything at all.
+
+**A conversation opens read-only, and `Resume` is the way to talk to it.** The
+pane is the chat view's own transcript feed with a different strip above it and
+no composer under it — there is no process to type at. `Resume` hands the
+conversation to a real session (`terminalCreate` with its id, which the CLI
+resumes) and closes the read-only tab, because what that tab was for is then on
+screen with a composer. A conversation that is _already_ running in a session
+says `Go to session` instead and selects that tab: two `claude` processes
+appending to one transcript is not a state worth being able to reach, and the
+CLI refuses a session id that is in use anyway.
+
+**These tabs belong to the Explorer pane**, not the Terminal one, because
+`showPane` moves the sidebar with the pane — and the row a conversation was
+picked from is in _this_ sidebar. Opening one into the Terminal pane would take
+the rail to a sidebar with no row for it to mark, which is the failure that rule
+exists to prevent. They are a store of their own
+(`lib/terminal/conversations.ts`) rather than more `openIds` in the files store:
+a file tab is an absolute path, and `prune`, `restore`, `flush` and `movedPath`
+all read one as a path. `lib/panels.ts` adds the two lists up into the one
+pane's tabs, and `onScreen` there is what settles which of the two the pane
+draws — set when a conversation is picked, cleared by `useFiles.select`.
+
+**Read when the section is opened**, not on launch: this is a `readdir` plus the
+head of every transcript in it, per folder, and a repository worked in for months
+has hundreds. Refresh is the section's own button. The list is grouped by folder
+only when the workspace has more than one, the same rule the Terminal sidebar
+groups sessions by, and it scrolls in a box of its own so the tree above stays
+what the panel is mostly for.
 
 ### The editor
 
@@ -501,9 +589,19 @@ is in the way of the common case.
 
 ## Terminal sessions
 
-The Terminal panel holds as many sessions as you open, each in one folder's
-real directory: a plain shell, or `claude`. `+` asks which folder and which
-kind — and for a CLI that is not on this machine it offers to install it
+The studio holds as many sessions as you open, each in one folder's real
+directory: a plain shell, or `claude`. **There is no Terminal section on the
+rail.** They are started and listed in the Explorer sidebar's own Sessions list,
+under the folder each one runs in, and a session draws in a pane of its own with
+no sidebar — see the Layout section on the five sections and six panes.
+
+The rail button was there first, and what it opened was a sidebar whose top half
+was Explorer's folder list again. Taking the folder management out of it (see the
+Explorer section) left a handful of session rows behind a way in of their own,
+which is a button on the rail for a list that fits under another one. What the
+sessions genuinely need is the folders, and those are Explorer's.
+
+`+` on that list asks which folder and which kind — and for a CLI that is not on this machine it offers to install it
 instead of to start it, running the install in a session of its own so the
 output and any password prompt are yours to read. What each kind runs, how it
 installs, and whether it is there is decided in `src/main/agent-tools.ts`, so
@@ -513,35 +611,32 @@ Sessions run on the host, outside any container. The folder is asked for rather
 than assumed because a pty's directory is fixed the moment it starts and cannot
 be moved afterwards — the picker is the only place that choice can be made.
 
-The sidebar is the workspace's folders, with each folder's sessions under it. A
-folder is listed whether or not it has a session, so the panel says what the
-workspace is pointed at and not merely what is running, and its branch sits on
-its own row — one line in the window header could not say which of three
-repositories it meant. Right-clicking a folder starts a session in it, renames
-it, or removes it from the workspace; the heading's `Add folder` is the other
-end of the last pair.
+**The list answers "what is running", and only that.** A folder appears in it
+only once something is running in that folder; which folders the workspace is
+pointed at is the tree above it, and adding, renaming and removing one is
+answered there. A folder heading appears only when the workspace has more than
+one folder — every session in a single-folder workspace is in the only folder
+there is — and it carries no branch, because the tree's own heading says that
+once, a few rows higher.
 
-Renaming a folder is the one rename in the studio that does not touch the thing
-it names. The manifest records an absolute path and a name beside it, and only
-the name changes — the directory keeps whatever it is called on disk, and every
-session already running in it keeps running. The dialog says so rather than
-leaving it to be discovered from Finder, which is what the `description` on
-`RenameDialog` is for.
+The section is expanded by default, unlike Conversations below it: these are live
+processes, and a session on screen with nothing in the sidebar selecting it is
+how a session gets forgotten about. With nothing running it is a header and no
+more, and folded it says how many sessions are running under it. Nothing folds
+per folder any more — the section itself folds, and a fold inside a box that
+already scrolls was a third level of hiding for a list of a few rows.
 
-A folder folds away, and the fold is in the store rather than in the panel: the
-rail unmounts a sidebar it is not showing, and a fold that undoes itself every
-time you look at a database is not a fold. Collapsed ids are what is kept, so a
-folder added later opens rather than arriving shut, and a folder removed from
-the workspace takes its fold with it. Nothing about it reaches disk — a launch
-showing every folder open says what the workspace is pointed at, which is the
-one thing a first look wants. A shut folder still says how many sessions are
-running under it, and starting one in it opens it: a session on screen with
-nothing in the sidebar selecting it is how a session gets forgotten about.
+Starting the first session in a folder is therefore not done from the list, which
+is not drawing that folder yet: `+` asks which folder, and `New session here…` on
+a folder in the tree is the shorter way — what somebody wants a terminal in is
+usually the repository they are reading. Both open the same picker, which the
+workbench mounts off `picking` in the terminal store rather than the sidebar
+holding it: a dialog a sidebar holds is unmounted when the rail moves.
 
 ### Closing a session
 
-**Closing a tab ends the pty; it does not end the session.** The row stays in
-the sidebar under its folder, dimmed and marked `closed`, below whatever is
+**Closing a tab ends the pty; it does not end the session.** The row stays in the
+Sessions list under its folder, dimmed and marked `closed`, below whatever is
 still running. Clicking it runs it again — `restart` and "reopen" are the same
 act, because a pty cannot be resumed, only started over.
 
@@ -552,6 +647,13 @@ onto it, leaving the Past sessions drawer inside a _running_ session as the way
 back — start a session, switch to Chat, open the drawer, find it. A closed row
 is that handle, and reopening one passes its `claudeSessionId` back to
 `terminalCreate`, which resumes it if `hasTranscript` finds the file.
+
+A closed row is no longer the _only_ handle. Explorer's Conversations section
+lists every transcript a folder has on disk, this app's sessions and the user's
+own `claude` runs alike, and reading one there starts nothing — see the
+Conversations part of the Explorer section. What a closed row still is, and that
+list is not, is a record of the session as this app had it: its name, its kind,
+and its place under a folder.
 
 A closed shell is honest about offering less: there is no transcript and no
 saved scrollback, so running it again is a fresh pty in the same directory.
@@ -577,21 +679,16 @@ the terminal, and since taking the pane also writes it down, the remembered pane
 was overwritten every launch — the whole strip appeared to forget which tab was
 selected, whichever panel it belonged to.
 
-Folder management lives here rather than in a menu above the rail because this
-is the only panel that works _in_ a folder: the databases, the saved requests
-and the captures are the workspace's. The File menu opens the same Add folder
-dialog, so a rail with this section hidden is not a rail with no way to add
-one.
-
-That is also why an empty workspace has no screen of its own. The studio used
-to be held shut behind a full-window "No folders yet" until one was added,
-which was right when a folder was what the whole app was about; it is not, and
-holding four panels that never needed one behind a fifth that does is a gate
-charging everybody for one panel's requirement. The sidebar simply draws an
-empty list — no notice saying it is empty, because Add folder is in the header
-directly above it, and a panel that announces its own emptiness announces it
-again every time the section is opened. `New session` is disabled until there
-is a folder to start one in, since a pty's cwd has to be some directory.
+An empty workspace has no screen of its own. The studio used to be held shut
+behind a full-window "No folders yet" until one was added, which was right when
+a folder was what the whole app was about; it is not, and holding four panels
+that never needed one behind a fifth that does is a gate charging everybody for
+one panel's requirement. Both sidebars simply draw an empty list — no notice
+saying it is empty, because a panel that announces its own emptiness announces
+it again every time the section is opened, and Explorer's `Add folder` is in the
+header directly above where the folders would be. `New session` here is disabled
+until there is a folder to start one in, since a pty's cwd has to be some
+directory.
 
 ### The chat view
 
@@ -1349,8 +1446,8 @@ each a line of grey text — and the handover between them was a flicker. It is
 one component now, timed from one module-level timestamp, so crossing from the
 first mount to the second continues the animation instead of restarting it.
 
-It draws the studio in miniature — the rail with its six sections in their own
-hues, a strip of tabs, a sidebar, a panel — assembling in the order the eye
+It draws the studio in miniature — the rail with dots in the studio's own hues,
+a strip of tabs, a sidebar, a panel — assembling in the order the eye
 reads them, then sweeping for as long as the app is still opening. The workbench
 is held back until the sequence has run (`SPLASH_ASSEMBLE_MS`), which is usually
 longer than opening the manifest takes: a splash cut off a third of the way

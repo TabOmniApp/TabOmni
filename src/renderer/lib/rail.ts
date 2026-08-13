@@ -9,6 +9,38 @@ import { create } from "zustand"
  */
 const LAYOUT_KEY = "activity-bar.layout"
 
+/**
+ * A way into the studio: one button on the activity rail, one sidebar.
+ *
+ * **Not every pane is one of these.** `Pane` in `lib/store.ts` is built from
+ * this plus `terminal`, which is a pane with no rail button and no sidebar of
+ * its own: a session opens from the Explorer sidebar's own Sessions list and
+ * draws in a pane like any other tab. The two were the same union while every
+ * pane had a rail section, and the comment here said they were never going to
+ * diverge — then one did, so the subset is spelled out and the compiler is what
+ * finds the places that assumed six.
+ *
+ * The ids live here rather than beside the rail's labels and icons because
+ * `lib/store.ts` needs them to define `Pane`, and it already reads this module
+ * for the layout — the other direction would be a cycle through a component.
+ */
+export type Section = "files" | "database" | "api" | "mail" | "note"
+
+/** Every section, in the rail's own order — see `SECTIONS` in
+ * `components/studio/activity-bar.tsx`, which is this list with a label and an
+ * icon against each id. */
+export const SECTION_IDS: Section[] = [
+  "files",
+  "database",
+  "api",
+  "mail",
+  "note",
+]
+
+export function isSection(value: string): value is Section {
+  return (SECTION_IDS as string[]).includes(value)
+}
+
 /** Fire-and-forget, like every other settings write in the renderer — nobody
  * should wait on disk to see a section move. */
 function persist(order: string[], hidden: string[]) {

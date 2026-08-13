@@ -12,7 +12,7 @@ import { TitleBarDragStrip } from "./title-bar"
  * from `startedAt` below so that crossing from the first mount to the second
  * continues the same animation rather than starting it again.
  *
- * What it draws is the studio in miniature: the rail with its six sections in
+ * What it draws is the studio in miniature: the rail with its sections in
  * their own hues, a strip of tabs, a sidebar and a panel — assembling in the
  * order the eye reads them. A launch screen has to fill the time it takes to
  * open a manifest and a few settings either way, and a logo sitting still
@@ -61,7 +61,11 @@ export function splashElapsed(): number {
 export const SPLASH_FADE_MS = 420
 
 /**
- * The five section hues, in the rail's own order.
+ * Four of the studio's own hues, in the rail's order.
+ *
+ * Not one dot per section — this is the studio in miniature, not a mirror of
+ * it — so the rail losing its Terminal button does not change what is drawn
+ * here. `--section-terminal` is still the colour a session is known by.
  *
  * Written out rather than imported from `SECTION_ACCENT` in `activity-bar.tsx`,
  * which is the rail's own copy and the one to change if a section's colour
@@ -152,7 +156,7 @@ function Mark() {
         style={step(0)}
         className="relative flex h-32 w-52 animate-settle overflow-hidden rounded-xl border bg-muted shadow-2xl"
       >
-        {/* The rail, and the six hues that are the app's own colours. */}
+        {/* The rail, and the hues that are the app's own colours. */}
         <div className="flex w-7 shrink-0 flex-col items-center gap-1.5 border-r py-3">
           {HUES.map((hue, index) => (
             <span

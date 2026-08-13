@@ -79,18 +79,17 @@ type TerminalState = {
   tools: AgentToolStatus[] | null
   checkingTools: boolean
   /**
-   * The folders whose sessions are folded away in the sidebar.
+   * The pending New session picker: the folder it should start in, or null for
+   * "wherever the active session is". Null itself is the picker shut.
    *
-   * Collapsed rather than expanded ids, so a folder added later opens rather
-   * than arriving shut. It lives in the store rather than in the sidebar
-   * because the rail unmounts a panel it is not showing, and a fold that
-   * undoes itself every time you look at a database is not a fold. It is not
-   * written to disk: a launch showing every folder open says what the
-   * workspace is pointed at, which is the one thing a first look wants.
+   * In the store rather than in a component's own state because two things ask
+   * for a session — the `+` on Explorer's Sessions list, and `New session here…`
+   * on a folder — and the dialog is mounted by the workbench, which outlives
+   * whichever sidebar it was asked for from.
    */
-  collapsed: string[]
-  /** Folds a folder's sessions away, or opens them again. */
-  toggleFolder: (folderId: string) => void
+  picking: { folderId: string | null } | null
+  openPicker: (folderId: string | null) => void
+  closePicker: () => void
 
   /** Opens a session and puts it on screen. Returns its id. */
   open: (
@@ -331,14 +330,7 @@ export const useTerminal = create<TerminalState>((set, get) => {
   // be one nothing else in the app can say anything about.
   useStudio.subscribe((studio) => {
     const kept = new Set(studio.folders.map((folder) => folder.id))
-    const { sessions, collapsed } = get()
-
-    // A fold outlives the folder it was about otherwise, and pointing the
-    // workspace at that directory again would bring back a collapse nobody
-    // asked for.
-    if (collapsed.some((id) => !kept.has(id))) {
-      set({ collapsed: collapsed.filter((id) => kept.has(id)) })
-    }
+    const { sessions } = get()
 
     if (sessions.every((session) => kept.has(session.folderId))) return
 
@@ -362,14 +354,14 @@ export const useTerminal = create<TerminalState>((set, get) => {
     activeId: null,
     tools: null,
     checkingTools: false,
-    collapsed: [],
+    picking: null,
 
-    toggleFolder(folderId) {
-      set((state) => ({
-        collapsed: state.collapsed.includes(folderId)
-          ? state.collapsed.filter((id) => id !== folderId)
-          : [...state.collapsed, folderId],
-      }))
+    openPicker(folderId) {
+      set({ picking: { folderId } })
+    },
+
+    closePicker() {
+      set({ picking: null })
     },
 
     open(folderId, kind, options) {
@@ -380,9 +372,6 @@ export const useTerminal = create<TerminalState>((set, get) => {
       set((state) => ({
         sessions: [...state.sessions, session],
         activeId: options?.background ? state.activeId : session.id,
-        // A session started into a folded folder would be on screen with
-        // nothing in the sidebar selecting it.
-        collapsed: state.collapsed.filter((id) => id !== folderId),
       }))
       persistSessions(get().sessions, get().activeId)
 
@@ -391,19 +380,7 @@ export const useTerminal = create<TerminalState>((set, get) => {
 
     select(id) {
       useStudio.getState().showPane("terminal")
-      const folderId = get().sessions.find(
-        (session) => session.id === id
-      )?.folderId
-
-      set((state) => ({
-        activeId: id,
-        // For the reason `create` above unfolds: a session picked from the tab
-        // strip or the search palette must not land on screen with a folded
-        // folder hiding the row that says which one it is.
-        collapsed: folderId
-          ? state.collapsed.filter((entry) => entry !== folderId)
-          : state.collapsed,
-      }))
+      set({ activeId: id })
       // Which tab is on screen is remembered, so switching tabs is a write like
       // opening or closing one. Without this the marker was only ever written
       // by whatever action happened to come next — closing another session,
@@ -488,13 +465,6 @@ export const useTerminal = create<TerminalState>((set, get) => {
             : session
         ),
         activeId: id,
-        // Reopening into a folded folder would put a session on screen with
-        // nothing in the sidebar selecting it.
-        collapsed: state.collapsed.filter(
-          (folderId) =>
-            folderId !==
-            state.sessions.find((session) => session.id === id)?.folderId
-        ),
       }))
       persistSessions(get().sessions, get().activeId)
     },

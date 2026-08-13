@@ -16,36 +16,22 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useEffect, useMemo, useState, type ComponentType } from "react"
-import {
-  Database,
-  FolderTree,
-  Mail,
-  NotebookPen,
-  Send,
-  SquareTerminal,
-} from "lucide-react"
+import { Database, FolderTree, Mail, NotebookPen, Send } from "lucide-react"
 
 import { unreadCount, useInbox } from "@/lib/inbox/store"
-import { useRail } from "@/lib/rail"
-import type { Pane } from "@/lib/store"
+import { SECTION_IDS, useRail, type Section } from "@/lib/rail"
 
 /**
- * Top-level areas of the workbench — the same six as `Pane`, and now the same
- * type.
+ * The five ways into the studio, ordered the way the work goes: the folders
+ * themselves, then the data and the endpoints behind them, then what those
+ * endpoints send back out and what arrives unasked, then the notes about all of
+ * it.
  *
- * They were two identical unions, which meant a section added to one list and
- * forgotten in the other, and the compiler pointing at whichever call site
- * happened to notice. A rail section that opened no panel would be a way into
- * nothing, and a panel with no way in would be unreachable, so the two lists
- * were never going to diverge — the name stays because a rail entry and a
- * tabbed panel are still different things to talk about.
- */
-export type Section = Pane
-
-/**
- * Ordered the way the work goes: the folders themselves, then the data and the
- * endpoints behind them, then what those endpoints send back out and what
- * arrives unasked, then the terminal.
+ * **There is no Terminal section.** A session is not a way into the studio, it
+ * is something opened in one: it is started from the Explorer sidebar, which is
+ * where the folder it runs in is listed, and it draws in a pane of its own with
+ * no sidebar. The rail entry was a sixth button whose sidebar was a second copy
+ * of Explorer's folder list — see `docs/design.md`.
  *
  * Explorer is first because it is the workspace's own contents — the folders
  * every other panel is about — and because it is the section somebody reaches
@@ -61,38 +47,53 @@ export type Section = Pane
  * anyway.
  *
  * `Icon` is typed by the one prop the rail passes rather than as a Lucide icon,
- * so a hand-drawn mark could sit beside the glyphs.
+ * so a hand-drawn mark could sit beside the glyphs. The ids themselves are
+ * `SECTION_IDS` in `lib/rail.ts`, which is what `Pane` is built from — this is
+ * that list with a label and an icon against each one, and the type below is
+ * what keeps the two in step.
  */
+const SECTION_MARKS: Record<
+  Section,
+  { label: string; Icon: ComponentType<{ className?: string }> }
+> = {
+  files: { label: "Explorer", Icon: FolderTree },
+  database: { label: "Database", Icon: Database },
+  api: { label: "API", Icon: Send },
+  mail: { label: "Mail", Icon: Mail },
+  note: { label: "Notes", Icon: NotebookPen },
+}
+
 export const SECTIONS: {
   id: Section
   label: string
   Icon: ComponentType<{ className?: string }>
-}[] = [
-  { id: "files", label: "Explorer", Icon: FolderTree },
-  { id: "database", label: "Database", Icon: Database },
-  { id: "api", label: "API", Icon: Send },
-  { id: "mail", label: "Mail", Icon: Mail },
-  { id: "terminal", label: "Terminal", Icon: SquareTerminal },
-  { id: "note", label: "Notes", Icon: NotebookPen },
-]
+}[] = SECTION_IDS.map((id) => ({ id, ...SECTION_MARKS[id] }))
 
 /**
  * The hue each section is known by, defined in `globals.css`.
  *
  * Read through `style` rather than composed into a class name — Tailwind scans
  * for whole literals, so a `text-section-${id}` would never be generated.
+ *
+ * `--section-terminal` is still a token and still used — by the splash, and by
+ * whatever draws a session — it just has no section to be keyed by here.
  */
 export const SECTION_ACCENT: Record<Section, string> = {
   files: "var(--section-files)",
   database: "var(--section-database)",
   api: "var(--section-api)",
   mail: "var(--section-mail)",
-  terminal: "var(--section-terminal)",
   note: "var(--section-note)",
 }
 
-/** The rail's own order, which a remembered one is reconciled against. */
-const DEFAULT_ORDER = SECTIONS.map(({ id }) => id)
+/**
+ * The rail's own order, which a remembered one is reconciled against.
+ *
+ * `SECTION_IDS` rather than `SECTIONS.map` so that a section added to one list
+ * and forgotten in the other is a type error rather than a button the rail
+ * cannot place.
+ */
+const DEFAULT_ORDER: Section[] = SECTION_IDS
 
 /**
  * The sections in the order they should be shown, and which of those are on

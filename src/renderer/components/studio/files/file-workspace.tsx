@@ -12,7 +12,9 @@ import { Copy, ExternalLink, FolderTree, Save } from "lucide-react"
 import { isDirty, useFiles, viewOf, type FileDoc } from "@/lib/files/store"
 import type { Viewer } from "@/lib/files/viewers"
 import { isStudioShortcut } from "@/lib/shortcuts"
+import { useConversations } from "@/lib/terminal/conversations"
 import { SECTION_ACCENT } from "../activity-bar"
+import { ConversationView } from "../terminal/conversation-view"
 import { IconButton } from "../icon-button"
 import { FileEditor } from "./file-editor"
 import { FileImage } from "./file-image"
@@ -30,8 +32,24 @@ export function FileWorkspace() {
   const openIds = useFiles((state) => state.openIds)
   const selectedId = useFiles((state) => state.selectedId)
 
+  /*
+   * The conversations opened from the sidebar's own list are tabs in this pane
+   * too — see `lib/terminal/conversations.ts` for why they are here and not in
+   * the Terminal pane. They are stacked beside the files and hidden the same
+   * way: each one holds a transcript mirror and a scroll position, and a pane
+   * rebuilt on every tab click would re-read the file and jump to the end of it.
+   */
+  const chats = useConversations((state) => state.open)
+  const chatId = useConversations((state) =>
+    state.onScreen ? state.activeId : null
+  )
+
   const activeId =
-    selectedId && openIds.includes(selectedId) ? selectedId : null
+    chatId !== null
+      ? null
+      : selectedId && openIds.includes(selectedId)
+        ? selectedId
+        : null
 
   /*
    * ⌘S saves the file on screen.
@@ -72,7 +90,22 @@ export function FileWorkspace() {
         </div>
       ))}
 
-      {activeId === null && (
+      {chats.map((conversation) => (
+        <div
+          key={conversation.id}
+          className={cn(
+            "absolute inset-0",
+            conversation.id !== chatId && "invisible"
+          )}
+        >
+          <ConversationView
+            conversation={conversation}
+            visible={conversation.id === chatId}
+          />
+        </div>
+      ))}
+
+      {activeId === null && chatId === null && (
         <Empty className="absolute inset-0 size-full border-0">
           <EmptyHeader>
             <EmptyMedia variant="icon" style={{ color: SECTION_ACCENT.files }}>
