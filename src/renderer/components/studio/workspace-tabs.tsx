@@ -5,7 +5,6 @@ import {
   FileText,
   Image,
   Folder,
-  Mail,
   Plus,
   ScrollText,
   Settings2,
@@ -16,9 +15,8 @@ import { useExplorer, type OpenTab } from "@/lib/db/explorer-store"
 import { isDirty, isMissing, useFiles } from "@/lib/files/store"
 import { gitStateOf, GIT_TONES, useGitStatus } from "@/lib/files/git-status"
 import { iconFor } from "@/lib/files/icons"
-import { isImage } from "@/lib/files/viewers"
+import { isImage, isNote } from "@/lib/files/viewers"
 import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
-import { SETTINGS_TAB, useInbox } from "@/lib/inbox/store"
 import { useNotes } from "@/lib/note/store"
 import {
   closeAllTabs,
@@ -42,7 +40,8 @@ import { IconButton } from "./icon-button"
 import { TabStrip, type TabStripItem } from "./tab-strip"
 
 /**
- * One strip of tabs for the whole workbench, above whichever panel is showing.
+ * One strip of tabs for the whole workbench — above whichever panel is showing,
+ * or beside it, which is the Settings dialog's `tabsPlacement`.
  *
  * The panels each used to draw their own, which meant that leaving Database
  * for API took the tables off the screen — they were still open, but nothing
@@ -67,7 +66,17 @@ import { TabStrip, type TabStripItem } from "./tab-strip"
  * picking, closing, reordering one does — is `lib/panels.ts`, where all six
  * panels are addressed alike.
  */
-export function WorkspaceTabs({ pane }: { pane: Pane }) {
+export function WorkspaceTabs({
+  pane,
+  orientation,
+}: {
+  pane: Pane
+  /** A row above the pane or a column beside it. Handed in rather than read
+   * from the settings store here, because the box the strip goes in is the
+   * workbench's to draw — `studio.tsx` is what puts a column in a resizable
+   * panel, and what falls back to the row when there is nothing to list. */
+  orientation: "horizontal" | "vertical"
+}) {
   const tabOrder = useStudio((state) => state.tabOrder)
 
   const databaseId = useExplorer((state) => state.databaseId)
@@ -77,33 +86,6 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
   const requests = useApi((state) => state.requests)
   const folders = useApi((state) => state.folders)
   const openIds = useApi((state) => state.openIds)
-
-  const inboxMessages = useInbox((state) => state.messages)
-  const inboxOpenIds = useInbox((state) => state.openIds)
-
-  const captureItems: TabStripItem[] = inboxOpenIds.flatMap((id) => {
-    if (id === SETTINGS_TAB) {
-      return [
-        {
-          id: PREFIX.mail + id,
-          label: "Mail settings",
-          icon: (
-            <Settings2 className="size-3.5 shrink-0 text-muted-foreground" />
-          ),
-        },
-      ]
-    }
-    const message = inboxMessages.find((candidate) => candidate.id === id)
-    if (!message) return []
-    return [
-      {
-        id: PREFIX.mail + id,
-        label: message.summary,
-        title: `${message.mail.from} \u2192 ${message.mail.to.join(", ")}`,
-        icon: <Mail className="size-3.5 shrink-0" />,
-      },
-    ]
-  })
 
   const notes = useNotes((state) => state.notes)
   const noteOpenIds = useNotes((state) => state.openIds)
@@ -219,7 +201,6 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
         },
       ]
     }),
-    ...captureItems,
     ...sessions.map((session, index) => {
       const { icon: Icon } = SESSION_TYPES[session.kind]
       const label = sessionTitle(sessions, index)
@@ -291,6 +272,7 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
       label="Open tabs"
       items={items}
       activeId={activeId}
+      orientation={orientation}
       trailing={
         // Only the query tab: a new session and a new request are both
         // buttons in their own sidebar already, and a query tab has nowhere
@@ -321,11 +303,11 @@ function iconOf(filePath: string) {
   if (url) {
     return <img src={url} alt="" aria-hidden className="size-3.5 shrink-0" />
   }
-  return isImage(filePath) ? (
-    <Image className="size-3.5 shrink-0" />
-  ) : (
-    <File className="size-3.5 shrink-0" />
-  )
+  if (isImage(filePath)) return <Image className="size-3.5 shrink-0" />
+  // The glyph the Notes panel's own tabs carry, since a `.note` tab is the
+  // same editor over a file instead of over a record.
+  if (isNote(filePath)) return <FileText className="size-3.5 shrink-0" />
+  return <File className="size-3.5 shrink-0" />
 }
 
 function dbItem(tab: OpenTab): TabStripItem {

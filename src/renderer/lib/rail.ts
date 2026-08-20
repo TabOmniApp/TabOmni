@@ -18,24 +18,18 @@ const LAYOUT_KEY = "activity-bar.layout"
  * draws in a pane like any other tab. The two were the same union while every
  * pane had a rail section, and the comment here said they were never going to
  * diverge — then one did, so the subset is spelled out and the compiler is what
- * finds the places that assumed six.
+ * finds the places that assumed every pane had a section.
  *
  * The ids live here rather than beside the rail's labels and icons because
  * `lib/store.ts` needs them to define `Pane`, and it already reads this module
  * for the layout — the other direction would be a cycle through a component.
  */
-export type Section = "files" | "database" | "api" | "mail" | "note"
+export type Section = "files" | "database" | "api" | "note"
 
 /** Every section, in the rail's own order — see `SECTIONS` in
  * `components/studio/activity-bar.tsx`, which is this list with a label and an
  * icon against each id. */
-export const SECTION_IDS: Section[] = [
-  "files",
-  "database",
-  "api",
-  "mail",
-  "note",
-]
+export const SECTION_IDS: Section[] = ["files", "database", "api", "note"]
 
 export function isSection(value: string): value is Section {
   return (SECTION_IDS as string[]).includes(value)

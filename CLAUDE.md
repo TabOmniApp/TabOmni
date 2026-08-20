@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 **TabOmni**: an Electron studio that collapses a project's tooling into one tab
-strip — its folders, its databases, its HTTP endpoints, its mail, and the agent
+strip — its folders, its databases, its HTTP endpoints, its notes, and the agent
 and shell sessions run against them. The premise is that those are four or
 five separate applications today, each with a window layout of its own, and
 that switching between them costs more than any one of them saves.
@@ -14,8 +14,8 @@ There is one **workspace**, holding any number of **folders** — directories
 already on this machine, worked on where they are. It is deliberately not
 switchable: someone working across a frontend and its API has two folders open
 at once, and a switch would take one of them, and every tab and session opened
-against it, off the screen. Databases, requests, cookies and the capture
-server belong to the workspace; what is per folder is what is genuinely per
+against it, off the screen. Databases, requests, cookies and notes belong to
+the workspace; what is per folder is what is genuinely per
 repository — a session's cwd and a branch name. Sign-in will bring a
 second workspace; until then `DEFAULT_WORKSPACE_ID` is a constant.
 
@@ -26,7 +26,7 @@ One package, no workspaces. `src/main/` is the Electron main process,
 
 `docs/design.md` is the design document for the app itself — how the
 workspace's data lives on disk, how the Claude Code chat view works, how the
-filter builder and the capture server behave. Read it before changing those
+filter builder and the note preview behave. Read it before changing those
 areas.
 
 ## Commands
@@ -63,12 +63,10 @@ bun test/transcript.ts
 ```
 
 `test/transcript.ts` appends to a real file while the mirror watches it and
-`test/inbox.ts` holds a real SMTP conversation over a real socket, rather than
-checking either parser against a hand-written sample. They cover the chat
-view's tail (a read landing mid-line, a multi-byte character split across two
-reads, a file truncated under the watcher) and the SMTP sink (a `DATA`
-terminator straddling two packets, a dot-stuffed line, a boundary that also
-occurs inside a part's own content).
+`test/files.ts` creates, renames and indexes real ones, rather than checking
+either against a hand-written sample. Between them they cover the chat view's
+tail (a read landing mid-line, a multi-byte character split across two reads, a
+file truncated under the watcher) and the Explorer's own reads and writes.
 
 ## The IPC contract — the one rule that matters
 
@@ -93,7 +91,7 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
 
 - **`store.ts`** — all state on disk under `~/.tabomni`: `manifest.json` for the
   workspace/databases/settings, and `workspace/` for the panels' own files
-  (requests, cookies, captures, per-database Docker data). A folder's own files
+  (requests, notes, cookies, per-database Docker data). A folder's own files
   are never under here — the manifest records an absolute path and they are read
   where they are. Database passwords are encrypted in the manifest and stripped
   field-by-field before a record crosses to the renderer.
@@ -126,18 +124,28 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   whether it is present. The picker is built from it so it cannot offer
   something that would not start.
 
-There are no `claude -p` one-shots left. The Data tab's AI filter and the API
-panel's AI import both went through an `askClaude` in `ai-cli.ts`, and all of
-it — the two features, that helper, and the `claudeExec`/`shellPath` lookups
-that only existed to spawn the CLI outside a pty — was removed rather than left
-hidden. The only thing that still runs `claude` is a Terminal session, which
-runs it interactively in a pty. Adding an AI feature back means adding that
-plumbing back, not finding it.
+- **`assistant.ts`** — the workspace assistant: the chat panel behind the button
+  in the title bar, one conversation, `claude -p` per turn in
+  `--output-format stream-json`. It is the counterpart to a Terminal session
+  rather than a smaller one — a session has a folder under it, and this is about
+  the workspace, so it gets the MCP servers, `--add-dir` for every folder, and
+  `--strict-mcp-config` (a session keeps the user's own servers; this panel is
+  the app's). **Read-only by denylist**: `--allowed-tools` only pre-approves,
+  so `--disallowed-tools` is what actually refuses Bash, the edit tools and
+  everything reaching outside the turn. See the comment on `DISALLOWED_TOOLS`
+  before changing it, and the Assistant section of `docs/design.md`.
+
+`assistant.ts` is the _only_ `claude -p` in the app. The Data tab's AI filter
+and the API panel's AI import went through an `askClaude` in `ai-cli.ts`, and
+all of it — the two features and that helper — was removed rather than left
+hidden; the assistant is a conversation the user is having, not a helper other
+features call. Nothing else spawns `claude` outside a pty, and a Terminal
+session still runs it interactively in one.
 
 ## Renderer (`src/renderer/`)
 
 React 19 + Vite + Tailwind v4. `components/studio/` is split by panel
-(`terminal`, `api`, `db`, `inbox`), and each panel's logic and zustand
+(`terminal`, `api`, `db`, `note`, `files`), and each panel's logic and zustand
 store live in the matching `lib/` directory (`lib/terminal/store.ts`,
 `lib/db/explorer-store.ts`, …) with `lib/store.ts` holding the studio-wide
 state and `lib/workspace.ts` the thin repo over the workspace calls — all
@@ -173,7 +181,42 @@ bring. See the Motion section of `docs/design.md`.
 `bunx shadcn@latest add dialog`. Vite's root is `src/renderer`, so `index.html`
 and `public/` are there too.
 
-The activity rail is Explorer, Database, API, Mail and Notes — five sections,
+**Settings…** in the application menu (⌘,, and File off macOS) opens a dialog and
+nothing else — no tab, no rail section: `components/studio/settings-dialog.tsx`,
+sections down the left and one section's rows on the right, with
+`lib/settings.ts` the store, which writes each change straight to the workspace's
+settings. It holds the theme, the chat view's `showToolCalls`/`showThinking`
+(still under their old `claudeGui.*` keys, and now on the store so the dialog and
+the chat's own header cannot disagree), and `tabsPlacement` under
+`workbench.settings`: the tab strip as the row above the pane, or the same tabs
+as a column on its right — `orientation` on `TabStrip`, handed in by
+`studio.tsx`, which puts the column in a resizable panel of its own and falls
+back to the row when nothing is open. See the Settings and Vertical tabs
+sections of `docs/design.md`.
+
+**The assistant** is the chat panel on the right, opened from the button in the
+title bar: `components/studio/assistant/assistant-panel.tsx` over
+`lib/assistant/store.ts`, with the chats themselves held by `main/assistant.ts`
+(listing in `chats.json`, lines in `chats/<id>.json`) so a turn survives the
+panel being closed. It opens on the list of chats — straight onto the composer
+only when there are none — and a chat is deleted from its row. It is the way to
+use the MCP servers below without being inside a folder's session: the turn runs
+in an empty `~/.tabomni/assistant` with every folder reached by `--add-dir`, so
+no folder is current, and an `--append-system-prompt` says so.
+
+**MCP: the workspace as tools.** `src/main/mcp.ts` serves the Database, API and
+Notes panels to an agent session as three MCP servers — one streamable-HTTP
+server on loopback with a per-run secret, bound the way `preview.ts` binds its
+own, three tools apiece. Each is **off** until switched on in Settings › MCP
+(`mcp.database` / `mcp.api` / `mcp.notes`; the keys are in `@shared/api` because
+main answers with them too), and a `claude` session is started with
+`--mcp-config ~/.tabomni/mcp.json` naming whichever are on. Every call rechecks
+the setting, so turning one off stops a running session using it. A request an
+agent sends is resolved by `@shared/http-request` — the same substitution and
+folder cascade the API panel uses, moved there so there is one of it. `test/mcp.ts`
+drives it over a real socket. See the MCP section of `docs/design.md`.
+
+The activity rail is Explorer, Database, API and Notes — four sections,
 `SECTION_IDS` in `lib/rail.ts` is the list and `components/studio/activity-bar.tsx`
 puts a label and an icon against each. **There is no Terminal section**: a
 session is started and listed in the Explorer sidebar and draws in a pane with
@@ -181,7 +224,11 @@ no sidebar of its own, so `Pane` is `Section | "terminal"` and `showPane` leaves
 the rail alone for it. There is no git panel, no code search, no specs panel and
 no webhook catcher either: all four were removed rather than left hidden, and the
 only thing git is still asked is each folder's branch name, shown beside the
-folder in the Explorer tree.
+folder in the Explorer tree. The sidebar itself closes — `⌘B`, **View ›
+Sidebar**, or a click on the rail icon already showing; `sidebar` on the studio
+store, remembered with the strip, and the panel is collapsed rather than
+unmounted so its width survives. `⌘B` is refused inside anything
+`contenteditable`, where it is bold (`isEditingRichText` in `lib/shortcuts.ts`).
 
 Explorer is the workspace's folders as directories — expanded a level at a
 time, nothing hidden, and watched only where it is expanded: one non-recursive
@@ -202,10 +249,22 @@ it is its **tab** that says `deleted`, either because git says so or because
 the listing the tree holds no longer mentions it. `⌘P` searches files too — the one index in the palette
 (`files:index` walks the workspace once per run; `lib/files/search.ts` shortlists
 before cmdk scores). Images open in an image view, and the files that are
-honestly two things — an SVG, and a `.md`, which opens in the editor and has a
-rendered **Markdown preview** beside it — are switched between from their
+honestly more than one thing — an SVG; a `.md`, which opens in the editor and
+has a rendered **Markdown preview** and a **Markdown editor** beside it; and a
+`.note`, which opens in that same block editor — are switched between from their
 right-click menu (`lib/files/viewers.ts` is the one place that decides, and
-`components/studio/markdown-view.tsx` is the renderer the chat view uses too). Rows carry a vendored vscode-icons file-type icon —
+`components/studio/markdown-view.tsx` is the renderer the chat view uses too).
+`New note…` on a folder creates a `.note`: the same editor as the Notes panel
+over a file in a repository rather than a record under `~/.tabomni`, so it saves
+like every other file tab (dirty, ⌘S, flushed on close) and its drawings and
+dropped pictures still live in the workspace. The `blocks` viewer is one pane
+for both files and `components/studio/files/file-blocks.tsx` is where they part:
+a `.note` is written as indented blocks (a body that is not them is read as
+markdown rather than overwritten), a `.md` is printed back through
+`blocksToMarkdownLossy`, which reflows the whole file — so the text editor stays
+the `.md` default, and frontmatter, `/drawing` and dropped pictures are all kept
+out of a `.md` because it cannot hold them. `lib/files/block-doc.ts` is the pure
+half of that and the one with a test. Rows carry a vendored vscode-icons file-type icon —
 `lib/files/icon-names.ts` maps a name to one, `assets/file-icons/README.md`
 says what is checked in and why it is a subset. A file tab is
 addressed by its own absolute path, and `lib/files/paths.ts` is the one place
@@ -214,13 +273,13 @@ which is for paths this app made up. See the Explorer section of
 `docs/design.md`.
 
 **`@` in the chat composer** offers what the other panels hold — a table with
-its columns, a saved request resolved against the active environment, a captured
-mail, a note — as a **chip**: the thing's own name in that panel's colour, which
+its columns, a saved request resolved against the active environment, a note —
+as a **chip**: the thing's own name in that panel's colour, which
 `expandMentions` swaps for one line of context when the message is sent. The chip
 is a link to `tabomni://mention/<kind>:<id>`, and its kind reaches the DOM as
 `data-mention` because Milkdown empties an unknown scheme's href.
 `lib/terminal/mention-text.ts` holds the rules (and is the testable half),
-`lib/terminal/mentions.ts` the catalogue that reads the four stores, and
+`lib/terminal/mentions.ts` the catalogue that reads the three stores, and
 `components/studio/terminal/composer-mention.tsx` the menu, built on the same
 `@milkdown/plugin-slash` machinery as the `/` menu. Nothing runs a query. **What a turn changed**
 comes from the same transcript: `writtenPaths` in `lib/terminal/touched.ts` reads
@@ -269,7 +328,7 @@ workspace's own under `workspace/note-files/`, and the note holds a
 `note-file://` URL for it — `shared/note-files.ts` is that URL's shape,
 `main/protocol.ts` serves it to the renderer and the preview server inlines it
 for a browser that has never heard of the scheme. The editor is Crepe — the same Milkdown editor as the chat composer, and
-themed by the same `milkdown-theme.css`, so it follows the theme toggle without
+themed by the same `milkdown-theme.css`, so it follows the theme without
 a second palette. See the Notes section of `docs/design.md` before changing it.
 
 `/drawing` in a note opens an Excalidraw canvas — shapes, arrows, freehand,
@@ -281,17 +340,14 @@ node behind that fence, and the comment on
 Excalidraw is loaded on demand and its fonts are served by this app rather than
 from a CDN — see the `excalidraw-fonts` plugin in `vite.config.ts`.
 
-Mail is the other end of the API panel: an SMTP sink on loopback catching the
-mail the project sends. `src/main/inbox.ts` is the server and `src/main/mime.ts`
-the parser; neither pulls in a dependency, so the studio does not behave
-differently depending on what the user happened to have installed.
-
-A **Webhooks** panel — a catch-all HTTP endpoint, with replay — used to sit
-beside it, and was removed rather than hidden, as the git, code search and specs
-panels were. The `inbox` naming it shared is still here, along with a
-`kind: "mail"` on every capture and a one-time read of `inbox.json` in
-`Store.listInbox` that carries old mail into `mail.json`; the design doc says
-which of that is load-bearing before any of it is tidied away.
+There was a **Mail** panel — an SMTP sink on loopback catching the mail the
+project sends — and a **Webhooks** panel beside it before that. Both are gone,
+deleted rather than hidden, as the git, code search and specs panels were:
+nothing of either is left in the code, the rail, the contract or the `@` menu.
+What is left is a workspace's own `workspace/mail.json` and its `inbox.config`
+setting, which this app no longer reads and does not delete — removing a feature
+is not a reason to delete somebody's captured mail. See the Mail, removed section
+of `docs/design.md`.
 
 ## Conventions
 

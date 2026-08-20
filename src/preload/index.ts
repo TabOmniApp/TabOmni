@@ -9,8 +9,7 @@ import {
   IPC,
   type DesktopApi,
   type DirectoryChange,
-  type InboxEvent,
-  type InboxStatusEvent,
+  type AssistantEvent,
   type MenuCommand,
   type ProcessExit,
   type ProcessOutput,
@@ -51,6 +50,16 @@ const api: DesktopApi = {
 
   onMenuCommand: (listener) =>
     subscribe<MenuCommand>(IPC.menuCommand, listener),
+  onNotesChanged: (listener) => subscribe<null>(IPC.notesChanged, listener),
+
+  assistantSend: (prompt) => ipcRenderer.invoke(IPC.assistantSend, prompt),
+  assistantStop: () => ipcRenderer.invoke(IPC.assistantStop),
+  assistantChats: () => ipcRenderer.invoke(IPC.assistantChats),
+  assistantOpen: (id) => ipcRenderer.invoke(IPC.assistantOpen, id),
+  assistantNew: () => ipcRenderer.invoke(IPC.assistantNew),
+  assistantDelete: (id) => ipcRenderer.invoke(IPC.assistantDelete, id),
+  onAssistantEvent: (listener) =>
+    subscribe<AssistantEvent>(IPC.assistantEvent, listener),
 
   dockerStatus: () => ipcRenderer.invoke(IPC.dockerStatus),
 
@@ -142,19 +151,6 @@ const api: DesktopApi = {
   copyNoteFile: (from, to) => ipcRenderer.invoke(IPC.copyNoteFile, from, to),
   deleteNoteFiles: (fileNames) =>
     ipcRenderer.invoke(IPC.deleteNoteFiles, fileNames),
-
-  inboxStart: (port) => ipcRenderer.invoke(IPC.inboxStart, port),
-  inboxStop: () => ipcRenderer.invoke(IPC.inboxStop),
-  inboxStatus: () => ipcRenderer.invoke(IPC.inboxStatus),
-  inboxMessages: () => ipcRenderer.invoke(IPC.inboxMessages),
-  inboxMarkRead: (id) => ipcRenderer.invoke(IPC.inboxMarkRead, id),
-  inboxDelete: (id) => ipcRenderer.invoke(IPC.inboxDelete, id),
-  inboxClear: () => ipcRenderer.invoke(IPC.inboxClear),
-
-  onInboxMessage: (listener) =>
-    subscribe<InboxEvent>(IPC.inboxMessage, listener),
-  onInboxStatus: (listener) =>
-    subscribe<InboxStatusEvent>(IPC.inboxStatusChanged, listener),
 
   startProcess: (folderId, command, args) =>
     ipcRenderer.invoke(IPC.startProcess, folderId, command, args),

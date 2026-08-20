@@ -79,6 +79,17 @@ export function agentCommandWith(
      * left off.
      */
     resume?: boolean
+    /**
+     * The MCP config this workspace offers the agent — its databases, its
+     * saved requests, its notes — or null when every one of them is switched
+     * off in Settings, which is the default.
+     *
+     * `--mcp-config` adds to whatever the user already has configured rather
+     * than replacing it (that would be `--strict-mcp-config`): somebody's own
+     * MCP servers are theirs, and a session started here should not quietly
+     * lose them.
+     */
+    mcpConfig?: string | null
   }
 ): string | undefined {
   const command = agentCommand(kind)
@@ -100,6 +111,7 @@ export function agentCommandWith(
     flags.push(`--model ${quote(options.model)}`)
   if (options.permissionMode && options.permissionMode !== "default")
     flags.push(`--permission-mode ${quote(options.permissionMode)}`)
+  if (options.mcpConfig) flags.push(`--mcp-config ${quote(options.mcpConfig)}`)
 
   return flags.length === 0 ? command : `${command} ${flags.join(" ")}`
 }

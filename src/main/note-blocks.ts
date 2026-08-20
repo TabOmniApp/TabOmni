@@ -99,3 +99,151 @@ export function drawingIdsIn(blocks: NoteBlock[]): string[] {
   walk(blocks)
   return ids
 }
+
+/**
+ * A note's document as markdown, for a reader that wants the words rather than
+ * the editor's model — which so far means the MCP server: an agent handed
+ * BlockNote's JSON would spend a turn parsing what it was given.
+ *
+ * Deliberately one-way and lossy, and not the inverse of the renderer's
+ * `from-markdown.ts`: a drawing, a picture and a video are named rather than
+ * carried, because nothing on this path can render them. That is also why
+ * nothing writes a note back through here — `createNote` in `ipc.ts` stores
+ * plain markdown and lets the editor convert it on first open, the same way a
+ * note written by an older build is converted.
+ */
+export function noteMarkdown(blocks: NoteBlock[]): string {
+  const lines: string[] = []
+  render(blocks, lines, "")
+  // Collapses the runs of blank lines that nesting leaves behind.
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+function render(blocks: NoteBlock[], lines: string[], indent: string): void {
+  let number = 0
+
+  for (const block of blocks) {
+    // Numbering restarts wherever the list does, so two lists separated by a
+    // paragraph do not carry on counting from each other.
+    if (block.type === "numberedListItem") number += 1
+    else number = 0
+
+    const text = inlineText(block.content)
+
+    switch (block.type) {
+      case "heading": {
+        const level = Number(block.props?.level ?? 1)
+        lines.push("", `${"#".repeat(Math.min(6, Math.max(1, level)))} ${text}`)
+        break
+      }
+      case "bulletListItem":
+        lines.push(`${indent}- ${text}`)
+        break
+      case "numberedListItem":
+        lines.push(`${indent}${number}. ${text}`)
+        break
+      case "checkListItem":
+        lines.push(`${indent}- [${block.props?.checked ? "x" : " "}] ${text}`)
+        break
+      // A toggle's summary is a plain line: markdown has no fold, and the
+      // children below it are what the toggle was hiding.
+      case "toggleListItem":
+        lines.push(`${indent}- ${text}`)
+        break
+      case "codeBlock": {
+        const language =
+          typeof block.props?.language === "string" ? block.props.language : ""
+        lines.push("", `\`\`\`${language}`, text, "```")
+        break
+      }
+      case "quote":
+        lines.push("", `> ${text}`)
+        break
+      case "divider":
+        lines.push("", "---")
+        break
+      case "table":
+        lines.push("", ...tableRows(block))
+        break
+      case "drawing":
+        lines.push("", `[drawing ${block.props?.drawingId ?? ""}]`)
+        break
+      case "image":
+      case "video":
+      case "audio":
+      case "file":
+        lines.push("", attachment(block))
+        break
+      default:
+        if (text) lines.push("", text)
+    }
+
+    if (block.children?.length) {
+      // Two spaces per level, which is what a nested list needs and what
+      // anything else under a block can live with.
+      render(block.children, lines, `${indent}  `)
+    }
+  }
+}
+
+/** One attachment named rather than embedded: its caption or its type, and the
+ * URL it points at — `note-file://…` for one of the workspace's own. */
+function attachment(block: NoteBlock): string {
+  const caption =
+    typeof block.props?.caption === "string" && block.props.caption.trim()
+      ? block.props.caption.trim()
+      : (block.props?.name ?? block.type ?? "file")
+  const url = typeof block.props?.url === "string" ? block.props.url : ""
+  return `[${String(caption)}](${url})`
+}
+
+/** A table as a pipe table, header row and all. BlockNote keeps the header as
+ * the first row rather than as a kind of its own. */
+function tableRows(block: NoteBlock): string[] {
+  const content = block.content as
+    { rows?: { cells?: unknown[] }[] } | undefined
+  const rows = content?.rows ?? []
+  if (rows.length === 0) return []
+
+  const cells = (row: { cells?: unknown[] }): string[] =>
+    (row.cells ?? []).map((cell) => {
+      // A cell is either inline content or, since BlockNote 0.15, a cell object
+      // with its own content and props.
+      const inner =
+        cell && typeof cell === "object" && "content" in cell
+          ? (cell as { content?: unknown }).content
+          : cell
+      return inlineText(inner).replaceAll("|", "\\|")
+    })
+
+  const header = cells(rows[0]!)
+  return [
+    `| ${header.join(" | ")} |`,
+    `| ${header.map(() => "---").join(" | ")} |`,
+    ...rows.slice(1).map((row) => `| ${cells(row).join(" | ")} |`),
+  ]
+}
+
+/** The words of a block's inline content, links included as `[text](href)`. */
+function inlineText(content: unknown): string {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+
+  return content
+    .map((raw: unknown) => {
+      if (typeof raw === "string") return raw
+      if (typeof raw !== "object" || raw === null) return ""
+      const item = raw as Record<string, unknown>
+
+      if (item.type === "link") {
+        const href = typeof item.href === "string" ? item.href : ""
+        return `[${inlineText(item.content)}](${href})`
+      }
+      if (typeof item.text === "string") return item.text
+      return inlineText(item.content)
+    })
+    .join("")
+}

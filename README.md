@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/banner.svg" alt="TabOmni: databases, HTTP endpoints, mail, shells and notes all flowing into one window, and out as one tab strip" width="900">
+<img src="docs/banner.svg" alt="TabOmni: databases, HTTP endpoints, files, shells and notes all flowing into one window, and out as one tab strip" width="900">
 
 # TabOmni
 
@@ -14,9 +14,8 @@
 
 ---
 
-A database client, an HTTP client, a mail catcher, a request bin, a terminal,
-and wherever the agent runs: half a dozen applications, half a dozen window
-layouts. Switching between them costs more than any one of them saves. TabOmni
+A database client, an HTTP client, an editor, a terminal, and wherever the agent
+runs: half a dozen applications, half a dozen window layouts. Switching between them costs more than any one of them saves. TabOmni
 makes each of them a tab in one window, the way an editor makes files tabs.
 
 There is one **workspace**, holding any number of **folders**: directories
@@ -24,14 +23,11 @@ already on this machine, worked on where they are. It deliberately does not
 switch, because someone working across a frontend and its API has both open at
 once.
 
-The panels are Database, API, Mail, Terminal and Notes, and
+The panels are Explorer, Database, API, Terminal and Notes, and
 [`docs/design.md`](docs/design.md) is what each one is for and why it behaves as
-it does. There is no git panel, no code search, no specs panel and no webhook
-catcher. All four were removed rather than left hidden, and your editor and your
-shell already do the first two. The MIME parser is TabOmni's own rather than a dependency, so the
-studio cannot behave differently depending on what you happened to have
-installed, and the AI features shell out to `claude -p` rather than an API
-needing a key.
+it does. There is no git panel, no code search, no specs panel, no webhook
+catcher and no mail catcher. All five were removed rather than left hidden, and
+your editor and your shell already do the first two.
 
 ## Install
 

@@ -87,8 +87,9 @@ const {
   docker,
   transcripts,
   terminals,
-  inbox,
   preview,
+  mcp,
+  assistant,
   tsServers,
   watchers,
   noteFilePath,
@@ -101,8 +102,9 @@ function createWindow(): void {
     minWidth: 860,
     minHeight: 600,
     // The studio defaults to its dark theme; matching it here keeps the first
-    // paint from flashing white.
-    backgroundColor: "#0a0a0a",
+    // paint from flashing white. `#1e1e1e` is the dark `--background` in
+    // `styles/globals.css` — the one number in this file that has to follow it.
+    backgroundColor: "#1e1e1e",
     show: false,
     // Windows and Linux draw the window/taskbar icon from here. macOS ignores
     // it — the dock is handled below — and a packaged build has the icon in
@@ -247,16 +249,20 @@ app.on("before-quit", (event) => {
       // rather than this process, so this is what ends them — and it is
       // awaited, since an Electron that exits first would leave them running
       // with nobody to reattach them to.
-      // The Inbox panel's servers hold two ports; a relaunch that found them
-      // taken by the app that just exited would be this app's own fault. The
-      // note preview holds a third, and outliving the app would leave the
-      // workspace's notes being served by a process nobody can see.
+      // The note preview holds a port, and outliving the app would leave the
+      // workspace's notes being served by a process nobody can see. The MCP
+      // servers hold one for the same reason and are closed with it — the
+      // sessions they answered are being killed above, and the config file
+      // pointing at them is rewritten with a new port and secret next launch.
       Promise.allSettled([
         terminals.killAll(),
         docker.stopAll(),
         sqlConnections.closeAll(),
-        inbox.stop(),
         preview.stop(),
+        mcp.stop(),
+        // A turn in flight is a `claude` this app spawned; it goes with the app
+        // rather than being left talking to a window that has gone.
+        assistant.dispose(),
       ]),
       // A wedged daemon must not leave the app unquittable.
       new Promise((resolve) => setTimeout(resolve, CLEANUP_TIMEOUT_MS)),

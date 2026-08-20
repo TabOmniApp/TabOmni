@@ -15,7 +15,7 @@ import type { FileContent, FileEntry, FileIndexEntry } from "../shared/api"
  * where they are.
  *
  * Everything else the studio stores lives under `~/.tabomni` and is addressed by
- * an id — a note, a request, a captured mail. These are the user's own files at
+ * an id — a note, a request, a database. These are the user's own files at
  * their own absolute paths, which is the whole point of the panel and also the
  * one thing that makes it different: an id names a file this app created, while
  * a path names anything at all. So every call here is checked against the

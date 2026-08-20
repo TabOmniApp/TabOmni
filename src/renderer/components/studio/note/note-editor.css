@@ -119,7 +119,7 @@
  * and those are read across rather than down.
  */
 .note-prose .bn-editor > .bn-block-group {
-  max-width: 60rem;
+  max-width: var(--prose-measure);
   margin-inline: auto;
 }
 
@@ -145,6 +145,28 @@
   /* The monospace face runs larger than the sans at the same size, so a chip
    * left at 1em sits taller than the line it is in and pushes the leading. */
   font-size: 0.875em;
+}
+
+/*
+ * A table's grid.
+ *
+ * BlockNote draws every cell with a hardcoded `1px solid #ddd` and ships no
+ * dark variant of it, so in the dark theme the grid arrived as a near-white
+ * cage around the text — the brightest thing in the note, and drawn heavier
+ * than the words it was separating. `--border` is the same token every other
+ * rule in this file and every shadcn component uses, which is all a table grid
+ * has to be: enough to say where a cell ends, and no more.
+ *
+ * `border-collapse: collapse` is BlockNote's own, so the translucent dark
+ * border is drawn once between two cells rather than twice over itself.
+ *
+ * `.bn-editor` is in the selector only to outweigh theirs: without it the two
+ * are the same specificity and which one wins comes down to the order the
+ * bundler happened to concatenate the stylesheets in.
+ */
+.note-prose .bn-editor [data-content-type="table"] th,
+.note-prose .bn-editor [data-content-type="table"] td {
+  border: 1px solid var(--border);
 }
 
 /*

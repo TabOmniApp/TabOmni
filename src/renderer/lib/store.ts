@@ -8,16 +8,9 @@ import * as repo from "./workspace"
 /** Where the strip's arrangement and the pane on screen are kept. */
 const STRIP_KEY = "workbench.strip"
 
-/** Every pane there is — the list `lib/panels.ts` walks to reach all six
+/** Every pane there is — the list `lib/panels.ts` walks to reach all five
  * panels' tabs without naming any of them. */
-export const PANES: Pane[] = [
-  "files",
-  "database",
-  "api",
-  "mail",
-  "terminal",
-  "note",
-]
+export const PANES: Pane[] = ["files", "database", "api", "terminal", "note"]
 
 /**
  * `section` is held as a plain string rather than a `Section` on the way in: a
@@ -25,15 +18,22 @@ export const PANES: Pane[] = [
  * rejecting the whole record over it would throw away the tab order and the
  * pane along with it. `bootstrap` is where it is narrowed.
  */
-type RememberedStrip = { tabOrder: string[]; pane: Pane; section?: string }
+type RememberedStrip = {
+  tabOrder: string[]
+  pane: Pane
+  section?: string
+  sidebar?: boolean
+}
 
 function isRememberedStrip(value: unknown): value is RememberedStrip {
   const record = value as Partial<RememberedStrip> | null
   return (
     isStringArray(record?.tabOrder) &&
     PANES.includes(record.pane as Pane) &&
-    // Optional: written by a build that did not remember the sidebar yet.
-    (record.section === undefined || typeof record.section === "string")
+    // Both optional: written by a build that did not remember the sidebar yet,
+    // or did not know it could be closed.
+    (record.section === undefined || typeof record.section === "string") &&
+    (record.sidebar === undefined || typeof record.sidebar === "boolean")
   )
 }
 
@@ -94,8 +94,30 @@ type StudioState = {
    * of its own to move to (a session).
    */
   section: Section
-  /** The rail's own pick, which moves the sidebar and nothing else. */
+  /**
+   * The rail's own pick, which moves the sidebar and nothing else — and shows
+   * it, since clicking a way into the studio means "show me this". Clicking the
+   * section already showing is the other half of that and is a `toggleSidebar`;
+   * the rail is what tells the two apart, because only it knows which icon was
+   * hit (`activity-bar.tsx`).
+   */
   setSection: (section: Section) => void
+
+  /**
+   * Whether the sidebar is showing at all.
+   *
+   * `⌘B`, the editors' shortcut for it, and the same thing the View menu and a
+   * click on the active rail icon do. Which sidebar it *would* show is still
+   * `section` above, so hiding and showing again comes back to the same list
+   * rather than to Explorer — and the rail keeps working while it is closed:
+   * picking another section opens it on that one.
+   *
+   * Remembered with the strip, because a workbench that forgets is a workbench
+   * that hands back the space every launch. What is not remembered is the
+   * width: the panel keeps that itself, and it comes back on expand.
+   */
+  sidebar: boolean
+  toggleSidebar: () => void
 
   /**
    * The workbench tab strip's order, as prefixed ids (`db:public.users`).
@@ -158,8 +180,8 @@ export const useStudio = create<StudioState>((set, get) => {
   }
 
   function rememberStrip() {
-    const { tabOrder, pane, section } = get()
-    remember(STRIP_KEY, { tabOrder, pane, section })
+    const { tabOrder, pane, section, sidebar } = get()
+    remember(STRIP_KEY, { tabOrder, pane, section, sidebar })
   }
 
   /** Opens storage and reads the workspace. */
@@ -177,6 +199,9 @@ export const useStudio = create<StudioState>((set, get) => {
         // pane's own is the closest thing to where it was left, and Explorer is
         // where a `terminal` pane's sidebar has gone.
         section: sectionOf(strip.section) ?? sectionOf(strip.pane) ?? "files",
+        // A build that never wrote this had no way to close the sidebar, so
+        // the absence means open rather than "unknown".
+        sidebar: strip.sidebar ?? true,
       })
     }
 
@@ -216,6 +241,7 @@ export const useStudio = create<StudioState>((set, get) => {
 
     pane: "database",
     section: "files",
+    sidebar: true,
     tabOrder: [],
 
     showPane(pane) {
@@ -235,7 +261,15 @@ export const useStudio = create<StudioState>((set, get) => {
     },
 
     setSection(section) {
-      set({ section })
+      // Shown as well as switched: the rail is reached with the sidebar closed
+      // — that is most of what closing it is for — and an icon that only
+      // changed something invisible would read as an icon that does nothing.
+      set({ section, sidebar: true })
+      rememberStrip()
+    },
+
+    toggleSidebar() {
+      set((state) => ({ sidebar: !state.sidebar }))
       rememberStrip()
     },
 

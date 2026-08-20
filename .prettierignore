@@ -9,6 +9,12 @@ dist-electron/
 dist-renderer/
 release/
 
+# The VS Code extension is its own package with its own build; its source is
+# formatted like the rest of the repo, its output is not.
+vscode-notes/dist/
+vscode-notes/.bun-cache/
+vscode-notes/.bun-tmp/
+
 # Lockfiles and generated manifests.
 bun.lock
 pnpm-lock.yaml

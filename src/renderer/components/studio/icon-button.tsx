@@ -20,11 +20,15 @@ export function IconButton({
   disabled = false,
   pressed,
   variant = "ghost",
+  side,
   className,
   style,
   children,
 }: {
   label: string
+  /** Which side the tooltip goes on. Worth setting only where the default
+   * (above) has nowhere to go — a button against the top of the window. */
+  side?: "top" | "bottom" | "left" | "right"
   onClick?: () => void
   disabled?: boolean
   /** Set for a toggle, which dims itself when off. */
@@ -54,7 +58,7 @@ export function IconButton({
           </Button>
         }
       />
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent side={side}>{label}</TooltipContent>
     </Tooltip>
   )
 }

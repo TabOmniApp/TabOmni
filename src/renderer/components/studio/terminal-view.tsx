@@ -7,11 +7,18 @@ import { useTheme } from "next-themes"
 
 import "@xterm/xterm/css/xterm.css"
 
+/*
+ * xterm takes hex, not the theme's CSS variables, so these are the dark
+ * palette's own greys written out — `#1e1e1e` is `--background` and `#414141`
+ * is `--accent`. A terminal filling a pane must be the pane's own colour: at
+ * anything else it reads as a window floating in the studio rather than part
+ * of it. Kept in step by hand, which is the price of a canvas renderer.
+ */
 const darkTheme = {
-  background: "#0b0b0d",
+  background: "#1e1e1e",
   foreground: "#e4e4e7",
   cursor: "#e4e4e7",
-  selectionBackground: "#3f3f46",
+  selectionBackground: "#414141",
 }
 
 const lightTheme = {

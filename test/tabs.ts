@@ -134,8 +134,10 @@ check("an unprefixed id names none", kindOf("public.users") === null)
 
 check("the prefix comes back off", bare(t1, "database") === "public.users")
 check(
+  // A schema-qualified name is the id here, and `bare` must take the prefix
+  // off and nothing else — a second colon belongs to the panel, not to us.
   "an id carrying a colon of its own survives the round trip",
-  bare(`${PREFIX.mail}a:b`, "mail") === "a:b"
+  bare(`${PREFIX.database}a:b`, "database") === "a:b"
 )
 
 /**

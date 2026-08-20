@@ -2,7 +2,7 @@
 
 The studio as an Electron app: a workspace points at real directories on disk
 rather than rows in a browser database, and every tool over them — database,
-API, mail, terminal, agent — is a tab in one window rather than an
+API, terminal, agent, notes — is a tab in one window rather than an
 application of its own.
 
 ## Layout
@@ -30,7 +30,6 @@ for; the manifest records an absolute path and the files stay yours.
     environments.json
     folders.json    the groups those requests are filed under
     cookies.json
-    mail.json       what the SMTP sink caught
     notes.json      the Notes panel's listing
     note-folders.json
     notes/<note-id>.md   one note's own markdown
@@ -47,7 +46,7 @@ it — off the screen. Adding a folder brings its files into view; removing one
 takes its sessions with it and leaves the directory untouched.
 
 Everything else belongs to the workspace rather than to a folder: the
-databases, the saved requests, the cookie jar, the capture server. A
+databases, the saved requests, the cookie jar, the notes. A
 project's database is generally the same database its frontend and its API both
 talk to, and filing it under one of the two would only decide which panel is
 allowed to see it. What _is_ per folder is what is genuinely per repository — a
@@ -60,8 +59,8 @@ manifest has to be read to learn.
 ## The tab strip
 
 One strip for the whole workbench, above whichever panel is showing, rather
-than one per panel: a table, a request, a captured email and a session sit side
-by side, and clicking any of them goes to the panel that shows it. Leaving
+than one per panel: a table, a request, a note and a session sit side by side,
+and clicking any of them goes to the panel that shows it. Leaving
 Database for API used to take the tables off the screen — still open, but
 nothing said so. `components/studio/workspace-tabs.tsx` assembles it from the
 four panel stores; the order across panels is `tabOrder` on the studio store,
@@ -124,18 +123,17 @@ folder for a selection made in another panel.
 
 **The strip comes back on a reload.** It used not to: Terminal remembered its
 sessions and no other panel remembered anything, so a reload left one strip
-intact and emptied four. Each panel writes its own record under a settings key
-of its own — `http.tabs`, `inbox.tabs`, `db.tabs`, plus `workbench.strip` for the
-cross-panel order and the pane on screen — because what identifies a tab is the
-panel's business: a schema-qualified table name here, a capture id there.
-`lib/tab-memory.ts` is only the reading and writing, which was the same four
+intact and emptied the rest. Each panel writes its own record under a settings
+key of its own — `http.tabs`, `db.tabs`, `note.tabs`, plus `workbench.strip` for
+the cross-panel order and the pane on screen — because what identifies a tab is
+the panel's business: a schema-qualified table name here, a note id there.
+`lib/tab-memory.ts` is only the reading and writing, which was the same several
 times over.
 
 Every record is reconciled against what actually exists, never trusted: a
-request deleted since, a capture that has aged out of the capped list, a table
-that has been dropped. For the API and capture panels that happens as they are
-restored, in the first `refresh()` — the moment those panels know what their ids
-mean. Each panel restores once, so a later refresh cannot reopen what has been
+request deleted since, a note deleted since, a table that has been dropped. For
+the API and Notes panels that happens as they are restored, in the first
+`refresh()` — the moment those panels know what their ids mean. Each panel restores once, so a later refresh cannot reopen what has been
 closed since.
 
 The Database panel restores earlier than that, and deliberately: **nothing reads
@@ -158,9 +156,9 @@ rows.
 Because the strip belongs to the workbench, so does an empty one. A panel is
 drawn only when it has a tab to draw; otherwise the pane shows a single notice
 (`nothing-open.tsx`). The panels each answering for themselves meant the Database
-panel's "No table selected" spoke for all five, since `database` is the pane a
-fresh launch starts on — somebody who opened the studio to read captured mail was
-told to pick a table. The terminal steps aside for it too, which is what stops
+panel's "No table selected" spoke for all of them, since `database` is the pane a
+fresh launch starts on — somebody who opened the studio to read a note was told
+to pick a table. The terminal steps aside for it too, which is what stops
 closing the last session from leaving its own "start a session" line saying the
 same thing in one panel's words.
 
@@ -173,10 +171,10 @@ acted on from there.
 
 **A panel switched away from is hidden, not unmounted.** The terminal always had
 to be — its session is a pty with no way to reattach, so taking it off the screen
-would end the conversation — and the other five turned out to want the same for a
+would end the conversation — and the others turned out to want the same for a
 smaller reason: a strip that keeps every panel's tabs on screen is an invitation
 to switch, and everything a panel held that its store did not was thrown away
-each time. Leaving Database for Mail and coming back gave a result grid scrolled
+each time. Leaving Database for Notes and coming back gave a result grid scrolled
 to the top, a SQL editor with no undo history and the query split back at its
 default height; a note came back as a fresh ProseMirror over the same text. None
 of that is state a store has any business holding — a scroll offset and an undo
@@ -214,14 +212,46 @@ relation of their own: every pane but one is hidden, so the table that can be
 paged, sorted or filtered is always the selected one, and a second way to say
 so would be a second thing to keep in step.
 
+### Vertical tabs
+
+The strip is a row above the pane by default and can be a column beside it
+instead — **Settings › Tab strip › Vertical tabs**. What pays for the switch is
+the label: a row gives every tab the same narrow box and truncates the names in
+it, which is fine for a handful and useless for the fifteen a morning in a
+repository produces, while a column gives each one a whole line and reads as a
+list of what is open. It is on the right because the rail and the sidebar
+already own the left edge, and a second list against them would read as part of
+the sidebar rather than as the pane's own tabs.
+
+Both are one `TabStrip` with an `orientation`, not two components: the drag, the
+middle-click, the context menu, the dirty dot and scrolling the active tab back
+into view are the same either way, and only the axis differs — which edge the
+drop line is drawn on, which way the tabs stack, and the scrolling. A row scrolls
+sideways, which Chromium will not do under a wheel on a box that cannot also
+scroll down, so it keeps the native wheel listener and the drawn thumb; a column
+is scrolled by the wheel already and keeps the scrollbar the platform draws.
+
+**The column is resizable**, because how much of a file name fits is the whole
+point of it. `studio.tsx` puts the pane and the strip in a nested
+`ResizablePanelGroup` and the strip takes its width from its own panel — the
+drag, the keyboard-reachable handle and the minimum all come with it, as they do
+for the sidebar. Like the sidebar's, that width is the panel's for the run and is
+not written down; what is remembered is the placement.
+
+The strip falls back to the row when nothing is open. A row with no tabs takes no
+height, and a preference for tabs on the right should not turn that into a blank
+band down the side of an empty workbench — so `orientation` is handed to
+`WorkspaceTabs` by the workbench rather than read from the settings store there,
+since the box the strip goes in is what decides.
+
 ## Search
 
 `⌘P` opens a search over everything the workspace can open — a file, a table, a
-request, a captured email or callback, a running session, a note — and picking
-one opens its tab and goes to the panel that shows it.
+request, a running session, a note — and picking one opens its tab and goes to
+the panel that shows it.
 `components/studio/command-palette.tsx` is the whole of it.
 
-It exists because the strip and the seven sidebars only answer a question the
+It exists because the strip and the sidebars only answer a question the
 rail is already pointed at. A table in a collapsed branch, a request three
 folders deep and a note filed last week are each a trip through a panel the
 user is not in and is not going back to, and the sidebar they moved to is
@@ -278,22 +308,24 @@ is also the one row that can fail — a table in a database the workspace is not
 on has to move there first, which dials a server — so the palette stays open
 and says why, the tree's "unreachable" dialog being the tree's.
 
-## The two window shortcuts
+## The window shortcuts
 
-`⌘P` opens the search above and `⌘W` closes the tab the pane is showing, both
-answered by a `keydown` listener in the renderer rather than by an accelerator
-in the application menu. `lib/shortcuts.ts` is the predicate the two share.
+`⌘P` opens the search above, `⌘W` closes the tab the pane is showing, `⌘S` writes
+the Explorer's open file and `⌘B` shows or hides the sidebar — each answered by a
+`keydown` listener in the renderer rather than by an accelerator in the
+application menu. `lib/shortcuts.ts` is the predicate they share.
 
 They are the page's rather than the menu's because a registered accelerator is
-handled in the main process, before the page sees the key at all, and both of
-these need what only the renderer knows: the palette owns its own dialog, and
-which tab is the current one is worked out in `workspace-tabs.tsx` from
-whichever panel is on screen — no store holds it. The File menu still lists
-**Close tab ⌘W**, with `registerAccelerator: false`, so the key is displayed and
-the item works without the menu taking the keystroke. Closing the _window_ moved
-to `⇧⌘W`, the move an editor makes and for the same reason: a window holds every
-panel's tabs, and losing it to a keystroke aimed at one of them takes the
-sessions running in it too.
+handled in the main process, before the page sees the key at all, and each of
+these needs what only the renderer knows: the palette owns its own dialog, which
+tab is the current one is worked out in `workspace-tabs.tsx` from whichever panel
+is on screen — no store holds it — and whether `⌘B` is the sidebar or a bold
+word depends on where the caret is. The File menu still lists **Close tab ⌘W**
+and the View menu **Sidebar ⌘B**, both with `registerAccelerator: false`, so the
+key is displayed and the item works without the menu taking the keystroke.
+Closing the _window_ moved to `⇧⌘W`, the move an editor makes and for the same
+reason: a window holds every panel's tabs, and losing it to a keystroke aimed at
+one of them takes the sessions running in it too.
 
 Both are claimed on the capture phase, ahead of whatever has focus. `Mod-P` is
 otherwise Chromium's print, and a palette that also sent the window to a printer
@@ -309,6 +341,237 @@ With an empty strip `⌘W` is left alone rather than swallowed: there is no tab 
 close, and doing nothing is quieter than a window vanishing under a keystroke
 meant for a tab.
 
+**`⌘B` is the one that has to ask where the caret is.** The other three mean
+nothing to a text editor; `⌘B` is bold in every one there has ever been, and this
+studio has three on screen at once — a note, a `.md` opened in the block editor,
+and the chat composer. So `isEditingRichText` refuses the key inside anything
+`contenteditable`, which is what those three have in common, and the sidebar
+keeps it everywhere else: in Monaco, which has no binding for it, and in a plain
+field, which has nothing to bold. The trade is one-sided — the sidebar has the
+View menu, the rail and a drag; bolding a word has only the key.
+
+**Three things do the same toggle**, and all three go through `sidebar` on the
+studio store: the key, **View › Sidebar**, and a click on the rail icon whose
+sidebar is already showing — the editors' behaviour, and the answer to "the
+sidebar is closed and I have no keyboard". Clicking any _other_ icon opens it on
+that section, because an icon that only changed something invisible reads as an
+icon that does nothing. The mark on the rail follows the sidebar rather than the
+section, so with it closed no icon is current — that is how a closed sidebar
+reads as closed rather than as one that failed to draw.
+
+The panel is **collapsed, not unmounted** (`usePanelRef().collapse()`, since
+`ResizablePanel` has no `collapsed` prop): the width somebody dragged it to comes
+back on expand, where a sidebar taken out of the group would return at its
+default. Dragging the handle past the minimum closes it too, so the state follows
+the panel as well as driving it — with the mount call ignored, because a launch
+that remembered a closed sidebar would otherwise read the panel's own starting
+width as a drag and open it. Which sidebar it _would_ show is still `section`, so
+hiding and showing comes back to the same list, and the state is remembered with
+the strip: a workbench that forgets hands the space back every launch.
+
+## Settings
+
+**Settings…** in the application menu — ⌘, — opens a dialog, and there is
+nothing else to it: no settings tab in the strip, no rail section, no page.
+What is in it is about the workbench rather than about anything in the
+workspace, so it has nothing to be a tab _of_ — and the one setting there so far
+moves the tab strip, which a tab would be a poor place to hold the switch for.
+
+The item carries a gear, which the standard items around it get from the system
+and a custom one has to be handed. **Drawn as an outline, not a solid**: the
+items around it are SF Symbols at the menu's own weight — thin strokes with air
+inside them — and a filled shape beside them reads as a heavier icon in a darker
+ink, even though a template image has no ink of its own. So it is the gear's
+outline at a ~1.1px stroke, in a circle that stops short of its 16pt box the way
+theirs do. It is generated —
+`scripts/menu-icon.mjs` draws it into `resources/menu-settings.png` and its @2x,
+the way the DMG background is drawn — and it is a **template image**: black, with
+the gear in the alpha channel, so macOS tints it to whatever the row is drawn in
+rather than leaving a black icon on a dark menu. The two files reach the built
+app as data URLs inlined by esbuild (`loader: { ".png": "dataurl" }`), because
+`resources/` is not packaged: a path read at runtime would resolve in dev and be
+missing from the `.app`.
+
+The menu item claims its accelerator, unlike **Close tab** and **Sidebar**:
+those two need what only the renderer knows, and this one does not — nothing on
+screen wants the comma, not a terminal, where `Ctrl+,` is unbound, and not an
+editor. Off macOS, where there is no application menu, it is in File, where the
+editors put it.
+
+**Sections down the left, one section's rows on the right** — the shape every
+settings window of this kind has, and for a reason that is not imitation: it is
+what keeps the dialog the same size as the list grows. A single scrolling column
+is fine for the four settings there are today and stops being fine at ten, and
+the list of sections is also the only thing that says what _kinds_ of preference
+exist without reading all of them. A row is a name, a sentence and its control at
+the far end of the line; a control too big for the end of a line — the tab
+strip's two pictures — takes the line below instead, which is the same row rather
+than a second kind of row.
+
+There are four sections: **Appearance** (the theme, which the `d` key still
+toggles — the header's moon button was removed when this row took its place, and
+with it the last clickable thing in the title bar), **Tabs** (the placement
+above), **Chat** (tool calls and thinking) and **MCP** (what an agent session may
+reach, below). The chat's two switches were already settings, written by the chat
+view's own header under `claudeGui.*`, and listing them here is what moved them
+onto the store: a `useState` per component read the stored value once at mount,
+so with the same switch on screen in two places one of them went on showing what
+it started with. The keys they are stored under are unchanged, because a rename
+would quietly hand somebody's choice back to the default.
+
+The dialog has no Save. A preference applies as it is picked, which makes the
+studio behind the dialog its own preview — picking Vertical tabs moves the strip
+while the dialog is still open. `lib/settings.ts` is the store and writes each
+change to the workspace's own settings, so it survives a relaunch by the same
+route as the strip's arrangement.
+
+## MCP: the workspace as tools
+
+An agent session started here is already inside the workspace — so the databases
+it is pointed at, the requests saved against them and the notes written about
+them are things it should be able to read without being told how, and without a
+second copy of the credentials in some other config file. That is the same
+premise as the tab strip, one level down: `src/main/mcp.ts` serves the panels as
+**three MCP servers**, one per panel, and a `claude` session is started pointed
+at whichever of them are switched on.
+
+**Off unless somebody said otherwise**, and one switch per panel rather than one
+for the lot: letting an agent read a schema is not the same as agreeing that it
+may send the saved requests. The switches are in **Settings › MCP**, written to
+the workspace's own settings under `mcp.database` / `mcp.api` / `mcp.notes` —
+keys in `@shared/api` because both sides read them, the dialog to draw the
+switch and the main process to answer with.
+
+What each server offers, three tools apiece:
+
+- **database** — `list_databases`, `list_tables`, `query`. Introspection beyond
+  the table list is a query against `information_schema`, which is a thing models
+  are good at and would otherwise be a per-engine adapter's worth of code
+  duplicated out of the renderer. Rows are capped at 200: a tool result is read
+  by a model with a context window.
+- **api** — `list_requests`, `get_request`, `send_request`. A request goes out
+  exactly as the panel would send it, which is why the resolution moved to
+  `@shared/http-request`: the `{{variables}}` of the active environment, the
+  ancestor folders' headers and params, one implementation for both readers. What
+  it does _not_ carry is the panel's cookie jar or a request's post-response
+  script — both live in the renderer, one of them in a worker sandbox.
+- **notes** — `list_notes`, `read_note`, `create_note`. A note is read as
+  markdown (`noteMarkdown` in `main/note-blocks.ts`) rather than as BlockNote's
+  JSON, and a written one is stored _as_ markdown: converting markdown into
+  blocks needs the parser only the renderer has, and the store already hands a
+  markdown body over as it found it — the editor converts on first open, the same
+  path a note written by an older build takes. It only ever creates, never
+  overwrites, because a note may hold drawings and pictures that markdown cannot
+  carry. A new note is announced to the renderer (`notes:changed`), which is
+  otherwise holding the listing it read at launch.
+
+**Streamable HTTP on loopback**, bound the way the note preview binds its own:
+127.0.0.1, a port the OS picks, a secret this run generated in the first path
+segment, and a request carrying an `Origin` refused outright — that last one is
+the DNS-rebinding guard the spec asks a local server for. The alternative was a
+stdio server, which would be a script spawned once per session, each needing its
+own way back to this app's state; one HTTP server in the process that already
+holds the state is less of everything. The responses are plain JSON rather than
+an event stream, which the spec allows for a server that never pushes.
+
+A starting session is handed `--mcp-config ~/.tabomni/mcp.json`, written at that
+moment with the servers that are on and mode `0600` — a file rather than the JSON
+inline, because the URL carries this run's secret and a command line is readable
+by every process on the machine. It is `--mcp-config` and not
+`--strict-mcp-config`: somebody's own MCP servers are theirs, and a session
+started here should not quietly lose them.
+
+**Every call is checked against the setting**, not only the ones that were on
+when the session started. Turning a server off has to mean the agent cannot use
+it, and an hour-old conversation is not something to have to restart to be
+listened to — so a switched-off server answers `tools/list` with an empty list
+and a `tools/call` with an error naming the dialog. The other direction is not
+symmetric: switching one _on_ only reaches sessions started afterwards, since the
+config was written when the session began. That is what the line under the
+switches says.
+
+`test/mcp.ts` speaks the protocol over a real socket — the handshake, the tool
+lists, a request resolved through its folders, a note read as markdown, and every
+way in that should be refused: a wrong secret, a longer path, a `GET`, an
+`Origin`, half a JSON body. Calling into the class would have proved none of
+those, and each one is a place where a server that "works" is one the CLI
+silently declines to use.
+
+## The assistant
+
+The button at the right of the title bar opens a chat down the right-hand side of
+the window. It is the answer to the awkward thing about the MCP servers above:
+they are about the _workspace_ — its databases, its saved requests, its notes —
+and the only way to reach them was a Terminal session, which has a folder under
+it and is therefore a conversation about a repository. This is the other shape. A
+panel rather than a tab, because it is meant to be read beside whatever is open,
+the way somebody asks a question about the table they are looking at.
+
+**`claude -p` per turn.** `main/assistant.ts` spawns the CLI in print mode with
+`--output-format stream-json --verbose`, which is what makes a reply arrive a
+message at a time; continuity is the CLI's own — an id minted here,
+`--session-id` on the first turn of a chat and `--resume` after it, the same pair
+a Terminal session chooses between.
+
+The process, the chat and the turn belong to the **main process**, and the panel
+is a view of the events. A turn takes as long as it takes: closing the panel or
+reloading the window must not end it or lose the thread — and a reply that lands
+while the panel is shut is still in the chat when it is opened again, because
+what writes the chat down is what sees the events.
+
+**Chats are kept, and the list is what opens.** `chats.json` holds the listing
+and `chats/<id>.json` one chat's lines — the split the notes have, so sending a
+message rewrites one chat rather than all of them. A chat names itself from the
+first thing asked (a title from the model would be a second turn to pay for and
+wait on, for something the first line already says) and rises to the top of the
+list on every turn. Opening the panel shows that list, _unless it is empty_, in
+which case it opens straight onto the composer: a panel that always opened onto
+a fresh composer would bury yesterday's conversation behind a button, and one
+that always opened onto the list would put a list of nothing in front of
+somebody's first question. Deleting is on the row, where you are when you decide
+a chat is finished with; it takes the lines with it and leaves the CLI's own
+transcript alone.
+
+While a turn is in flight the list is read-only — opening another chat would
+leave the answer being written landing in a panel showing something else, and the
+back button and the rows say so rather than silently doing nothing.
+
+**It is not in a folder, and says so.** The turn runs in an empty directory of
+the app's own (`~/.tabomni/assistant`), with every workspace folder reached
+through `--add-dir` and none of them current. The first version ran in the first
+workspace folder, which made the assistant answer "I am working in
+`~/code/that-one`" — the exact thing this panel exists not to be. The data
+directory itself would have been worse: `Read` is allowed and `manifest.json` is
+in there. An `--append-system-prompt` states the rest, because the CLI's honest
+answer to "which folder are you working in?" would otherwise be the name of an
+empty scratch directory: it says there is no working directory, that the folders
+are readable and equal, that the workspace's panels are the `tabomni-*` tools,
+and that it cannot run or change anything. Its transcripts therefore land under a
+project of their own rather than mixed into a repository's, which is also why
+these chats are not in Explorer's Conversations list.
+
+**What it can do, and how that is enforced.** It gets the MCP servers that are
+switched on, every folder in the workspace through `--add-dir` rather than one
+privileged one, and `--strict-mcp-config` — unlike a Terminal session, which
+keeps whatever MCP servers the user configured for themselves. A session is their
+`claude`; this panel is the app's, and on a machine with a dozen servers of their
+own the three that are the point of the panel were three tools in a hundred.
+
+Then the part that took a wrong turn first. `--allowed-tools` was read as an
+allowlist, and it is not one: it says "do not ask about these", not "refuse
+everything else". In print mode there is nobody to answer a permission prompt,
+and the absence of a prompt turned out to be the absence of a _refusal_ — asked
+to write a file, the turn wrote it. So the enforcement is `--disallowed-tools`,
+naming everything that runs commands, changes files, or reaches outside the turn.
+What a turn is left holding is `Read`, `Glob`, `Grep`, `LSP` and the workspace's
+own tools, which is checkable: the `tools` array on the first `system` line of
+the stream says exactly what the CLI handed it. Being a denylist, it is worth
+re-reading when the CLI gains tools.
+
+Editing files and running commands is deliberately not here. That is what the
+Terminal panel is for, where the session is interactive, permission prompts can
+be answered, and what the agent did is on screen.
+
 ## Explorer
 
 The first section on the rail, and the only panel that shows the folders
@@ -316,7 +579,7 @@ themselves rather than something the studio keeps about them: the workspace's
 directories, opened one level at a time, and a file opened into an editor.
 
 **The tree is the directory tree.** Every other sidebar lists records this app
-owns — a request, a note, a captured mail — and files them however it likes;
+owns — a request, a note, a database — and files them however it likes;
 this one lists what is on disk, so its shape is not the studio's to choose.
 Nothing is hidden: a file explorer that skipped dotfiles would be hiding
 `.env.example` and `.github`, which are what people open it to find. A folder is
@@ -516,9 +779,11 @@ editor from **Open with** in its right-click menu, which appears only where
 there is a genuine choice to make. The two halves are read and kept separately,
 so switching back and forth re-reads neither.
 
-**A `.md` is the other one**, and the menu is the same menu: **Text editor**,
-which is what it opens as, and **Markdown preview**, which draws it as the
-document it was written to be. The default is the editor rather than the
+**A `.md` is the other one**, and the menu is the same menu three times over:
+**Text editor**, which is what it opens as, **Markdown preview**, which draws it
+as the document it was written to be, and **Markdown editor**, which is the
+block editor below — the document, written without typing the syntax. The
+default is the editor rather than the
 preview, unlike SVG's: the Explorer is a tree of a project's source, and a
 README reached from there is more often on the way to being changed than being
 read. There is no second copy of the text — the preview draws the same buffer
@@ -527,9 +792,88 @@ saved or not. The renderer is the transcript's,
 `components/studio/markdown-view.tsx`, which is why it sits at the studio's root
 rather than in either panel; what the Explorer adds is a document's type scale
 over a chat message's, in `files/file-markdown.css`, in the same theme tokens as
-everything else so light and dark need no second palette. `.mdx` is deliberately
-not offered one: it is markdown with JSX in it, and a commonmark parser drops
-the component tags rather than drawing them.
+everything else so light and dark need no second palette. The column it is set
+in is the block editor's own — `--prose-measure` in `styles/globals.css`, read
+by both, with the same proportional side padding — because these are two views of
+one file and switching between them must not move the text. `.mdx` is
+deliberately not offered one: it is markdown with JSX in it, and a commonmark
+parser drops the component tags rather than drawing them.
+
+**A `.note` is the third file, and the only one the studio invented.** It opens
+in the Notes panel's own block editor — the same `BlockEditor`, the same slash
+menu, the same `/drawing` — over a file in one of the workspace's folders
+instead of over a record under `~/.tabomni`. `New note…` sits beside `New file…`
+in a folder's right-click menu and on the folder heading's, and creates an empty
+file with that extension: there is nothing to write into it, because an empty
+body is the empty document the editor starts on anyway.
+
+What it is for is the note that belongs to a repository rather than to the
+workspace — the notes on a migration, kept beside the migration, committed with
+it and read by whoever pulls it. That is also why the file is written as
+_indented_ JSON with a trailing newline, unlike the notes panel's own
+`notes/<id>.json`: a note in a working tree gets reviewed, and a note whose
+diff is one 40 KB line is a note nobody can review.
+
+A body that is not that JSON is read as markdown rather than replaced with an
+empty document (`lib/files/block-doc.ts`). A `.note` can reach the pane having
+been written by hand or by something else, and an unreadable one drawn as an
+empty note is an empty note about to be saved over the top of it — read as
+prose it is at least all still there, and visibly so. The **Text editor** is
+offered second in the same **Open with** menu for the same reason: a note that
+will not open the way it should is a note whose text somebody needs to see.
+
+It is the files store's tab, not the notes store's, and that decides how it is
+written: typing marks it dirty, ⌘S and the header's Save write it, and closing
+the tab flushes it — where a note in the Notes panel is written as it is typed.
+The file is in somebody's repository beside their source, and a rich-text pane
+that wrote on every keystroke would be changing their working tree while they
+thought.
+
+The one thing it does not carry is its pictures. A drawing's scene and a dropped
+image are files of the workspace's own — `workspace/drawings/` and
+`workspace/note-files/`, exactly as for a note in the panel — and the document
+holds only the id or the `note-file://` URL, so a `.note` committed to a
+repository arrives somewhere else with its words and without them. This is a
+note editor pointed at a file, not a portable note format; making it the second
+thing would mean a sidecar directory per note and a second answer to where a
+drawing lives.
+
+**The same editor over a `.md` is the one viewer that changes the file it is
+shown, and it is offered anyway.** `blocks` is a single viewer — one pane, one
+slash menu — and what differs is what it writes: a `.note` gets the block
+document it already held, and a `.md` gets markdown printed back out of the
+editor. That print is `blocksToMarkdownLossy`, which is lossy by its own name:
+children of blocks that are not list items are un-nested, some styles go, and it
+renders the _whole_ file from the document, so the first save reflows every line
+whether or not it was touched. That is exactly the trade the Notes panel refused
+when it moved its own notes off markdown — and the difference here is that the
+markdown is not this app's storage, it is the user's file, so the choice is
+theirs to make per file. What the studio owes them is that nothing happens until
+they make it: the text editor stays the default, nothing is written until a
+keystroke, and the `.md` that is only read is byte-identical afterwards.
+
+Three things the block editor can do are switched off for a `.md`, at the source
+rather than by warning about them, because the file cannot hold them:
+
+- **Frontmatter never reaches the editor.** `---` is a thematic break to every
+  markdown parser there is, so a document with frontmatter parsed into blocks and
+  printed back comes out as three horizontal rules with `title:` between them —
+  not a lossy conversion but a broken file, and the site or docs build reading
+  that file stops finding what it needs. `splitFrontmatter` takes it off byte for
+  byte and every save puts it back; the pane says so in a line above the editor,
+  since content held back silently reads as content eaten. It is Jekyll's and
+  `gray-matter`'s rule deliberately — a leading `---` with a later one is
+  metadata, even where a rule was meant — because matching the tools that read
+  these files matters more than being right about an opening rule nobody writes.
+- **`/drawing` is not in the menu**, and a ```drawing fence in the file stays the
+  code block it parsed to (`blocksFromMarkdown`'s `drawings: false`). A drawing
+  block has no markdown of its own, so one placed here would not survive the
+  save that followed it.
+- **A picture cannot be dropped in.** An upload lands under
+  `workspace/note-files/` and the document holds a `note-file://` URL, which is
+  a broken image in every other reader of that markdown. The image panel is
+  built from what the editor can do, so with no `uploadFile` it offers the one
+  thing a `.md` can honestly hold: a URL to embed.
 
 `lib/files/viewers.ts` holds all of that and nothing else does.
 
@@ -701,7 +1045,7 @@ The studio holds as many sessions as you open, each in one folder's real
 directory: a plain shell, or `claude`. **There is no Terminal section on the
 rail.** They are started and listed in the Explorer sidebar's own Sessions list,
 under the folder each one runs in, and a session draws in a pane of its own with
-no sidebar — see the Layout section on the five sections and six panes.
+no sidebar — see the Layout section on the four sections and five panes.
 
 The rail button was there first, and what it opened was a sidebar whose top half
 was Explorer's folder list again. Taking the folder management out of it (see the
@@ -902,17 +1246,17 @@ turn".
 
 **The one thing only a studio can offer an agent.** An agent in an editor sees
 the files and the terminal output; it cannot see the schema of the database this
-project talks to, the request that reproduces a bug, or the mail the app just
-sent, because those live in other applications. Here they live in the same
-window, so `@` in the composer is a menu of them: a table with its columns, a
-saved request resolved against the active environment, a captured mail, a note.
+project talks to, the request that reproduces a bug, or the note that says what
+the payload has to look like, because those live in other applications. Here they
+live in the same window, so `@` in the composer is a menu of them: a table with
+its columns, a saved request resolved against the active environment, a note.
 `lib/terminal/mentions.ts` is the catalogue.
 
 **Everything is read from what the renderer already holds** — a table's columns
 are the ones the schema read brought back, a request's URL goes through the same
 `resolveUrl` the send path uses. No query is run and no IPC is invented to answer
 a keystroke, which is also why tables appear only once a database is open: a menu
-opening is not consent to connect. What _is_ asked for is the three panels that
+opening is not consent to connect. What _is_ asked for is the two panels that
 load lazily (`primeMentions`), because a menu that was empty until you had
 visited the API panel reads as a broken feature rather than an empty workspace.
 
@@ -1162,66 +1506,39 @@ A request carrying its own `Cookie` header sends that instead — the more
 specific instruction wins, and a header the user can read should say what is
 sent.
 
-## Mail
+## Mail, removed
 
-The API panel sends requests out. This one catches what comes the other way —
-the mail the project's own code sends — with an **SMTP sink** on 1025, bound to
-`127.0.0.1` and nothing else. It accepts a message and keeps it. Nothing is ever
-delivered. That is the point: an app configured against this cannot mail a
-customer by accident, which is the failure a development mail server exists to
-prevent. Any username and password are accepted, because a framework configured
-with credentials will not send without being asked for them, and there is
-nothing here for credentials to protect. TLS is not offered.
+**There was a Mail panel here**, and a Webhooks panel beside it before that.
+Mail was an SMTP sink on 1025, bound to `127.0.0.1`, that accepted a message and
+kept it rather than delivering it — a development mail server, written here
+rather than pulled in, with `src/main/inbox.ts` for the server and
+`src/main/mime.ts` for enough of MIME to read what a framework mailer sends.
+Webhooks was a catch-all HTTP endpoint on 1026 with a replay button. Both are
+gone the way the git, code search and specs panels went: deleted rather than
+hidden behind a flag, so that what is here is what runs.
 
-It is written here rather than pulled in: a mail catcher that has to be
-installed first is a panel that works on the machine it was written on.
-`src/main/inbox.ts` is the server, `src/main/mime.ts` is the parsing that
-follows — enough of MIME to read what a framework mailer sends
-(`multipart/alternative` inside `multipart/mixed`, base64 and quoted-printable
-bodies, RFC 2047 subjects, RFC 2231 filenames) and no more. A part it cannot
-make sense of is shown as an attachment rather than dropped.
+Nothing of either is left in the code. The rail is four sections, `Section` and
+`Pane` no longer name `mail`, the `inbox:*` channels and the `Inbox*` types are
+out of the contract, `@` in the composer offers three kinds rather than four, and
+`--section-mail` went with them — the launch screen's row of dots took Explorer's
+cyan in its place, since that row was never one dot per section.
 
-Everything structural in the parser runs on the message decoded as latin1, which
-maps one byte to one character: that is what lets a boundary be found by string
-index and the part behind it recovered as the exact bytes it arrived as. The
-charset a part declares is applied to those bytes afterwards, per part — the
-only order that works when one message carries a UTF-8 body and a Shift_JIS
-attachment name.
-
-Captures are kept in `mail.json` under the studio's own directory, newest first
-and capped at 200, so an inbox survives a restart without becoming the slowest
-thing the panel does. A mail's HTML is rendered in an iframe with `sandbox=""`
-and a CSP that allows only `data:` URIs — a template with a script in it must
-not run inside the studio, and a remote image must not load, because in a mail
-that image is a tracking pixel and fetching it would tell a server the message
-was read.
-
-**There was a Webhooks panel beside this one**, a catch-all HTTP endpoint on
-1026 that answered every method on every path, with a replay button that sent a
-captured request back out verbatim. It was removed rather than hidden, the way
-the git, code search and specs panels were. What it left behind is deliberate
-and small: a capture still carries `kind: "mail"`, which is the field that tells
-one of its records apart from a mail in a file written by that build, and
-`Store.listInbox` reads `inbox.json` once to carry the mail across to
-`mail.json` before removing it. The settings blob under `inbox.config` still
-nests the port under a `mail` key for the same reason.
-
-The port is the workspace's, in `manifest.json` settings under `inbox.config`,
-along with whether to bind it at launch. One server rather than one per folder:
-a port can only be bound once, and the code that sends the mail is usually one
-folder of a project whose other folders would want the same sink anyway. Nothing
-sent while it is down can be caught afterwards, which is what that switch is
-for.
+What is left is on disk, deliberately: a workspace that ran the old build still
+has `workspace/mail.json` and an `inbox.config` entry in its settings, and this
+app no longer reads either. Removing a feature is not a reason to delete
+somebody's captured mail out from under them — the file is theirs to keep or to
+delete, and it costs a stopped app nothing. A build that brings mail back would
+find it there.
 
 ## Notes
 
 The panel for what the work needs written down and nothing else knows where to
 put — the payload that took an hour to get right, the shape a response comes
-back in, what the next step was. It is a rail section beside the other five, not
-a corner of one of them, because that is what makes it reachable from whichever
-panel raised the thing worth writing down.
+back in, what the next step was. It is a rail section beside the other three,
+not a corner of one of them, because that is what makes it reachable from
+whichever panel raised the thing worth writing down.
 
-Notes belong to the **workspace**, like the requests and the captures and for
+Notes belong to the **workspace**, like the requests and the databases and for
 the same reason: a note about how a frontend calls its API is about both
 folders, and filing it under one would decide which one is allowed to see it.
 They are filed into folders of their own — arbitrarily deep, dragged between,
@@ -1254,7 +1571,7 @@ The editor is **Crepe**, Milkdown's batteries-included editor, already here for
 the Terminal panel's chat composer. It brings the selection toolbar, the `/`
 block menu and the drag handles rather than having them hand-built, and it reads
 as part of the studio because `milkdown-theme.css` points its `--crepe-*`
-variables at the app's own tokens — one palette, following the theme toggle, with
+variables at the app's own tokens — one palette, following the theme, with
 nothing in the panel that has to know which theme is on. `note-editor.css` is
 the sizing, kept apart from the colour for the same reason `chat-composer.css`
 is: Crepe's own padding is sized for a full document page, and this pane is one
@@ -1401,7 +1718,7 @@ has nowhere to put a reason. Restyling it was not the cheaper half: that build
 ships a vendored copy of the shadcn components with tokens of its own, so the
 input to correct was someone else's. What is there instead is a drop zone and a
 URL field built from `components/ui/`, which is what makes the panel follow the
-theme toggle like everything else — and what lets a refused upload say why, since
+theme like everything else — and what lets a refused upload say why, since
 `uploadNoteFile` throws a sentence written to be read rather than a flag. The tab
 names and the button still come from BlockNote's dictionary, and the file
 dialog's filter from the block's own `fileBlockAccept`, so a video block's panel
@@ -1643,7 +1960,7 @@ the next launch and nothing is written to disk to outlive them, so a preview
 left open overnight is a dead tab rather than a page still serving a note to
 whoever kept the URL. The server binds on the first link asked for, so a
 workspace whose notes are never read outside the studio never opens a port, and
-it is closed on quit with the inbox's two.
+it is closed on quit along with the sessions and the databases.
 
 The page carries the version it was rendered at and answers `HEAD` with it as an
 ETag; the one script on it polls that and reloads when it changes. This is the
@@ -1813,11 +2130,11 @@ Plain `bun` scripts under `test/`, with no test framework behind them — see
 adding one is dropping a file in.
 
 They cover the places where being wrong is expensive and noticing would
-otherwise be slow: the chat view's tail, the SMTP sink, the tab
-strip's ordering. Those run against the real thing rather than a fixture — `test/transcript.ts` appends to a file while the mirror watches it,
-`test/inbox.ts` holds an SMTP conversation over a socket — because a
-hand-written sample would only check the parser against my memory of the
-format.
+otherwise be slow: the chat view's tail, the Explorer's own file handling, the
+tab strip's ordering. Those run against the real thing rather than a fixture —
+`test/transcript.ts` appends to a file while the mirror watches it, and
+`test/files.ts` creates and renames real ones — because a hand-written sample
+would only check the parser against my memory of the format.
 
 ## Building
 

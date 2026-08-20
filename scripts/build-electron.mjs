@@ -43,6 +43,11 @@ const options = {
   // both carry optional native/dynamic requires (pg-native, pg-cloudflare)
   // that esbuild cannot statically resolve.
   external: ["electron", "@lydell/node-pty", "pg", "mysql2"],
+  // The Settings item's icon travels inside the bundle as a data URL rather
+  // than as a file read at runtime: `resources/` is not packaged — `files` in
+  // package.json is `dist-electron` and `dist-renderer` — so a path would
+  // resolve in dev and be missing from a built app.
+  loader: { ".png": "dataurl" },
   sourcemap: true,
   minify: values.minify,
   logLevel: "info",

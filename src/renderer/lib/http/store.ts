@@ -1,5 +1,6 @@
 import { create } from "zustand"
 
+import { HTTP_ENVIRONMENT_KEY } from "@shared/api"
 import type {
   HttpCookie,
   HttpEnvironment,
@@ -18,6 +19,7 @@ import {
   resolveHeaders,
   withFolderParams,
 } from "./folders"
+import { variablesFrom } from "@shared/http-request"
 import { substitute, unresolved } from "./query"
 import { runPostResponseScript, type ScriptResult } from "./sandbox"
 
@@ -78,8 +80,9 @@ const IDLE: RequestOutcome = {
   script: null,
 }
 
-/** Where the chosen environment is remembered. */
-const ACTIVE_ENVIRONMENT_KEY = "http.environment"
+/** Where the chosen environment is remembered — a key the main process reads
+ * too, so `@shared/api` is where it is spelled out. */
+const ACTIVE_ENVIRONMENT_KEY = HTTP_ENVIRONMENT_KEY
 
 /** Which requests were open in the strip, and which was on screen. */
 const OPEN_TABS_KEY = "http.tabs"
@@ -154,25 +157,12 @@ type ApiState = {
   setFolderParams: (id: string, params: HttpHeader[]) => void
 }
 
-/**
- * Every variable a request can use, from the active environment.
- *
- * `baseUrl` has no built-in value here — an environment that defines its own
- * is what lets a bare path like `/api/users` resolve to something.
+/*
+ * `variablesFrom` moved to `@shared/http-request` with the rest of the
+ * resolution the MCP server needed; re-exported so the panel still reaches it
+ * where it always has.
  */
-export function variablesFrom(
-  environments: HttpEnvironment[],
-  activeId: string | null
-): Record<string, string> {
-  const variables: Record<string, string> = {}
-
-  const active = environments.find((environment) => environment.id === activeId)
-  for (const variable of active?.variables ?? []) {
-    const name = variable.name.trim()
-    if (name) variables[name] = variable.value
-  }
-  return variables
-}
+export { variablesFrom } from "@shared/http-request"
 
 /**
  * Turns what the user typed into an address to send to.

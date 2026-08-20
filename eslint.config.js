@@ -25,6 +25,15 @@ export default [
       "dist-renderer/**",
       "release/**",
       "src/renderer/public/**",
+      /*
+       * The VS Code extension in `vscode-notes/` is a package of its own — its
+       * own `package.json`, its own `tsconfig`, its own dependencies, and a
+       * different runtime on both sides of it (an extension host, and a webview
+       * with no Node in it). It is linted by its own `typecheck` rather than by
+       * this config, which is written for the app's two environments and would
+       * be judging code it has no `languageOptions` for.
+       */
+      "vscode-notes/**",
     ],
   },
 

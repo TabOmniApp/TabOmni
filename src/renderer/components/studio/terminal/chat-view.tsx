@@ -36,6 +36,7 @@ import type {
   TranscriptSessionSummary,
   TranscriptUsage,
 } from "@shared/api"
+import { useSettings } from "@/lib/settings"
 import { useTerminal } from "@/lib/terminal/store"
 import { relativeTime } from "@/lib/terminal/conversations"
 import { writtenPaths } from "@/lib/terminal/touched"
@@ -51,17 +52,6 @@ import { Meter } from "../meter"
 import { MarkdownView } from "../markdown-view"
 import { TouchedFiles } from "./touched-files"
 import "./slash-command.css"
-
-/** Whether tool calls show up in the transcript at all, remembered across
- * runs — not per folder, since it is a taste about how busy the transcript
- * looks rather than something tied to what a session is working on.
- *
- * The stored key still says `claudeGui`, which this app no longer has: it is
- * what is already on disk for everyone using the app, and renaming it would
- * silently reset a setting rather than move it. */
-const SHOW_TOOL_CALLS_KEY = "claudeGui.showToolCalls"
-/** Same as `SHOW_TOOL_CALLS_KEY`, but for the model's thinking blocks. */
-const SHOW_THINKING_KEY = "claudeGui.showThinking"
 
 /**
  * One entry in the transcript.
@@ -369,47 +359,21 @@ export type Transcript = ReturnType<typeof useTranscript>
  * the CLI's own prompt — in the terminal view — rather than in a dialog here.
  */
 /**
- * How much of a turn is drawn — tool calls and thinking — remembered in the
- * settings.
+ * How much of a turn is drawn — tool calls and thinking.
  *
- * A hook rather than state in `ChatView` because the read-only conversation
- * view draws the same transcript with the same two switches, and someone who
- * turned tool calls off did not mean "off in this pane only".
+ * A hook over the settings store rather than state of its own: the read-only
+ * conversation view draws the same transcript with the same two switches, the
+ * Settings dialog lists them a third time, and someone who turned tool calls
+ * off did not mean "off in this pane only". Each of those used to read the
+ * stored value once at mount, so the switch nobody had touched went on showing
+ * what it started with while the transcript beside it had already changed.
  */
 export function useTranscriptDisplay() {
-  const [showToolCalls, setShowToolCallsState] = useState(true)
-  const [showThinking, setShowThinkingState] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    void window.desktop.getSetting(SHOW_TOOL_CALLS_KEY).then((stored) => {
-      if (cancelled || stored === null) return
-      setShowToolCallsState(stored === "true")
-    })
-    void window.desktop.getSetting(SHOW_THINKING_KEY).then((stored) => {
-      if (cancelled || stored === null) return
-      setShowThinkingState(stored === "true")
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  function setShowToolCalls(next: boolean) {
-    setShowToolCallsState(next)
-    void window.desktop.setSetting(SHOW_TOOL_CALLS_KEY, String(next))
-  }
-
-  function setShowThinking(next: boolean) {
-    setShowThinkingState(next)
-    void window.desktop.setSetting(SHOW_THINKING_KEY, String(next))
-  }
-
   return {
-    showToolCalls,
-    setShowToolCalls,
-    showThinking,
-    setShowThinking,
+    showToolCalls: useSettings((state) => state.showToolCalls),
+    setShowToolCalls: useSettings((state) => state.setShowToolCalls),
+    showThinking: useSettings((state) => state.showThinking),
+    setShowThinking: useSettings((state) => state.setShowThinking),
   }
 }
 

@@ -9,14 +9,21 @@ import {
 import { cn } from "@/lib/utils"
 import { Copy, X } from "lucide-react"
 
-/** The insertion marker shown while a tab is being dragged. */
-function DropLine({ side }: { side: "left" | "right" }) {
+/** The insertion marker shown while a tab is being dragged. Which edge it is
+ * drawn on is the strip's axis: the boundary between two tabs is vertical in a
+ * row and horizontal in a column. */
+function DropLine({ side }: { side: "left" | "right" | "top" | "bottom" }) {
+  const alongRow = side === "left" || side === "right"
   return (
     <span
       aria-hidden
       className={cn(
-        "pointer-events-none absolute inset-y-0 z-10 w-0.5 bg-primary",
-        side === "left" ? "left-0" : "right-0"
+        "pointer-events-none absolute z-10 bg-primary",
+        alongRow ? "inset-y-0 w-0.5" : "inset-x-0 h-0.5",
+        side === "left" && "left-0",
+        side === "right" && "right-0",
+        side === "top" && "top-0",
+        side === "bottom" && "bottom-0"
       )}
     />
   )
@@ -47,18 +54,26 @@ export type TabStripItem = {
 }
 
 /**
- * A row of editor tabs: what is open, which one is on screen, and how to
- * close them.
+ * A row — or, laid out the other way, a column — of editor tabs: what is open,
+ * which one is on screen, and how to close them.
  *
  * Shared by the editor's files and the database panel's tables, which want
  * the same thing down to the middle-click. Everything about *what* a tab is
  * stays with the caller; this only knows how a strip of them behaves.
+ *
+ * The two orientations are one component rather than two because everything
+ * that makes a tab strip a tab strip — the drag, the middle-click, the menu,
+ * the dirty dot, scrolling the active tab back into view — is the same either
+ * way. What differs is the axis: which edge the drop line is drawn on, which
+ * way the tabs stack, and the scrolling, since a column is scrolled by the
+ * wheel already and needs none of the sideways-scroll machinery below.
  */
 export function TabStrip({
   label,
   items,
   activeId,
   copyLabel = "Copy name",
+  orientation = "horizontal",
   trailing,
   onSelect,
   onClose,
@@ -71,6 +86,8 @@ export function TabStrip({
   items: TabStripItem[]
   activeId: string | null
   copyLabel?: string
+  /** `horizontal` is the row above the pane; `vertical` the column beside it. */
+  orientation?: "horizontal" | "vertical"
   /** Rendered at the strip's trailing edge, e.g. a "new tab" button. Shown
    * even with no tabs open, so the strip doesn't vanish along with them. */
   trailing?: ReactNode
@@ -81,6 +98,8 @@ export function TabStrip({
   /** Hands back every id in its new order. Omit to pin the strip's order. */
   onReorder?: (ids: string[]) => void
 }) {
+  const vertical = orientation === "vertical"
+
   const [menuTarget, setMenuTarget] = useState<TabStripItem | null>(null)
   /** The tab being dragged, or null. Also the guard that keeps a file dragged
    * in from the desktop from being treated as a reorder. */
@@ -128,6 +147,8 @@ export function TabStrip({
   const measureThumb = useCallback(() => {
     const strip = stripRef.current
     if (!strip) return
+    // A column scrolls the way the platform already draws a scrollbar for.
+    if (vertical) return
     const { scrollWidth, clientWidth, scrollLeft } = strip
     // A hair of slack: a fractional layout width shouldn't conjure a thumb.
     if (scrollWidth - clientWidth < 1) {
@@ -145,7 +166,7 @@ export function TabStrip({
     // scrolled all the way, which is exactly when the ratio can exceed 1.
     const progress = Math.min(1, scrollLeft / (scrollWidth - clientWidth))
     setThumb({ left: progress * travel, width })
-  }, [])
+  }, [vertical])
 
   // A tab activated from elsewhere — a tree, a jump-to-file — can be scrolled
   // out of sight in a long strip.
@@ -171,7 +192,7 @@ export function TabStrip({
   // Re-bound per tab count because an empty strip renders a different element.
   useEffect(() => {
     const strip = stripRef.current
-    if (!strip) return
+    if (!strip || vertical) return
 
     const onWheel = (event: WheelEvent) => {
       // Leave a trackpad's own horizontal gesture alone.
@@ -183,13 +204,27 @@ export function TabStrip({
 
     strip.addEventListener("wheel", onWheel, { passive: false })
     return () => strip.removeEventListener("wheel", onWheel)
-  }, [items.length])
+  }, [items.length, vertical])
 
   if (items.length === 0) {
     if (!trailing) return null
     return (
-      <div className="flex h-9 shrink-0 items-stretch border-b bg-muted/40">
-        <div className="ml-auto flex items-center pr-1">{trailing}</div>
+      <div
+        className={cn(
+          "flex shrink-0 bg-muted/40",
+          vertical
+            ? "h-full w-full flex-col items-stretch border-l p-1"
+            : "h-9 items-stretch border-b"
+        )}
+      >
+        <div
+          className={cn(
+            "flex items-center",
+            vertical ? "justify-end" : "ml-auto pr-1"
+          )}
+        >
+          {trailing}
+        </div>
       </div>
     )
   }
@@ -199,7 +234,15 @@ export function TabStrip({
       {/* `overflow-hidden` so the thumb can never reach an ancestor's
           scrollable overflow, whatever the arithmetic above rounds to: the
           strip scrolls itself, and nothing here is meant to escape it. */}
-      <div className="group/strip relative shrink-0 overflow-hidden">
+      <div
+        className={cn(
+          "group/strip relative shrink-0 overflow-hidden",
+          // The whole of whatever it was given: a column is handed a resizable
+          // panel of its own (`studio.tsx`), so the width is the user's drag
+          // rather than a number picked here.
+          vertical && "flex h-full w-full flex-col"
+        )}
+      >
         <div
           ref={stripRef}
           role="tablist"
@@ -225,15 +268,31 @@ export function TabStrip({
             event.preventDefault()
             commitDrop()
           }}
-          // Sideways only: a tab is as tall as the strip, so a vertical
-          // scrollbar would only ever be Chromium rounding against us. The
-          // horizontal one is hidden outright — the thumb below stands in for it,
-          // which also gives the tabs back the row of height it was taking.
-          className="flex h-9 scrollbar-none items-stretch overflow-x-auto overflow-y-hidden border-b bg-muted/40"
+          // A row scrolls sideways only: a tab is as tall as the strip, so a
+          // vertical scrollbar would only ever be Chromium rounding against us.
+          // The horizontal one is hidden outright — the thumb below stands in
+          // for it, which also gives the tabs back the row of height it was
+          // taking. A column is the other way round, and keeps the scrollbar the
+          // platform draws: it is a list, and a list is expected to have one.
+          className={cn(
+            "flex items-stretch bg-muted/40",
+            vertical
+              ? "min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto border-l"
+              : "h-9 scrollbar-none overflow-x-auto overflow-y-hidden border-b"
+          )}
         >
           {/* The trigger covers the tabs only: a right-click on the empty strip
             past the last one belongs to no tab. */}
-          <ContextMenuTrigger render={<div className="flex items-stretch" />}>
+          <ContextMenuTrigger
+            render={
+              <div
+                className={cn(
+                  "flex items-stretch",
+                  vertical && "min-w-0 flex-col"
+                )}
+              />
+            }
+          >
             {items.map((item, index) => {
               const active = item.id === activeId
 
@@ -261,8 +320,12 @@ export function TabStrip({
                     event.stopPropagation()
                     event.dataTransfer.dropEffect = "move"
                     const rect = event.currentTarget.getBoundingClientRect()
-                    const pastMiddle =
-                      event.clientX > rect.left + rect.width / 2
+                    // Along whichever axis the strip runs: past the middle of a
+                    // tab is past it, sideways in a row and downwards in a
+                    // column.
+                    const pastMiddle = vertical
+                      ? event.clientY > rect.top + rect.height / 2
+                      : event.clientX > rect.left + rect.width / 2
                     setDropIndex(pastMiddle ? index + 1 : index)
                   }}
                   onDrop={(event) => {
@@ -288,18 +351,28 @@ export function TabStrip({
                   }}
                   onContextMenu={() => setMenuTarget(item)}
                   className={cn(
-                    "group relative flex max-w-52 shrink-0 cursor-default items-center gap-1.5 border-r px-2.5 text-xs outline-none",
+                    "group relative flex shrink-0 cursor-default items-center gap-1.5 px-2.5 text-xs outline-none",
+                    vertical ? "border-b py-1.5" : "max-w-52 border-r",
                     active
-                      ? "border-t-2 border-t-primary bg-background pb-0.5 text-foreground"
+                      ? vertical
+                        ? // The accent on the edge the pane is on, pointing at
+                          // what the row is showing — where a row of tabs marks
+                          // its outer edge, a column beside the editor reads
+                          // better marking the one against it. `pl-2` gives the
+                          // 2px back so the label does not shift on selection.
+                          "border-l-2 border-l-primary bg-background pl-2 text-foreground"
+                        : "border-t-2 border-t-primary bg-background pb-0.5 text-foreground"
                       : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
                     dragId === item.id && "opacity-60"
                   )}
                 >
                   {/* Where the drop would land. The tabs themselves stay put
                     until then, so nothing shuffles under the pointer. */}
-                  {dropIndex === index && <DropLine side="left" />}
+                  {dropIndex === index && (
+                    <DropLine side={vertical ? "top" : "left"} />
+                  )}
                   {dropIndex === items.length && index === items.length - 1 && (
-                    <DropLine side="right" />
+                    <DropLine side={vertical ? "bottom" : "right"} />
                   )}
                   {item.icon}
                   <span className={cn("truncate font-mono", item.tone)}>
@@ -348,7 +421,12 @@ export function TabStrip({
           </ContextMenuTrigger>
 
           {trailing && (
-            <div className="ml-auto flex shrink-0 items-center pr-1">
+            <div
+              className={cn(
+                "flex shrink-0 items-center",
+                vertical ? "justify-end p-1" : "ml-auto pr-1"
+              )}
+            >
               {trailing}
             </div>
           )}

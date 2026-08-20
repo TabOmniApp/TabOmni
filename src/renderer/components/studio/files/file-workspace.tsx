@@ -19,6 +19,7 @@ import { IconButton } from "../icon-button"
 import { FileEditor } from "./file-editor"
 import { FileImage } from "./file-image"
 import { FileMarkdown } from "./file-markdown"
+import { FileBlocks } from "./file-blocks"
 
 /**
  * The open files, one editor each.
@@ -86,7 +87,7 @@ export function FileWorkspace() {
             filePath !== activeId && "invisible"
           )}
         >
-          <FilePane path={filePath} />
+          <FilePane path={filePath} visible={filePath === activeId} />
         </div>
       ))}
 
@@ -122,7 +123,7 @@ export function FileWorkspace() {
   )
 }
 
-function FilePane({ path }: { path: string }) {
+function FilePane({ path, visible }: { path: string; visible: boolean }) {
   const doc = useFiles((state) => state.docs[path])
   const image = useFiles((state) => state.images[path])
   const viewer = useFiles((state) => viewOf(state, path))
@@ -218,6 +219,7 @@ function FilePane({ path }: { path: string }) {
             path={path}
             doc={doc}
             viewer={viewer}
+            visible={visible}
             onChange={write}
             onSave={commit}
           />
@@ -234,12 +236,17 @@ function Body({
   path,
   doc,
   viewer,
+  visible,
   onChange,
   onSave,
 }: {
   path: string
   doc: FileDoc | undefined
   viewer: Viewer
+  /** Whether this pane is the one on screen — the note editor needs it, since
+   * the stacked editors share the drawing event and only the visible one may
+   * answer it. */
+  visible: boolean
   onChange: (text: string) => void
   onSave: () => void
 }) {
@@ -270,6 +277,22 @@ function Body({
   }
 
   if (viewer === "markdown") return <FileMarkdown text={doc.text} />
+
+  if (viewer === "blocks") {
+    return (
+      <FileBlocks
+        // The path is the identity here too — a renamed file is a fresh editor
+        // rather than one holding a document from a name that has moved.
+        key={path}
+        path={path}
+        // What was read, not what has been typed: the editor takes its document
+        // once, and `text` is what it will be writing back.
+        text={doc.text}
+        onChange={onChange}
+        visible={visible}
+      />
+    )
+  }
 
   return (
     <FileEditor

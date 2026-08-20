@@ -11,6 +11,8 @@ import {
 import path from "node:path"
 
 import type {
+  AssistantChat,
+  AssistantMessage,
   DatabaseRecord,
   DbEngine,
   DbOrigin,
@@ -18,7 +20,6 @@ import type {
   HttpEnvironment,
   HttpFolder,
   HttpRequestRecord,
-  InboxMessage,
   NoteBody,
   NoteFolder,
   NoteRecord,
@@ -80,7 +81,7 @@ export const DEFAULT_WORKSPACE_ID = "default"
  *
  * That separation is the whole rule: a folder is somebody's repository, and the
  * studio writes nothing into it that the user did not ask for. Requests,
- * cookies and captured mail are the studio's, so they live here.
+ * cookies and notes are the studio's, so they live here.
  */
 export const WORKSPACE_DIR = "workspace"
 
@@ -104,21 +105,18 @@ export const ENVIRONMENTS_FILE = "environments.json"
 /** The groups those requests are filed under. */
 export const FOLDERS_FILE = "folders.json"
 
-/**
- * What the Mail panel's SMTP sink caught.
- *
- * Capped by `InboxServers` before it reaches here — this file is rewritten
- * whole on every capture, and an uncapped one would grow until it was the
- * slowest thing the panel did.
- */
-export const MAIL_FILE = "mail.json"
-
-/** What that file was called while the Webhooks panel shared it. Read once, to
- * carry the mail across; see `listInbox`. */
-const LEGACY_INBOX_FILE = "inbox.json"
-
 /** The workspace's notes — their listing; each body is a file of its own. */
 export const NOTES_FILE = "notes.json"
+
+/**
+ * The assistant's chats — their listing; each chat's lines are a file of its
+ * own, the same split the notes have and for the same reason: sending a message
+ * rewrites one chat rather than all of them.
+ */
+export const CHATS_FILE = "chats.json"
+
+/** Where each chat's lines are kept, one `<id>.json` per chat. */
+export const CHATS_DIR = "chats"
 
 /** The groups those notes are filed under. */
 export const NOTE_FOLDERS_FILE = "note-folders.json"
@@ -589,6 +587,36 @@ export class Store {
     return this.writeList(COOKIES_FILE, cookies)
   }
 
+  listChats(): Promise<AssistantChat[]> {
+    return this.readList(CHATS_FILE)
+  }
+
+  saveChats(chats: AssistantChat[]): Promise<void> {
+    return this.writeList(CHATS_FILE, chats)
+  }
+
+  /** What was said in a chat, or none for one nothing has been written for. */
+  async readChat(id: string): Promise<AssistantMessage[]> {
+    const raw = await this.readOwnFile(this.chatPath(id))
+    if (!raw.trim()) return []
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      return Array.isArray(parsed) ? (parsed as AssistantMessage[]) : []
+    } catch {
+      // A chat is a log, not a document: a half-written file is worth an empty
+      // panel rather than an error in front of every other chat.
+      return []
+    }
+  }
+
+  writeChat(id: string, messages: AssistantMessage[]): Promise<void> {
+    return this.writeOwnFile(this.chatPath(id), JSON.stringify(messages))
+  }
+
+  deleteChats(ids: string[]): Promise<void> {
+    return this.deleteOwnFiles(ids.map((id) => this.chatPath(id)))
+  }
+
   listNotes(): Promise<NoteRecord[]> {
     return this.readList(NOTES_FILE)
   }
@@ -795,6 +823,10 @@ export class Store {
   }
 
   /** One note's blocks. */
+  private chatPath(id: string): string {
+    return path.join(this.workspaceDir, CHATS_DIR, `${ownId(id)}.json`)
+  }
+
   private noteBodyPath(id: string): string {
     return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.json`)
   }
@@ -860,42 +892,6 @@ export class Store {
         })
       )
     })
-  }
-
-  /**
-   * The captured mail, carrying `inbox.json` over the first time it is asked.
-   *
-   * That file held the Webhooks panel's captures too, and those records have no
-   * `mail` to render — so they are dropped here rather than left for a view
-   * that would read a field they do not have. Done on read rather than at
-   * launch because a workspace that never opens Mail should not pay for it, and
-   * the old file is removed once the new one is written so this happens once.
-   */
-  async listInbox(): Promise<InboxMessage[]> {
-    const messages = await this.readList<InboxMessage>(MAIL_FILE)
-    if (messages.length > 0) return messages
-
-    const legacy = await this.readList<InboxMessage>(LEGACY_INBOX_FILE)
-    if (legacy.length === 0) return messages
-
-    const mail = legacy.filter((message) => message.kind === "mail")
-    await this.saveInbox(mail)
-    await this.enqueue(async () => {
-      // A workspace left with both files would migrate again on the next run
-      // and undo whatever was deleted in between. Failing to remove it is not
-      // worth reporting: the mail is already safe under the new name.
-      await rm(path.join(this.workspaceDir, LEGACY_INBOX_FILE), {
-        force: true,
-      })
-    })
-    return mail
-  }
-
-  saveInbox(messages: InboxMessage[]): Promise<void> {
-    // Not pretty-printed, unlike its neighbours: nobody reads a captured mail's
-    // base64 attachment by hand, and the indentation is a real cost on a file
-    // rewritten on every capture.
-    return this.writeList(MAIL_FILE, messages, false)
   }
 
   /** Where a folder's commands and sessions run. */

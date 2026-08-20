@@ -2,7 +2,6 @@ import { relationId } from "../panels"
 import { oneLine, type Mention } from "./mention-text"
 import { useExplorer } from "../db/explorer-store"
 import { resolveUrl, useApi, variablesFrom } from "../http/store"
-import { useInbox } from "../inbox/store"
 import { useNotes } from "../note/store"
 
 /**
@@ -12,10 +11,10 @@ import { useNotes } from "../note/store"
  * This is the one feature that only a studio can have. An agent in an editor
  * can see the files and the terminal output; it cannot see the schema of the
  * database this project talks to, the request that reproduces a bug, or the
- * mail the app just sent — those live in other applications. Here they live in
- * the same window, in stores this module can read, so the round trip through
- * "open the other tool, copy something, paste it into the prompt" is a menu
- * instead.
+ * note that says what the payload has to look like — those live in other
+ * applications. Here they live in the same window, in stores this module can
+ * read, so the round trip through "open the other tool, copy something, paste
+ * it into the prompt" is a menu instead.
  *
  * **Everything is resolved from what the renderer already has.** No IPC of its
  * own, no query run to answer a keystroke: a table's columns are the ones the
@@ -109,26 +108,6 @@ function requestMentions(): Mention[] {
   })
 }
 
-/** A captured mail as its envelope and its text — what the sink has, not a
- * second copy of it. */
-function mailMentions(): Mention[] {
-  return useInbox.getState().messages.map((message) => {
-    const { subject, from, to, text, html } = message.mail
-    const body = text.trim() || (html.trim() ? "(html only)" : "(empty)")
-
-    return {
-      id: `mail:${message.id}`,
-      kind: "mail",
-      label: subject || "(no subject)",
-      detail: `from ${from}`,
-      resolve: () =>
-        Promise.resolve(
-          `mail "${subject}" from ${from} to ${to.join(", ")} · ${oneLine(body)}`
-        ),
-    }
-  })
-}
-
 /**
  * A note as its own text.
  *
@@ -170,9 +149,6 @@ export function primeMentions(): void {
   if (useNotes.getState().notes.length === 0) {
     void useNotes.getState().refresh().catch(noop)
   }
-  if (useInbox.getState().messages.length === 0) {
-    void useInbox.getState().refresh().catch(noop)
-  }
 }
 
 /** A failed read leaves the menu without those rows, which is the right answer
@@ -183,17 +159,12 @@ function noop() {}
  * Everything mentionable right now, in the order the panels sit on the rail.
  *
  * Read on every keystroke rather than cached: a table read a moment ago, a
- * request just saved and a mail that arrived while the prompt was being typed
- * are exactly the things somebody reaches for, and a stale menu would be the
- * one that leaves them out.
+ * request just saved and a note written while the prompt was being typed are
+ * exactly the things somebody reaches for, and a stale menu would be the one
+ * that leaves them out.
  */
 export function mentions(): Mention[] {
-  return [
-    ...tableMentions(),
-    ...requestMentions(),
-    ...mailMentions(),
-    ...noteMentions(),
-  ]
+  return [...tableMentions(), ...requestMentions(), ...noteMentions()]
 }
 
 /** The live catalogue as a lookup, for `expandMentions` at send time. */

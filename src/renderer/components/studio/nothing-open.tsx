@@ -22,7 +22,6 @@ const HINTS: Record<Section, string> = {
     "Pick a file from the tree on the left, or start a session or open a conversation from the lists under it.",
   database: "Pick a table from the list on the left, or open a query tab.",
   api: "Pick a request from the list on the left, or create one.",
-  mail: "Mail caught by the SMTP sink on the left opens here.",
   note: "Pick a note from the list on the left, or write a new one.",
 }
 
@@ -32,8 +31,8 @@ const HINTS: Record<Section, string> = {
  *
  * The tab strip belongs to the workbench and not to a panel, so "nothing is on
  * screen" is a fact about the workbench. Each panel answering it separately
- * meant the Database panel's "No table selected" spoke for all five — telling
- * somebody who had come to read captured mail to pick a table, because
+ * meant the Database panel's "No table selected" spoke for all of them —
+ * telling somebody who had come to read a note to pick a table, because
  * `database` is the pane a fresh launch starts on.
  *
  * Two things to say, and which one depends on the strip rather than on the

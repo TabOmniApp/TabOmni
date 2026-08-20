@@ -35,3 +35,16 @@
 .drag-region [role="combobox"] {
   -webkit-app-region: no-drag;
 }
+
+/*
+ * Claimed by hand, for the corner of the title bar that holds a button.
+ *
+ * The button is already outside the drag region rather than inside it, so this
+ * is not the opt-out above — it is against a *stale* rect. macOS keeps a drag
+ * region after the element that asked for it is gone (electron#20926), and the
+ * launch screen draws one across the top of the window on every run
+ * (`TitleBarDragStrip`), which is exactly the corner this is on.
+ */
+.no-drag {
+  -webkit-app-region: no-drag;
+}

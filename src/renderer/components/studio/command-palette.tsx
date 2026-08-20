@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { defaultFilter } from "cmdk"
-import { File, FileText, Mail } from "lucide-react"
+import { File, FileText } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import {
@@ -18,7 +18,6 @@ import { useDbTree } from "@/lib/db/tree-store"
 import { useFiles } from "@/lib/files/store"
 import { shortlist } from "@/lib/files/search"
 import { useApi } from "@/lib/http/store"
-import { useInbox } from "@/lib/inbox/store"
 import { nameOf } from "@/lib/files/paths"
 import { useNotes } from "@/lib/note/store"
 import { isStudioShortcut } from "@/lib/shortcuts"
@@ -96,7 +95,7 @@ export function CommandPalette() {
       open={open}
       onOpenChange={setOpen}
       title="Go to"
-      description="Search the workspace's files, tables, requests, captures, sessions and notes."
+      description="Search the workspace's files, tables, requests, sessions and notes."
       className="sm:max-w-xl"
     >
       {/* A child of the dialog, so the stores below are subscribed to
@@ -146,7 +145,7 @@ function Palette({ onOpened }: { onOpened: () => void }) {
     <Command filter={score}>
       <CommandInput
         autoFocus
-        placeholder="Search files, tables, requests, captures, sessions and notes…"
+        placeholder="Search files, tables, requests, sessions and notes…"
         // A failure is about the row that was picked, so the next keystroke —
         // which is on the way to picking another one — is what clears it.
         onValueChange={(value) => {
@@ -266,8 +265,6 @@ function useEntries(query: string): Group[] {
   const requests = useApi((state) => state.requests)
   const apiFolders = useApi((state) => state.folders)
 
-  const messages = useInbox((state) => state.messages)
-
   const sessions = useTerminal((state) => state.sessions)
   const folders = useStudio((state) => state.folders)
 
@@ -354,23 +351,6 @@ function useEntries(query: string): Group[] {
       }
     })
 
-    const captures: Entry[] = messages.map((message) => ({
-      value: PREFIX.mail + message.id,
-      label: message.summary,
-      hint: message.mail.from,
-      keywords: [
-        message.summary,
-        message.mail.from,
-        message.mail.headerFrom,
-        ...message.mail.to,
-      ],
-      icon: <Mail className="size-3.5 shrink-0" />,
-      open: async () => {
-        useInbox.getState().select(message.id)
-        return null
-      },
-    }))
-
     // The running sessions, which is what the strip holds too: a closed one has
     // no pty, so there is no pane for the palette to send anyone to.
     const live = liveSessions(sessions)
@@ -416,7 +396,6 @@ function useEntries(query: string): Group[] {
       { heading: "Files", entries: fileEntries },
       { heading: "Database", entries: tables },
       { heading: "API", entries: apiEntries },
-      { heading: "Mail", entries: captures },
       { heading: "Terminal", entries: terminals },
       { heading: "Notes", entries: noteEntries },
       // A heading with nothing under it reads as something having failed to
@@ -430,7 +409,6 @@ function useEntries(query: string): Group[] {
     branches,
     requests,
     apiFolders,
-    messages,
     sessions,
     folders,
     notes,

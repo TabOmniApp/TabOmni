@@ -2,7 +2,6 @@ import { useExplorer, type OpenTab } from "./db/explorer-store"
 import type { Relation } from "./db/engines/types"
 import { useFiles } from "./files/store"
 import { useApi } from "./http/store"
-import { useInbox } from "./inbox/store"
 import { useNotes } from "./note/store"
 import { PANES, useStudio, type Pane } from "./store"
 import { arrange, bare, kindOf, neighbour, PREFIX } from "./tabs"
@@ -58,7 +57,6 @@ type ExplorerState = ReturnType<typeof useExplorer.getState>
 type FilesState = ReturnType<typeof useFiles.getState>
 type ChatState = ReturnType<typeof useConversations.getState>
 type ApiState = ReturnType<typeof useApi.getState>
-type InboxState = ReturnType<typeof useInbox.getState>
 type NoteState = ReturnType<typeof useNotes.getState>
 type TerminalState = ReturnType<typeof useTerminal.getState>
 
@@ -92,11 +90,6 @@ const filesActive = (files: FilesState, chats: ChatState): string | null =>
   chatSelected(chats) ?? fileSelected(files)
 
 const apiActive = (state: ApiState): string | null =>
-  state.selectedId && state.openIds.includes(state.selectedId)
-    ? state.selectedId
-    : null
-
-const mailActive = (state: InboxState): string | null =>
   state.selectedId && state.openIds.includes(state.selectedId)
     ? state.selectedId
     : null
@@ -174,15 +167,6 @@ const PANELS: Record<Pane, PanelTabs> = {
     closeOthers: (id) => useApi.getState().closeOthers(id),
     closeAll: () => useApi.getState().closeAll(),
     reorder: (ids) => useApi.getState().reorder(ids),
-  },
-  mail: {
-    open: () => useInbox.getState().openIds,
-    active: () => mailActive(useInbox.getState()),
-    select: (id) => useInbox.getState().select(id),
-    close: (id) => useInbox.getState().close(id),
-    closeOthers: (id) => useInbox.getState().closeOthers(id),
-    closeAll: () => useInbox.getState().closeAll(),
-    reorder: (ids) => useInbox.getState().reorder(ids),
   },
   terminal: {
     // A closed session is a row in Explorer's Sessions list and nothing else:
@@ -336,7 +320,6 @@ export function useActiveTabId(pane: Pane): string | null {
     files: chat ?? file,
     database: useExplorer(dbActive),
     api: useApi(apiActive),
-    mail: useInbox(mailActive),
     terminal: useTerminal(terminalActive),
     note: useNotes(noteActive),
   }[pane]
@@ -353,13 +336,12 @@ export function useHasOpenTabs(): boolean {
   const chats = useConversations((state) => state.open.length > 0)
   const database = useExplorer((state) => dbOpen(state).length > 0)
   const api = useApi((state) => state.openIds.length > 0)
-  const mail = useInbox((state) => state.openIds.length > 0)
   const terminal = useTerminal(
     (state) => liveSessions(state.sessions).length > 0
   )
   const note = useNotes((state) => state.openIds.length > 0)
 
-  return files || chats || database || api || mail || terminal || note
+  return files || chats || database || api || terminal || note
 }
 
 /** A relation tab is addressed by the relation it shows; a query tab by its

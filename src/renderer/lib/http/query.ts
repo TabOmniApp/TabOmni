@@ -1,87 +1,23 @@
 import type { HttpParkedParam } from "@shared/api"
+import type { QueryParam } from "@shared/http-request"
 
-/**
- * The query string of a request URL, as a list.
- *
- * A parameter that is going to be sent lives in the URL and nowhere else: two
- * copies would be two things to keep in step, and the moment they disagree
- * the user cannot tell which one will be sent. Only an unticked parameter is
- * kept aside — it has no place in a URL, and there is no ambiguity about
- * something that is not being sent.
+/*
+ * The pure half of a URL — splitting it, putting it back, and substituting
+ * `{{name}}` — now lives in `@shared/http-request`, because the main process
+ * sends the workspace's saved requests too (`main/mcp.ts`) and had to resolve
+ * them the same way. Re-exported here so this file is still the one place the
+ * panel asks about a query string.
  */
-export type QueryParam = {
-  name: string
-  value: string
-}
+export {
+  joinQuery,
+  splitQuery,
+  substitute,
+  unresolved,
+  type QueryParam,
+} from "@shared/http-request"
 
 /** A row of the parameters table: in the URL, or parked beside it. */
 export type ParamRow = QueryParam & { enabled: boolean }
-
-/**
- * Splits a URL around its query string.
- *
- * String work rather than `new URL`: what the user typed is often neither
- * absolute nor finished — `{{baseUrl}}/users?id=1` has no scheme to parse.
- */
-export function splitQuery(url: string): {
-  /** Everything before the `?`. */
-  base: string
-  params: QueryParam[]
-  /** Everything from `#` on, kept aside so rewriting the query cannot eat it. */
-  hash: string
-}
-export function splitQuery(url: string) {
-  const hashAt = url.indexOf("#")
-  const hash = hashAt === -1 ? "" : url.slice(hashAt)
-  const withoutHash = hashAt === -1 ? url : url.slice(0, hashAt)
-
-  const queryAt = withoutHash.indexOf("?")
-  if (queryAt === -1) return { base: withoutHash, params: [], hash }
-
-  const query = withoutHash.slice(queryAt + 1)
-  const params = query === "" ? [] : query.split("&").map(parsePair)
-  return { base: withoutHash.slice(0, queryAt), params, hash }
-}
-
-function parsePair(pair: string): QueryParam {
-  const equals = pair.indexOf("=")
-  if (equals === -1) return { name: decode(pair), value: "" }
-  return {
-    name: decode(pair.slice(0, equals)),
-    value: decode(pair.slice(equals + 1)),
-  }
-}
-
-/** Percent-decoding that survives a half-typed escape like `%z`. */
-function decode(part: string): string {
-  try {
-    return decodeURIComponent(part.replaceAll("+", " "))
-  } catch {
-    return part
-  }
-}
-
-/**
- * Puts a URL back together.
- *
- * An unnamed parameter is kept rather than dropped: a row being renamed is
- * empty for a keystroke or two, and dropping it would take the input the user
- * is typing in with it. Emptying the list drops the `?` altogether.
- */
-export function joinQuery(
-  base: string,
-  params: QueryParam[],
-  hash: string
-): string {
-  if (params.length === 0) return base + hash
-  const query = params
-    .map(
-      (param) =>
-        `${encodeURIComponent(param.name)}=${encodeURIComponent(param.value)}`
-    )
-    .join("&")
-  return `${base}?${query}${hash}`
-}
 
 /** A name for a parameter added by hand, unique among the ones already there. */
 export function nextParamName(rows: { name: string }[]): string {
@@ -90,31 +26,6 @@ export function nextParamName(rows: { name: string }[]): string {
   let index = 2
   while (taken.has(`param${index}`)) index++
   return `param${index}`
-}
-
-/** `{{name}}` — the only interpolation syntax the client understands. */
-const VARIABLE = /\{\{\s*([\w.-]+)\s*\}\}/g
-
-/**
- * Replaces every `{{name}}` with the value the active environment gives it.
- *
- * A name nothing defines is left exactly as written rather than blanked: a
- * request that quietly sent `/users/` instead of `/users/{{id}}` would be far
- * harder to notice than one that plainly still says `{{id}}`.
- */
-export function substitute(
-  text: string,
-  variables: Record<string, string>
-): string {
-  return text.replace(VARIABLE, (whole, name: string) =>
-    name in variables ? variables[name]! : whole
-  )
-}
-
-/** The names still unresolved in a piece of text, in order, without repeats. */
-export function unresolved(text: string): string[] {
-  const names = [...text.matchAll(VARIABLE)].map((match) => match[1]!)
-  return [...new Set(names)]
 }
 
 /**

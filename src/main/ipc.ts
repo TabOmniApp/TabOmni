@@ -15,7 +15,9 @@ import {
 import {
   CLAUDE_MODEL_KEY,
   CLAUDE_PERMISSION_MODE_KEY,
+  HTTP_ENVIRONMENT_KEY,
   IPC,
+  MCP_SETTING_KEYS,
   type AgentKind,
   type ClaudeModel,
   type ClaudePermissionMode,
@@ -38,6 +40,7 @@ import {
   agentInstallCommand,
   agentToolStatuses,
 } from "./agent-tools"
+import { Assistant } from "./assistant"
 import { claudeSlashCommands } from "./claude-commands"
 import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
@@ -45,7 +48,7 @@ import * as files from "./files"
 import { MAX_INDEXED_FILES } from "./files"
 import { currentBranch, workingTree } from "./git"
 import { sendHttp } from "./http"
-import { InboxServers } from "./inbox"
+import { McpServers } from "./mcp"
 import { NotePreview } from "./preview"
 import { ProcessManager } from "./process"
 import { claudeUsageLimits } from "./claude-usage"
@@ -142,8 +145,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   docker: DockerRuntime
   transcripts: TranscriptMirrors
   terminals: TerminalManager
-  inbox: InboxServers
   preview: NotePreview
+  mcp: McpServers
+  assistant: Assistant
   tsServers: TsServers
   watchers: DirectoryWatchers
   noteFilePath: (fileName: string) => string
@@ -177,17 +181,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     send(IPC.transcriptEvent, event)
   )
 
-  const inbox = new InboxServers(
-    {
-      message: (message) => send(IPC.inboxMessage, { message }),
-      status: (status) => send(IPC.inboxStatusChanged, { status }),
-    },
-    {
-      load: () => store.listInbox(),
-      save: (messages) => store.saveInbox(messages),
-    }
-  )
-
   // Reads the workspace's own files and nothing else — the preview is a view
   // of what is on disk, so it is handed the four reads it needs rather than
   // the store.
@@ -201,6 +194,89 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     noteFile: (name) => store.readNoteFile(name),
     hasNoteFile: (name) => store.hasNoteFile(name),
   })
+
+  /**
+   * The workspace as tools, for an agent session started here.
+   *
+   * Assembled from the same `store` and the same `sqlConnections` the panels
+   * are served from — an agent reads what the window reads, not a copy — and
+   * every reach is spelled out here rather than the store being handed over
+   * whole, the way the note preview's is.
+   */
+  const mcp = new McpServers({
+    enabled: async (server) =>
+      (await store.getSetting(MCP_SETTING_KEYS[server])) === "true",
+
+    databases: () => store.listDatabases(),
+    query: (databaseId, sql, params) =>
+      sqlConnections.query(databaseId, sql, params),
+
+    requests: () => store.listRequests(),
+    requestFolders: () => store.listRequestFolders(),
+    environments: () => store.listEnvironments(),
+    activeEnvironmentId: async () =>
+      (await store.getSetting(HTTP_ENVIRONMENT_KEY)) || null,
+    send: (input) => sendHttp(input),
+
+    notes: () => store.listNotes(),
+    noteFolders: () => store.listNoteFolders(),
+    noteBody: (id) => store.readNote(id),
+    // Written as markdown rather than as the editor's block model: converting
+    // markdown into blocks needs the parser only the renderer has, and the
+    // store already hands a markdown body over as it found it — the editor
+    // converts it on first open, exactly as it does for a note written by an
+    // older build.
+    createNote: async ({ name, folderId, markdown }) => {
+      const now = new Date().toISOString()
+      const note: NoteRecord = {
+        id: randomUUID(),
+        name: name || "Untitled",
+        folderId,
+        createdAt: now,
+        updatedAt: now,
+      }
+      await store.writeNote(note.id, { format: "markdown", text: markdown })
+      await store.saveNotes([...(await store.listNotes()), note])
+      // The Notes panel is holding the listing it read at launch, so a note
+      // that appeared underneath it has to be announced or it stays invisible
+      // until the next run.
+      send(IPC.notesChanged, null)
+      return note
+    },
+  })
+
+  /**
+   * The workspace assistant — `claude -p`, one conversation, the MCP servers in
+   * front of it.
+   *
+   * Given the same config the sessions get, so what it can reach is the same
+   * three switches in Settings; and every folder, since the whole point of it
+   * is a conversation about the workspace rather than about a repository.
+   */
+  const assistant = new Assistant(
+    {
+      mcpConfig: () => mcp.configPath(),
+      folders: async () =>
+        (await store.getWorkspace()).folders.map((folder) => folder.path),
+      chats: () => store.listChats(),
+      saveChats: (chats) => store.saveChats(chats),
+      readChat: (id) => store.readChat(id),
+      writeChat: (id, messages) => store.writeChat(id, messages),
+      deleteChat: (id) => store.deleteChats([id]),
+    },
+    (event) => send(IPC.assistantEvent, event)
+  )
+
+  ipcMain.handle(IPC.assistantSend, (_event, prompt: string) =>
+    assistant.send(prompt)
+  )
+  ipcMain.handle(IPC.assistantStop, () => assistant.stop())
+  ipcMain.handle(IPC.assistantChats, () => assistant.chats())
+  ipcMain.handle(IPC.assistantOpen, (_event, id: string) => assistant.open(id))
+  ipcMain.handle(IPC.assistantNew, () => assistant.new())
+  ipcMain.handle(IPC.assistantDelete, (_event, id: string) =>
+    assistant.delete(id)
+  )
 
   /** The account a Docker-managed database is created with. */
   const DB_USER = "tabomni"
@@ -713,20 +789,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.notePreviewUrl, (_event, id: string) => preview.urlOf(id))
 
-  ipcMain.handle(IPC.inboxStart, (_event, port: number) => inbox.start(port))
-
-  ipcMain.handle(IPC.inboxStop, () => inbox.stop())
-
-  ipcMain.handle(IPC.inboxStatus, () => inbox.status())
-
-  ipcMain.handle(IPC.inboxMessages, () => inbox.messages())
-
-  ipcMain.handle(IPC.inboxMarkRead, (_event, id: string) => inbox.markRead(id))
-
-  ipcMain.handle(IPC.inboxDelete, (_event, id: string) => inbox.remove(id))
-
-  ipcMain.handle(IPC.inboxClear, () => inbox.clear())
-
   ipcMain.handle(IPC.agentTools, () => agentToolStatuses())
 
   ipcMain.handle(IPC.claudeCommands, async (_event, folderId: string) =>
@@ -761,9 +823,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       // sets them and the pane that starts a session are different
       // components, and a session started any other way (a restore, a
       // restart) would otherwise quietly lose the workspace's choice.
-      const [model, permissionMode] = await Promise.all([
+      const [model, permissionMode, mcpConfig] = await Promise.all([
         store.getSetting(CLAUDE_MODEL_KEY),
         store.getSetting(CLAUDE_PERMISSION_MODE_KEY),
+        // Null unless a server is switched on, and read here for the same
+        // reason the two above are: what the workspace offers an agent is a
+        // setting, not something the pane that started the session knows.
+        kind === "claude" ? mcp.configPath() : Promise.resolve(null),
       ])
       // A tab that already has a conversation continues it rather than
       // starting another — which is what makes "Restart to apply" cost the
@@ -781,6 +847,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           permissionMode: permissionMode as ClaudePermissionMode | null,
           claudeSessionId,
           resume,
+          mcpConfig,
         }),
       }
       return terminals.create(target, cols, rows)
@@ -831,10 +898,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   return {
     processes,
     sqlConnections,
+    mcp,
+    assistant,
     docker,
     transcripts,
     terminals,
-    inbox,
     preview,
     tsServers,
     watchers,

@@ -1,7 +1,7 @@
 import type { Pane } from "./store"
 
 /**
- * How the workbench's one tab strip addresses tabs belonging to six panels.
+ * How the workbench's one tab strip addresses tabs belonging to five panels.
  *
  * The strip hands back an id and nothing else, so which panel a tab belongs to
  * has to travel in the id itself — `db:public.users`, `api:<uuid>`. Kept apart
@@ -12,7 +12,6 @@ export const PREFIX: Record<Pane, string> = {
   files: "file:",
   database: "db:",
   api: "api:",
-  mail: "mail:",
   terminal: "term:",
   note: "note:",
 }
@@ -21,7 +20,6 @@ export function kindOf(id: string): Pane | null {
   if (id.startsWith(PREFIX.files)) return "files"
   if (id.startsWith(PREFIX.database)) return "database"
   if (id.startsWith(PREFIX.api)) return "api"
-  if (id.startsWith(PREFIX.mail)) return "mail"
   if (id.startsWith(PREFIX.terminal)) return "terminal"
   if (id.startsWith(PREFIX.note)) return "note"
   return null

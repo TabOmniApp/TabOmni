@@ -139,8 +139,8 @@ class TsServer {
    * A read can land mid-header, mid-body, or carry three messages at once —
    * this is a socket, not a stream of messages — so the buffer is drained in a
    * loop and whatever is left is kept for the next chunk. The same shape as the
-   * SMTP sink's reader in `inbox.ts`, and broken by the same thing if it were
-   * written naively.
+   * daemon's newline-delimited reader in `daemon-client.ts`, and broken by the
+   * same thing if it were written naively.
    */
   private receive(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk])

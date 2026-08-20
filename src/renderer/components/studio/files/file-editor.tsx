@@ -5,8 +5,8 @@ import { lazy, Suspense } from "react"
  *
  * Monaco is around four megabytes of grammars and workers — worth it for the
  * panel whose whole job is editing source, and not worth adding to the launch
- * of a studio somebody opened to read captured mail. `lazy` is what splits it
- * out; the Notes panel loads Excalidraw the same way and for the same reason.
+ * of a studio somebody opened to read a note. `lazy` is what splits it out; the
+ * Notes panel loads Excalidraw the same way and for the same reason.
  */
 const MonacoFileEditor = lazy(() => import("./monaco-editor"))
 

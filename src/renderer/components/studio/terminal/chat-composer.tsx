@@ -142,7 +142,7 @@ function ComposerEditor({
         .use(claudeSlash)
     }
 
-    // `@` is the studio's own: the tables, requests, mail and notes the other
+    // `@` is the studio's own: the tables, requests and notes the other
     // panels are holding, one line of context each. Offered to every kind of
     // session rather than only to `claude` — what it sends is plain text, and a
     // shell being told what a table's columns are is a comment at worst.
@@ -737,7 +737,7 @@ function ComposerBody({
           {/* For every kind of session: what this inserts is text, and the
               panels it reads are the workspace's rather than a session's. */}
           <IconButton
-            label="Mention a table, request, mail or note"
+            label="Mention a table, request or note"
             onClick={insertMention}
             disabled={disabled}
           >

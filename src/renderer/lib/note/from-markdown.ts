@@ -26,12 +26,20 @@ let parser: BlockNoteEditor | null = null
  * parser, and `adoptDrawingFences` is what turns the drawing ones back into
  * drawing blocks afterwards. Keeping the drawing block out of here is what
  * keeps this file — and so the store — clear of the component layer.
+ *
+ * `drawings: false` leaves the fences as the code blocks they parsed to. That
+ * is for a `.md` in one of the workspace's folders, which the block editor
+ * writes *back* to markdown: a drawing block has no markdown of its own, so a
+ * fence promoted to one there would be a fence that does not survive the next
+ * save. As a code block holding an id it round-trips exactly.
  */
-export function blocksFromMarkdown(markdown: string): NoteBlock[] {
+export function blocksFromMarkdown(
+  markdown: string,
+  { drawings = true }: { drawings?: boolean } = {}
+): NoteBlock[] {
   parser ??= BlockNoteEditor.create()
-  return adoptDrawingFences(
-    parser.tryParseMarkdownToBlocks(markdown) as NoteBlock[]
-  )
+  const blocks = parser.tryParseMarkdownToBlocks(markdown) as NoteBlock[]
+  return drawings ? adoptDrawingFences(blocks) : blocks
 }
 
 /** Whichever of the two formats came back, as blocks. */

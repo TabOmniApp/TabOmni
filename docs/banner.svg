@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1280 640" width="1280" height="640" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-  <title>TabOmni — databases, APIs, mail, webhooks, terminals and notes, filed as tabs in one window</title>
+  <title>TabOmni — folders, databases, APIs, terminals and notes, filed as tabs in one window</title>
 
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -71,112 +71,93 @@
   <!-- ── connectors: every source flows into the hub ───────────────── -->
   <g fill="none" stroke-linecap="round">
     <g stroke-width="1.6" stroke-opacity="0.40">
-      <path d="M288 130 C 378 130, 438 320, 524 320" stroke="#7C5CFA"/>
-      <path d="M288 206 C 378 206, 438 320, 524 320" stroke="#6A8BFF"/>
-      <path d="M288 282 C 386 282, 440 320, 524 320" stroke="#A78BFA"/>
-      <path d="M288 358 C 386 358, 440 320, 524 320" stroke="#8FB4FF"/>
-      <path d="M288 434 C 378 434, 438 320, 524 320" stroke="#C4B5FD"/>
-      <path d="M288 510 C 378 510, 438 320, 524 320" stroke="#5B7CFA"/>
+      <path d="M288 168 C 378 168, 438 320, 524 320" stroke="#8FB4FF"/>
+      <path d="M288 244 C 386 244, 440 320, 524 320" stroke="#7C5CFA"/>
+      <path d="M288 320 C 386 320, 440 320, 524 320" stroke="#6A8BFF"/>
+      <path d="M288 396 C 386 396, 440 320, 524 320" stroke="#C4B5FD"/>
+      <path d="M288 472 C 378 472, 438 320, 524 320" stroke="#5B7CFA"/>
     </g>
     <!-- travelling pulse; static line above still reads if SMIL is stripped -->
     <g stroke-width="2.6" stroke-dasharray="6 320" stroke-opacity="0.95">
-      <path d="M288 130 C 378 130, 438 320, 524 320" stroke="#9B7BFF">
+      <path d="M288 168 C 378 168, 438 320, 524 320" stroke="#A9CBFF">
         <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="0s" repeatCount="indefinite"/>
       </path>
-      <path d="M288 206 C 378 206, 438 320, 524 320" stroke="#8AA6FF">
-        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="0.5s" repeatCount="indefinite"/>
+      <path d="M288 244 C 386 244, 440 320, 524 320" stroke="#9B7BFF">
+        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="0.6s" repeatCount="indefinite"/>
       </path>
-      <path d="M288 282 C 386 282, 440 320, 524 320" stroke="#BFA6FF">
-        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="1s" repeatCount="indefinite"/>
+      <path d="M288 320 C 386 320, 440 320, 524 320" stroke="#8AA6FF">
+        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="1.2s" repeatCount="indefinite"/>
       </path>
-      <path d="M288 358 C 386 358, 440 320, 524 320" stroke="#A9CBFF">
-        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="1.5s" repeatCount="indefinite"/>
+      <path d="M288 396 C 386 396, 440 320, 524 320" stroke="#D5C8FF">
+        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="1.8s" repeatCount="indefinite"/>
       </path>
-      <path d="M288 434 C 378 434, 438 320, 524 320" stroke="#D5C8FF">
-        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="2s" repeatCount="indefinite"/>
-      </path>
-      <path d="M288 510 C 378 510, 438 320, 524 320" stroke="#7C97FF">
-        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="2.5s" repeatCount="indefinite"/>
+      <path d="M288 472 C 378 472, 438 320, 524 320" stroke="#7C97FF">
+        <animate attributeName="stroke-dashoffset" values="326;0" dur="3s" begin="2.4s" repeatCount="indefinite"/>
       </path>
     </g>
   </g>
 
   <!-- ── the sources ───────────────────────────────────────────────── -->
   <g>
+    <!-- Files -->
+    <g>
+      <rect x="56" y="139" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#8FB4FF" stroke-opacity="0.32"/>
+      <rect x="70" y="151" width="34" height="34" rx="9" fill="#8FB4FF" fill-opacity="0.18"/>
+      <g transform="translate(77,158)" fill="none" stroke="#B7D0FF" stroke-width="1.5" stroke-linecap="round">
+        <path d="M2.9 4.2 h5 l1.9 2.4 h7.4 a1.5 1.5 0 0 1 1.5 1.5 v7.2 a1.5 1.5 0 0 1 -1.5 1.5 H2.9 a1.5 1.5 0 0 1 -1.5 -1.5 V5.7 A1.5 1.5 0 0 1 2.9 4.2z"/>
+      </g>
+      <text x="118" y="165" font-size="15" font-weight="600" fill="#F2EFFF">Files &amp; folders</text>
+      <text x="118" y="183" font-size="11.5" fill="#A99FCB">read where they are</text>
+    </g>
+
     <!-- Databases -->
     <g>
-      <rect x="56" y="101" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#7C5CFA" stroke-opacity="0.32"/>
-      <rect x="70" y="113" width="34" height="34" rx="9" fill="#7C5CFA" fill-opacity="0.18"/>
-      <g transform="translate(77,120)" fill="none" stroke="#B49BFF" stroke-width="1.5" stroke-linecap="round">
+      <rect x="56" y="215" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#7C5CFA" stroke-opacity="0.32"/>
+      <rect x="70" y="227" width="34" height="34" rx="9" fill="#7C5CFA" fill-opacity="0.18"/>
+      <g transform="translate(77,234)" fill="none" stroke="#B49BFF" stroke-width="1.5" stroke-linecap="round">
         <ellipse cx="10" cy="4.5" rx="7.5" ry="2.8"/>
         <path d="M2.5 4.5 v10.5 c0 1.6 3.4 2.8 7.5 2.8 s7.5 -1.2 7.5 -2.8 V4.5"/>
         <path d="M2.5 10 c0 1.6 3.4 2.8 7.5 2.8 s7.5 -1.2 7.5 -2.8"/>
       </g>
-      <text x="118" y="127" font-size="15" font-weight="600" fill="#F2EFFF">Databases</text>
-      <text x="118" y="145" font-size="11.5" fill="#A99FCB">Postgres · MySQL · Docker</text>
+      <text x="118" y="241" font-size="15" font-weight="600" fill="#F2EFFF">Databases</text>
+      <text x="118" y="259" font-size="11.5" fill="#A99FCB">Postgres · MySQL · Docker</text>
     </g>
 
     <!-- APIs -->
     <g>
-      <rect x="56" y="177" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#6A8BFF" stroke-opacity="0.32"/>
-      <rect x="70" y="189" width="34" height="34" rx="9" fill="#6A8BFF" fill-opacity="0.18"/>
-      <g transform="translate(77,196)" fill="none" stroke="#A6BEFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="56" y="291" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#6A8BFF" stroke-opacity="0.32"/>
+      <rect x="70" y="303" width="34" height="34" rx="9" fill="#6A8BFF" fill-opacity="0.18"/>
+      <g transform="translate(77,310)" fill="none" stroke="#A6BEFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 6.5 h11 m-3.5 -3.5 3.5 3.5 -3.5 3.5"/>
         <path d="M17 13.5 h-11 m3.5 -3.5 -3.5 3.5 3.5 3.5"/>
       </g>
-      <text x="118" y="203" font-size="15" font-weight="600" fill="#F2EFFF">HTTP endpoints</text>
-      <text x="118" y="221" font-size="11.5" fill="#A99FCB">requests · envs · cookies</text>
-    </g>
-
-    <!-- Mail -->
-    <g>
-      <rect x="56" y="253" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#A78BFA" stroke-opacity="0.32"/>
-      <rect x="70" y="265" width="34" height="34" rx="9" fill="#A78BFA" fill-opacity="0.18"/>
-      <g transform="translate(77,272)" fill="none" stroke="#C7B3FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="2.5" y="4.5" width="15" height="11" rx="2.2"/>
-        <path d="M3.2 6 l6.8 5.4 6.8 -5.4"/>
-      </g>
-      <text x="118" y="279" font-size="15" font-weight="600" fill="#F2EFFF">Mail the app sends</text>
-      <text x="118" y="297" font-size="11.5" fill="#A99FCB">an SMTP sink on loopback</text>
-    </g>
-
-    <!-- Webhooks -->
-    <g>
-      <rect x="56" y="329" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#8FB4FF" stroke-opacity="0.32"/>
-      <rect x="70" y="341" width="34" height="34" rx="9" fill="#8FB4FF" fill-opacity="0.18"/>
-      <g transform="translate(77,348)" fill="none" stroke="#B7D0FF" stroke-width="1.5" stroke-linecap="round">
-        <circle cx="5" cy="14.2" r="2.5"/>
-        <circle cx="15" cy="14.2" r="2.5"/>
-        <circle cx="10" cy="5.2" r="2.5"/>
-        <path d="M6.5 12.1 8.7 7.4 M11.4 7.4 13.5 12.1 M7.5 14.2 h5"/>
-      </g>
-      <text x="118" y="355" font-size="15" font-weight="600" fill="#F2EFFF">Webhooks fired at it</text>
-      <text x="118" y="373" font-size="11.5" fill="#A99FCB">a catch-all bin, replayable</text>
+      <text x="118" y="317" font-size="15" font-weight="600" fill="#F2EFFF">HTTP endpoints</text>
+      <text x="118" y="335" font-size="11.5" fill="#A99FCB">requests · envs · cookies</text>
     </g>
 
     <!-- Terminal + agents -->
     <g>
-      <rect x="56" y="405" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#C4B5FD" stroke-opacity="0.32"/>
-      <rect x="70" y="417" width="34" height="34" rx="9" fill="#C4B5FD" fill-opacity="0.18"/>
-      <g transform="translate(77,424)" fill="none" stroke="#DACDFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="56" y="367" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#C4B5FD" stroke-opacity="0.32"/>
+      <rect x="70" y="379" width="34" height="34" rx="9" fill="#C4B5FD" fill-opacity="0.18"/>
+      <g transform="translate(77,386)" fill="none" stroke="#DACDFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <path d="M4 5.5 l4.8 4.6 -4.8 4.6"/>
         <path d="M10.5 14.7 h6.5"/>
       </g>
-      <text x="118" y="431" font-size="15" font-weight="600" fill="#F2EFFF">Shells &amp; agents</text>
-      <text x="118" y="449" font-size="11.5" fill="#A99FCB">a pty in each folder</text>
+      <text x="118" y="393" font-size="15" font-weight="600" fill="#F2EFFF">Shells &amp; agents</text>
+      <text x="118" y="411" font-size="11.5" fill="#A99FCB">a pty in each folder</text>
     </g>
 
     <!-- Notes -->
     <g>
-      <rect x="56" y="481" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#5B7CFA" stroke-opacity="0.32"/>
-      <rect x="70" y="493" width="34" height="34" rx="9" fill="#5B7CFA" fill-opacity="0.18"/>
-      <g transform="translate(77,500)" fill="none" stroke="#9DB1FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="56" y="443" width="232" height="58" rx="13" fill="#FFFFFF" fill-opacity="0.05" stroke="#5B7CFA" stroke-opacity="0.32"/>
+      <rect x="70" y="455" width="34" height="34" rx="9" fill="#5B7CFA" fill-opacity="0.18"/>
+      <g transform="translate(77,462)" fill="none" stroke="#9DB1FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M5.2 3 h6.6 l4.2 4.2 v9.6 a1.6 1.6 0 0 1 -1.6 1.6 h-9.2 a1.6 1.6 0 0 1 -1.6 -1.6 V4.6 A1.6 1.6 0 0 1 5.2 3z"/>
         <path d="M11.6 3.3 v4.1 h4.1"/>
         <path d="M7 11.4 h6 M7 14.3 h4"/>
       </g>
-      <text x="118" y="507" font-size="15" font-weight="600" fill="#F2EFFF">Notes &amp; drawings</text>
-      <text x="118" y="525" font-size="11.5" fill="#A99FCB">markdown, left on disk</text>
+      <text x="118" y="469" font-size="15" font-weight="600" fill="#F2EFFF">Notes &amp; drawings</text>
+      <text x="118" y="487" font-size="11.5" fill="#A99FCB">kept with the workspace</text>
     </g>
   </g>
 
@@ -205,39 +186,39 @@
     </g>
     <text x="1216" y="189" text-anchor="end" font-size="10.5" letter-spacing="1.4" fill="#8C83AC">~/work</text>
 
-    <!-- the tab strip: one tab per source, in that source's colour -->
+    <!-- the tab strip: one tab per source, in that source's colour. The
+         table's tab is the lit one, because a table is what the pane below
+         draws — the strip and the pane are the same answer here. -->
     <g>
-      <rect x="824" y="212" width="80" height="28" rx="8" fill="#7C5CFA" fill-opacity="0.24" stroke="#7C5CFA" stroke-opacity="0.55"/>
-      <rect x="831" y="224" width="5" height="5" rx="1.2" fill="#B49BFF"/>
-      <text x="842" y="230" font-size="11" font-weight="600" fill="#EDE8FF">users</text>
+      <rect x="824" y="212" width="76" height="28" rx="8" fill="#8FB4FF" fill-opacity="0.13" stroke="#8FB4FF" stroke-opacity="0.34"/>
+      <rect x="831" y="224" width="5" height="5" rx="1.2" fill="#B7D0FF"/>
+      <text x="842" y="230" font-size="11" fill="#C9C2E4">main.ts</text>
 
-      <rect x="910" y="212" width="92" height="28" rx="8" fill="#6A8BFF" fill-opacity="0.13" stroke="#6A8BFF" stroke-opacity="0.34"/>
-      <rect x="917" y="224" width="5" height="5" rx="1.2" fill="#A6BEFF"/>
-      <text x="928" y="230" font-size="11" fill="#C9C2E4">POST /pay</text>
+      <rect x="906" y="212" width="70" height="28" rx="8" fill="#7C5CFA" fill-opacity="0.24" stroke="#7C5CFA" stroke-opacity="0.55"/>
+      <rect x="913" y="224" width="5" height="5" rx="1.2" fill="#B49BFF"/>
+      <text x="924" y="230" font-size="11" font-weight="600" fill="#EDE8FF">users</text>
 
-      <rect x="1008" y="212" width="66" height="28" rx="8" fill="#A78BFA" fill-opacity="0.13" stroke="#A78BFA" stroke-opacity="0.34"/>
-      <rect x="1015" y="224" width="5" height="5" rx="1.2" fill="#C7B3FF"/>
-      <text x="1026" y="230" font-size="11" fill="#C9C2E4">inbox</text>
+      <rect x="982" y="212" width="94" height="28" rx="8" fill="#6A8BFF" fill-opacity="0.13" stroke="#6A8BFF" stroke-opacity="0.34"/>
+      <rect x="989" y="224" width="5" height="5" rx="1.2" fill="#A6BEFF"/>
+      <text x="1000" y="230" font-size="11" fill="#C9C2E4">POST /pay</text>
 
-      <rect x="1080" y="212" width="66" height="28" rx="8" fill="#C4B5FD" fill-opacity="0.13" stroke="#C4B5FD" stroke-opacity="0.34"/>
-      <rect x="1087" y="224" width="5" height="5" rx="1.2" fill="#DACDFF"/>
-      <text x="1098" y="230" font-size="11" fill="#C9C2E4">zsh</text>
+      <rect x="1082" y="212" width="58" height="28" rx="8" fill="#C4B5FD" fill-opacity="0.13" stroke="#C4B5FD" stroke-opacity="0.34"/>
+      <rect x="1089" y="224" width="5" height="5" rx="1.2" fill="#DACDFF"/>
+      <text x="1100" y="230" font-size="11" fill="#C9C2E4">zsh</text>
 
-      <rect x="1152" y="212" width="68" height="28" rx="8" fill="#5B7CFA" fill-opacity="0.13" stroke="#5B7CFA" stroke-opacity="0.34"/>
-      <rect x="1159" y="224" width="5" height="5" rx="1.2" fill="#9DB1FF"/>
-      <text x="1170" y="230" font-size="11" fill="#C9C2E4">todo</text>
+      <rect x="1146" y="212" width="64" height="28" rx="8" fill="#5B7CFA" fill-opacity="0.13" stroke="#5B7CFA" stroke-opacity="0.34"/>
+      <rect x="1153" y="224" width="5" height="5" rx="1.2" fill="#9DB1FF"/>
+      <text x="1164" y="230" font-size="11" fill="#C9C2E4">todo</text>
     </g>
 
     <!-- rail + sidebar + a table, drawn at a glance -->
     <g>
       <rect x="824" y="252" width="26" height="204" rx="7" fill="#FFFFFF" fill-opacity="0.05"/>
       <g fill="#B9AEDD" fill-opacity="0.55">
-        <rect x="832" y="262" width="10" height="10" rx="2.5" fill="#B49BFF" fill-opacity="0.95"/>
-        <rect x="832" y="284" width="10" height="10" rx="2.5"/>
+        <rect x="832" y="262" width="10" height="10" rx="2.5"/>
+        <rect x="832" y="284" width="10" height="10" rx="2.5" fill="#B49BFF" fill-opacity="0.95"/>
         <rect x="832" y="306" width="10" height="10" rx="2.5"/>
         <rect x="832" y="328" width="10" height="10" rx="2.5"/>
-        <rect x="832" y="350" width="10" height="10" rx="2.5"/>
-        <rect x="832" y="372" width="10" height="10" rx="2.5"/>
       </g>
 
       <rect x="858" y="252" width="94" height="204" rx="8" fill="#FFFFFF" fill-opacity="0.04"/>
@@ -274,6 +255,6 @@
   <!-- ── caption ───────────────────────────────────────────────────── -->
   <path d="M300 578 H980" stroke="url(#rule)" stroke-width="1"/>
   <text x="640" y="606" text-anchor="middle" font-size="13.5" fill="#A99FCB" letter-spacing="0.4">
-    <tspan fill="#E9E4FF" font-weight="600">Databases · APIs · Mail · Webhooks · Terminals · Notes</tspan><tspan> — every one of them a tab, in the window already open.</tspan>
+    <tspan fill="#E9E4FF" font-weight="600">Files · Databases · APIs · Terminals · Notes</tspan><tspan> — every one of them a tab, in the window already open.</tspan>
   </text>
 </svg>

@@ -16,21 +16,19 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useEffect, useMemo, useState, type ComponentType } from "react"
-import { Database, FolderTree, Mail, NotebookPen, Send } from "lucide-react"
+import { Database, FolderTree, NotebookPen, Send } from "lucide-react"
 
-import { unreadCount, useInbox } from "@/lib/inbox/store"
 import { SECTION_IDS, useRail, type Section } from "@/lib/rail"
 
 /**
- * The five ways into the studio, ordered the way the work goes: the folders
- * themselves, then the data and the endpoints behind them, then what those
- * endpoints send back out and what arrives unasked, then the notes about all of
- * it.
+ * The four ways into the studio, ordered the way the work goes: the folders
+ * themselves, then the data and the endpoints behind them, then the notes about
+ * all of it.
  *
  * **There is no Terminal section.** A session is not a way into the studio, it
  * is something opened in one: it is started from the Explorer sidebar, which is
  * where the folder it runs in is listed, and it draws in a pane of its own with
- * no sidebar. The rail entry was a sixth button whose sidebar was a second copy
+ * no sidebar. The rail entry was one more button whose sidebar was a second copy
  * of Explorer's folder list — see `docs/design.md`.
  *
  * Explorer is first because it is the workspace's own contents — the folders
@@ -59,7 +57,6 @@ const SECTION_MARKS: Record<
   files: { label: "Explorer", Icon: FolderTree },
   database: { label: "Database", Icon: Database },
   api: { label: "API", Icon: Send },
-  mail: { label: "Mail", Icon: Mail },
   note: { label: "Notes", Icon: NotebookPen },
 }
 
@@ -82,7 +79,6 @@ export const SECTION_ACCENT: Record<Section, string> = {
   files: "var(--section-files)",
   database: "var(--section-database)",
   api: "var(--section-api)",
-  mail: "var(--section-mail)",
   note: "var(--section-note)",
 }
 
@@ -139,16 +135,26 @@ function moveSection(
 
 export function ActivityBar({
   section,
+  open,
   onSelect,
+  onToggle,
 }: {
   section: Section
+  /**
+   * Whether the sidebar this rail moves is showing.
+   *
+   * Only the mark is about it — with the sidebar closed no icon is current,
+   * which is how a closed sidebar reads as closed rather than as a sidebar that
+   * failed to draw. `section` itself is still whichever list would come back,
+   * so the repair effect below and the tooltips do not have to care.
+   */
+  open: boolean
   onSelect: (section: Section) => void
+  /** Clicking the icon whose sidebar is already showing closes it — the
+   * editors' behaviour, and the only way back from a hidden sidebar that does
+   * not involve the keyboard or a menu. */
+  onToggle: () => void
 }) {
-  // The one section with something to say while it is closed: mail arrives
-  // whether or not anybody is looking, and an inbox nobody is told about is a
-  // log.
-  const unreadMail = useInbox((state) => unreadCount(state.messages))
-
   const order = useRail((state) => state.order)
   const hidden = useRail((state) => state.hidden)
   const setOrder = useRail((state) => state.setOrder)
@@ -175,6 +181,12 @@ export function ActivityBar({
   // The section on screen can be taken off the rail — by this menu, or by a
   // layout remembered from a launch where it was hidden — and a sidebar with
   // nothing selecting it is a sidebar the user cannot get back from.
+  //
+  // It goes through `onSelect`, so a closed sidebar opens on the section this
+  // lands on. That is deliberate rather than overlooked: the section somebody
+  // was reading has just been taken off the rail, and the honest answer is to
+  // show what replaced it. It cannot fire on mount, because this is also what
+  // stops such a layout from ever being written.
   useEffect(() => {
     if (!visible.includes(section)) onSelect(visible[0]!)
   }, [section, visible, onSelect])
@@ -224,8 +236,9 @@ export function ActivityBar({
       >
         {visible.map((id, index) => {
           const { label, Icon } = SECTIONS.find((entry) => entry.id === id)!
-          const active = section === id
-          const unread = id === "mail" ? unreadMail : 0
+          // What the mark means is "this sidebar is on screen", so it is both
+          // halves: the section the rail is on, and the sidebar being open.
+          const active = section === id && open
           return (
             <div
               key={id}
@@ -270,7 +283,7 @@ export function ActivityBar({
                     <Button
                       size="icon-lg"
                       variant="ghost"
-                      onClick={() => onSelect(id)}
+                      onClick={() => (active ? onToggle() : onSelect(id))}
                       aria-label={label}
                       aria-current={active ? "page" : undefined}
                       style={active ? { color: SECTION_ACCENT[id] } : undefined}
@@ -299,26 +312,10 @@ export function ActivityBar({
                         </>
                       )}
                       <Icon className="relative size-4.5" />
-
-                      {/* Ringed in the rail's own background so the count still
-                          reads where it overlaps the glyph, and carrying the
-                          section's own hue so two badges are never confused for
-                          each other. */}
-                      {unread > 0 && (
-                        <span
-                          style={{ backgroundColor: SECTION_ACCENT[id] }}
-                          className="absolute -top-0.5 right-0.5 min-w-3.5 rounded-full px-1 text-[0.55rem] leading-3.5 font-medium text-white ring-2 ring-background"
-                        >
-                          {unread > 99 ? "99+" : unread}
-                        </span>
-                      )}
                     </Button>
                   }
                 />
-                <TooltipContent side="right">
-                  {label}
-                  {unread > 0 && ` — ${unread} unread`}
-                </TooltipContent>
+                <TooltipContent side="right">{label}</TooltipContent>
               </Tooltip>
             </div>
           )

@@ -18,7 +18,7 @@ import { mentions, primeMentions } from "@/lib/terminal/mentions"
 /**
  * An `@` menu for the composer, offering what the other panels are holding: a
  * table with its columns, a saved request resolved against the active
- * environment, a mail the sink caught, a note.
+ * environment, a note.
  *
  * The same `@milkdown/plugin-slash` machinery as the `/` menu beside it — that
  * plugin is a "menu on a trigger character" and neither of its two uses here is
@@ -47,7 +47,6 @@ const QUERY = /(?:^|\s)@([\w./:-]*)$/
 const KIND_ACCENT: Record<MentionKind, string> = {
   table: "var(--section-database)",
   request: "var(--section-api)",
-  mail: "var(--section-mail)",
   note: "var(--section-note)",
 }
 

@@ -108,9 +108,9 @@ bun test/transcript.ts
 
 The suite prefers real things over fixtures, because the bugs it was written
 against were in the seams: `transcript.ts` appends to a real file while the
-mirror watches it, and `inbox.ts` holds a real SMTP conversation over a real
-socket rather than checking a parser against a hand-written sample. If you are
-testing something that talks to the outside world, do that.
+mirror watches it, and `files.ts` creates, renames and walks real ones rather
+than checking against a hand-written sample. If you are testing something that
+talks to the outside world, do that.
 
 Not everything needs a test. The suite covers the places where being wrong is
 expensive and the feedback would otherwise be slow — a parser, a protocol, a

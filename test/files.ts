@@ -17,6 +17,8 @@ import { iconNameFor } from "../src/renderer/lib/files/icon-names"
 import {
   defaultViewer,
   isImage,
+  noteFileName,
+  viewerLabel,
   viewersFor,
 } from "../src/renderer/lib/files/viewers"
 import {
@@ -184,7 +186,7 @@ async function main() {
     defaultViewer("/w/icon.svg") === "image"
   )
   check(
-    "and is the one file with a second way to open it",
+    "and has the text editor as its second way",
     viewersFor("/w/icon.svg").join() === "image,text",
     "which is what puts the menu on it — see viewersFor"
   )
@@ -197,17 +199,41 @@ async function main() {
     "the Explorer is where files are changed; the preview is asked for"
   )
   check(
-    "and has the preview as its second way",
-    viewersFor("/w/README.md").join() === "text,markdown"
+    "and has the preview and the block editor after it",
+    viewersFor("/w/README.md").join() === "text,markdown,blocks"
   )
   check(
     "`.markdown` is the same file",
-    viewersFor("/w/notes.MARKDOWN").join() === "text,markdown"
+    viewersFor("/w/notes.MARKDOWN").join() === "text,markdown,blocks"
   )
   check(
-    "an MDX is not offered one",
+    "an MDX is not offered either",
     viewersFor("/w/page.mdx").join() === "text",
     "a commonmark parser drops its component tags — see MARKDOWN_EXTENSIONS"
+  )
+
+  check(
+    "a note opens in the block editor",
+    defaultViewer("/w/spec.note") === "blocks",
+    "the editor is the point of the file; the JSON under it is not"
+  )
+  check(
+    "and keeps the text editor behind it",
+    viewersFor("/w/spec.note").join() === "blocks,text"
+  )
+  check(
+    "the block editor is named for the file it is opening",
+    viewerLabel("blocks", "/w/spec.note") === "Note editor" &&
+      viewerLabel("blocks", "/w/README.md") === "Markdown editor",
+    "one viewer, two honest names — see viewerLabel"
+  )
+  check(
+    "a name typed into New note gets the extension",
+    noteFileName("Release plan") === "Release plan.note"
+  )
+  check(
+    "and is not given it twice",
+    noteFileName("Release plan.note") === "Release plan.note"
   )
 
   section("file-type icons")

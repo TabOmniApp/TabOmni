@@ -12,7 +12,6 @@ const ACCENT_BY_TITLE: Record<string, Section> = {
   Explorer: "files",
   Database: "database",
   API: "api",
-  Mail: "mail",
   Notes: "note",
 }
 

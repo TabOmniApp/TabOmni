@@ -10,8 +10,8 @@ import { check, finish, section } from "./harness"
 /**
  * What git says about a folder's files, against a real repository.
  *
- * Built rather than sampled, for the same reason the transcript and SMTP tests
- * are: the thing being relied on is git's own output, and a fixture would only
+ * Built rather than sampled, for the same reason the transcript test is: the
+ * thing being relied on is git's own output, and a fixture would only
  * prove this file agrees with itself. So a repository is made in a temporary
  * directory, put into each of the states Explorer draws a colour for, and read
  * back through the function the IPC handler calls.

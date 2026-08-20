@@ -335,6 +335,56 @@ export type ClaudeModel =
 export type ClaudePermissionMode = "default" | "plan" | "acceptEdits" | "auto"
 
 /**
+ * One chat with the workspace assistant.
+ *
+ * `id` is the `claude` session id the conversation runs under, so it is also
+ * the transcript the CLI writes — the same id the Conversations list in
+ * Explorer would show it under.
+ */
+export type AssistantChat = {
+  id: string
+  /** The first thing that was asked, shortened. A conversation names itself:
+   * asking the model for a title would be a second turn to pay for and wait
+   * on, for something the first line already says. */
+  title: string
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * One line of a chat, as it is drawn and as it is kept on disk.
+ *
+ * Here rather than in the renderer because both sides hold it now: the panel
+ * draws it, and the main process — which sees every event — is what writes the
+ * chat down, so a chat reopened next week is the one that was had.
+ */
+export type AssistantMessage =
+  | { id: string; role: "user"; text: string }
+  | { id: string; role: "assistant"; text: string }
+  /** A tool call, drawn as one line: what it was and what it was about. */
+  | { id: string; role: "tool"; name: string; summary: string }
+  | { id: string; role: "error"; text: string }
+
+/**
+ * One thing that happened while the assistant was answering.
+ *
+ * The assistant is `claude -p` in `--output-format stream-json`, so what
+ * arrives is the CLI's own event stream, narrowed to the three things the panel
+ * draws: a message, a tool it called, and the end of the turn. Anything else in
+ * that stream — the init line, a tool's result, the token counts — is read by
+ * `main/assistant.ts` and not passed on.
+ */
+export type AssistantEvent =
+  /** One assistant message, as markdown. A turn can produce several. */
+  | { type: "text"; text: string }
+  /** A tool the assistant called, drawn as a line rather than in full: the
+   * arguments are usually a SQL statement or a request name. */
+  | { type: "tool"; name: string; summary: string }
+  /** The turn is over, one way or the other. `error` is set when it failed —
+   * including when `claude` itself could not be started. */
+  | { type: "done"; error: string | null }
+
+/**
  * Where the workspace's choice of the two above is kept.
  *
  * Spelled out here rather than in each side's own file, so the renderer that
@@ -346,6 +396,43 @@ export type ClaudePermissionMode = "default" | "plan" | "acceptEdits" | "auto"
 export const CLAUDE_MODEL_KEY = "claude.model"
 
 export const CLAUDE_PERMISSION_MODE_KEY = "claude.permissionMode"
+
+/**
+ * The three MCP servers the studio can put in front of an agent: the
+ * workspace's databases, its saved requests, and its notes.
+ *
+ * One per panel rather than one server with everything on it, because the
+ * switch in Settings is per panel: somebody who wants an agent to read their
+ * schema has not thereby agreed to let it send their saved requests. The names
+ * are the URL's last segment and the server's name in the CLI's config, so a
+ * tool the agent calls says which of the three it came from
+ * (`mcp__tabomni-database__query`).
+ */
+export type McpServerName = "database" | "api" | "notes"
+
+/**
+ * Which environment the API panel has selected.
+ *
+ * Spelled out here for the reason the two `claude.*` keys above are: the panel
+ * writes it and the MCP server reads it, because a request an agent sends has
+ * to go to the same host the panel would have sent it to.
+ */
+export const HTTP_ENVIRONMENT_KEY = "http.environment"
+
+export const MCP_SERVER_NAMES: McpServerName[] = ["database", "api", "notes"]
+
+/**
+ * Where each server's switch is kept — written by the Settings dialog, read by
+ * the main process both when a session starts and on every tool call.
+ *
+ * Absent means off. That is the whole of the default: a workspace that has
+ * never been to Settings hands an agent nothing.
+ */
+export const MCP_SETTING_KEYS: Record<McpServerName, string> = {
+  database: "mcp.database",
+  api: "mcp.api",
+  notes: "mcp.notes",
+}
 
 /**
  * Where one entry in the composer's `/` menu came from.
@@ -812,92 +899,6 @@ export type NoteBlock = {
 }
 
 /**
- * One file carried by a captured mail.
- *
- * `dataUrl` is the bytes, and null for anything past the inline ceiling — a
- * preview is what this is for, and holding a 40MB video in the message list to
- * be able to show its name is not worth the memory. There is deliberately no
- * "save to disk": the attachment came from the sender's own code, which
- * already has the file it attached.
- */
-export type InboxAttachment = {
-  filename: string
-  contentType: string
-  /** Decoded bytes, not the encoded length on the wire. */
-  size: number
-  dataUrl: string | null
-}
-
-export type InboxMail = {
-  /** The envelope's `MAIL FROM`, which is what actually sent it — not the
-   * `From:` header, which the message wrote about itself. */
-  from: string
-  /** Every `RCPT TO` of this transaction: who the message was really
-   * delivered to, `Bcc` included, which no header shows. */
-  to: string[]
-  subject: string
-  /** The `From:` and `To:` headers as written, already un-encoded from RFC
-   * 2047 — what a mail client would put at the top of the message. */
-  headerFrom: string
-  headerTo: string
-  /** The `text/plain` and `text/html` alternatives, each empty when the
-   * message carried none. */
-  text: string
-  html: string
-  attachments: InboxAttachment[]
-  /** The whole message as it arrived, headers and encodings included. The one
-   * view that can answer "is the app really sending what I think". */
-  raw: string
-}
-
-/**
- * One mail the SMTP sink caught.
- *
- * `kind` survives the Webhooks panel it was a union with: the captures on disk
- * predate that removal, and the field is what tells one of those apart from a
- * mail without inspecting its shape. Nothing else discriminates on it.
- */
-export type InboxMessage = {
-  id: string
-  /** ISO-8601, so the renderer decides how to say it. */
-  receivedAt: string
-  /** The one line the list shows. */
-  summary: string
-  /** Cleared when the message is opened. What makes the panel an inbox rather
-   * than a log. */
-  unread: boolean
-  kind: "mail"
-  mail: InboxMail
-}
-
-/**
- * Whether the SMTP sink is up.
- *
- * `error` is almost always a port already in use — the one failure this panel
- * has to be able to say out loud, since the fix is to pick another number
- * rather than to try again.
- */
-export type InboxServerStatus = {
-  listening: boolean
-  port: number
-  error: string | null
-}
-
-/** Where the sink's port and auto-start choice are kept — see
- * `CLAUDE_MODEL_KEY` for why this is shared by both sides rather than a key
- * spelled out twice. */
-export const INBOX_CONFIG_KEY = "inbox.config"
-
-/** Mailpit's SMTP port. What the panel's settings tab starts from. */
-export const INBOX_DEFAULT_PORT = 1025
-
-/** A message the sink has just caught. */
-export type InboxEvent = { message: InboxMessage }
-
-/** Sent whenever the sink starts, stops, or falls over on its own. */
-export type InboxStatusEvent = { status: InboxServerStatus }
-
-/**
  * The machine's headroom, and this app's share of it, over the interval since
  * the previous reading.
  *
@@ -994,6 +995,39 @@ export type DesktopApi = {
 
   /** Subscribes to the File menu. Returns an unsubscribe function. */
   onMenuCommand: (listener: (command: MenuCommand) => void) => () => void
+
+  /**
+   * Fires when the notes on disk changed underneath the panel — which so far
+   * means the MCP server wrote one for an agent (`main/mcp.ts`).
+   *
+   * A listing the renderer read at launch cannot notice that; without this a
+   * note an agent had just written would not appear until the next run.
+   */
+  onNotesChanged: (listener: () => void) => () => void
+
+  /**
+   * Sends one message to the chat the assistant is on and resolves when it has
+   * been started — the answer arrives on `onAssistantEvent`.
+   *
+   * The conversation is held by the main process: the panel is a view of it, so
+   * closing the panel or reloading the window does not end the turn or lose the
+   * thread. With no chat open this starts one; the chat's record appears in
+   * `assistantChats` from that moment.
+   */
+  assistantSend: (prompt: string) => Promise<void>
+  /** Stops the turn in flight, if there is one. */
+  assistantStop: () => Promise<void>
+  /** Every chat, newest first. */
+  assistantChats: () => Promise<AssistantChat[]>
+  /** Puts the assistant back on a chat and hands over what was said in it. */
+  assistantOpen: (id: string) => Promise<AssistantMessage[]>
+  /** Leaves every chat: the next message starts a new one. */
+  assistantNew: () => Promise<void>
+  /** Deletes a chat and what was said in it, and resolves with what is left.
+   * The `claude` transcript behind it is not touched — it is a conversation on
+   * disk like any other. */
+  assistantDelete: (id: string) => Promise<AssistantChat[]>
+  onAssistantEvent: (listener: (event: AssistantEvent) => void) => () => void
 
   /** Whether Docker is available, and why not when it is not — used when
    * creating a Docker-managed database. */
@@ -1281,29 +1315,6 @@ export type DesktopApi = {
    */
   httpSend: (input: HttpSendInput) => Promise<HttpResponseResult>
 
-  /**
-   * Binds the SMTP sink and resolves with its state.
-   *
-   * Never rejects — a port already in use comes back as `error`, since the fix
-   * is to pick another number rather than to try again.
-   */
-  inboxStart: (port: number) => Promise<InboxServerStatus>
-  /** Closes it, keeping what it caught. */
-  inboxStop: () => Promise<InboxServerStatus>
-  inboxStatus: () => Promise<InboxServerStatus>
-
-  /** Everything the sink has caught, newest first. */
-  inboxMessages: () => Promise<InboxMessage[]>
-  /** Marks one message as having been opened. */
-  inboxMarkRead: (id: string) => Promise<void>
-  inboxDelete: (id: string) => Promise<void>
-  inboxClear: () => Promise<void>
-
-  /** Subscribes to captures. Returns an unsubscribe function. */
-  onInboxMessage: (listener: (event: InboxEvent) => void) => () => void
-  /** Subscribes to the sink going up or down. */
-  onInboxStatus: (listener: (event: InboxStatusEvent) => void) => () => void
-
   /** Runs a command in one of the folders; resolves with its process id. */
   startProcess: (
     folderId: string,
@@ -1411,14 +1422,15 @@ export type DesktopApi = {
 }
 
 /**
- * What the File menu asks the renderer to do.
+ * What the menus ask the renderer to do.
  *
  * The menu is a second way to reach things the renderer already owns rather
  * than a second implementation of them: the main process names the intent and
- * the renderer opens the same dialog a button used to, or closes the tab ⌘W
- * would have closed.
+ * the renderer opens the same dialog a button used to, closes the tab ⌘W would
+ * have closed, or shows the sidebar ⌘B would have shown.
  */
-export type MenuCommand = "add-folder" | "close-tab"
+export type MenuCommand =
+  "add-folder" | "close-tab" | "toggle-sidebar" | "open-settings"
 
 /** IPC channel names, shared so main and preload cannot drift apart. */
 export const IPC = {
@@ -1431,6 +1443,14 @@ export const IPC = {
   readImageDataUrl: "files:read-image-data-url",
   clipboardImagePath: "files:clipboard-image-path",
   menuCommand: "menu:command",
+  notesChanged: "notes:changed",
+  assistantSend: "assistant:send",
+  assistantStop: "assistant:stop",
+  assistantChats: "assistant:chats",
+  assistantOpen: "assistant:open",
+  assistantNew: "assistant:new",
+  assistantDelete: "assistant:delete",
+  assistantEvent: "assistant:event",
   dockerStatus: "docker:status",
   listDatabases: "databases:list",
   createDatabase: "databases:create",
@@ -1490,15 +1510,6 @@ export const IPC = {
   writeNoteFile: "note-files:write",
   copyNoteFile: "note-files:copy",
   deleteNoteFiles: "note-files:delete",
-  inboxStart: "inbox:start",
-  inboxStop: "inbox:stop",
-  inboxStatus: "inbox:status",
-  inboxMessages: "inbox:messages",
-  inboxMarkRead: "inbox:mark-read",
-  inboxDelete: "inbox:delete",
-  inboxClear: "inbox:clear",
-  inboxMessage: "inbox:message",
-  inboxStatusChanged: "inbox:status-changed",
   startProcess: "process:start",
   stopProcess: "process:stop",
   processOutput: "process:output",

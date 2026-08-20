@@ -1,13 +1,36 @@
 import {
   app,
   Menu,
+  nativeImage,
   type BrowserWindow,
   type MenuItemConstructorOptions,
 } from "electron"
 
 import { IPC, type MenuCommand } from "../shared/api"
+import settingsIcon from "../../resources/menu-settings.png"
+import settingsIcon2x from "../../resources/menu-settings@2x.png"
 
 const IS_MAC = process.platform === "darwin"
+
+/**
+ * The gear beside **Settings…**.
+ *
+ * Both representations rather than one image scaled: a menu icon is 16pt, and
+ * handing Electron only the 32px file would draw it at 32pt. It is a template
+ * image — black, with the gear in its alpha channel (`scripts/menu-icon.mjs`) —
+ * so macOS tints it to whatever the row is drawn in, including the highlight it
+ * takes under the pointer, which a coloured icon would have to fight.
+ *
+ * macOS only. `setTemplateImage` is macOS's, and elsewhere the same file is
+ * drawn as it is: black on a menu that may itself be dark. The standard items
+ * around it carry no icons off macOS either.
+ */
+function settingsImage(): Electron.NativeImage {
+  const image = nativeImage.createFromDataURL(settingsIcon)
+  image.addRepresentation({ scaleFactor: 2, dataURL: settingsIcon2x })
+  image.setTemplateImage(true)
+  return image
+}
 
 /**
  * The application menu.
@@ -31,6 +54,20 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
   }
 
   function build(): void {
+    /*
+     * Settings, which is a dialog the renderer owns like every other item
+     * here. ⌘, is the shortcut every macOS app has for it, and unlike Close
+     * tab and Sidebar it is claimed rather than merely shown: nothing on
+     * screen wants the comma — not a terminal, where Ctrl+, is unbound, and
+     * not an editor — so there is no case where the page has to answer first.
+     */
+    const settingsItem: MenuItemConstructorOptions = {
+      label: "Settings…",
+      accelerator: "CmdOrCtrl+,",
+      ...(IS_MAC ? { icon: settingsImage() } : {}),
+      click: () => send("open-settings"),
+    }
+
     const fileItems: MenuItemConstructorOptions[] = [
       {
         label: "Add folder…",
@@ -61,6 +98,8 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
               submenu: [
                 { role: "about" },
                 { type: "separator" },
+                settingsItem,
+                { type: "separator" },
                 { role: "services" },
                 { type: "separator" },
                 { role: "hide" },
@@ -76,6 +115,14 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
         label: "File",
         submenu: [
           ...fileItems,
+          // Off macOS there is no application menu to hold it, and File is
+          // where the editors put it.
+          ...(IS_MAC
+            ? []
+            : ([
+                { type: "separator" },
+                settingsItem,
+              ] satisfies MenuItemConstructorOptions[])),
           { type: "separator" },
           // ⇧⌘W rather than the role's own ⌘W, which now closes a tab — the
           // same move an editor makes, and for the same reason: a window holds
@@ -106,6 +153,17 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
       {
         label: "View",
         submenu: [
+          {
+            label: "Sidebar",
+            accelerator: "CmdOrCtrl+B",
+            // Shown but not claimed, for the reason Close tab is not: which
+            // sidebar is showing — and whether the caret is somewhere ⌘B means
+            // bold — is the renderer's answer, so it listens for the key and
+            // this item is the menu saying the key exists.
+            registerAccelerator: false,
+            click: () => send("toggle-sidebar"),
+          },
+          { type: "separator" },
           { role: "reload" },
           { role: "forceReload" },
           { role: "toggleDevTools" },

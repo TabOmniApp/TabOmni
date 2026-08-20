@@ -56,11 +56,12 @@
 }
 
 /*
- * The palette is built around one hue — 285, violet — and every neutral in it
- * carries a little of that hue rather than being a true grey. shadcn's default
- * ships every token at chroma 0, which is what made the studio read as
- * uniformly grey no matter how the layout was arranged; a surface at chroma
- * 0.006 still reads as "white" or "dark" but stops reading as *nothing*.
+ * The palette is built around one hue — 285, violet — and every neutral in the
+ * light half of it carries a little of that hue rather than being a true grey.
+ * shadcn's default ships every token at chroma 0, which is what made the studio
+ * read as uniformly grey no matter how the layout was arranged; a surface at
+ * chroma 0.006 still reads as "white" but stops reading as *nothing*. The dark
+ * half is the exception, and `.dark` below says why.
  *
  * `--brand-hue` is not consumed by the tokens below (oklch takes a literal),
  * it records the number so a future re-hue has one place to start from.
@@ -112,10 +113,9 @@
   --section-files: oklch(0.56 0.13 200);
   --section-database: oklch(0.55 0.17 250);
   --section-api: oklch(0.58 0.21 320);
-  --section-mail: oklch(0.6 0.16 115);
   --section-terminal: oklch(0.56 0.14 160);
-  /* Notes takes the amber nobody else had: its nearest neighbour is Mail at
-       115, and it sits below Terminal on the rail, 95 away. */
+  /* Notes takes the amber nobody else had: its nearest neighbour is Terminal's
+       green at 160, 95 away, and Terminal has no rail row to sit beside. */
   --section-note: oklch(0.58 0.15 65);
 
   --chart-1: oklch(0.55 0.22 285);
@@ -124,6 +124,15 @@
   --chart-4: oklch(0.56 0.14 160);
   --chart-5: oklch(0.62 0.15 70);
   --radius: 0.625rem;
+  /*
+   * The measure a document is set to — the note editor's column, and the
+   * markdown preview's, which are two views of the same file and must not be
+   * two widths. Wider than a book's measure on purpose: a note is not only
+   * prose, it holds tables, code blocks and drawings, and those are read across
+   * rather than down. Here rather than in either stylesheet so that changing it
+   * moves both, and neither is the one that decides.
+   */
+  --prose-measure: 60rem;
   --sidebar: oklch(0.978 0.006 285);
   --sidebar-foreground: oklch(0.17 0.015 285);
   --sidebar-primary: oklch(0.55 0.22 285);
@@ -138,25 +147,43 @@
  * Dark is not the light palette inverted: chroma has to rise as lightness
  * falls or the hue disappears into the black, and the accents move lighter so
  * they clear the surface they sit on.
+ *
+ * **Its surfaces are true greys, and that is the one place this palette breaks
+ * the rule above it.** The studio's largest dark surface is not a panel of
+ * ours — it is a Monaco editor, and Monaco's `vs-dark` paints `#1e1e1e`, which
+ * is a flat neutral and cannot be re-tinted without shipping a hand-written
+ * theme for every grammar. So the chrome matches the editor rather than the
+ * other way round: `--background` *is* `#1e1e1e` (`oklch(0.235 0 0)`), and
+ * every surface stacked on it is neutral at the same steps the tinted ladder
+ * used, so an open file stops reading as a hole cut in the panel around it. A
+ * terminal pane and the window's own first-paint colour are the same value for
+ * the same reason (`terminal-view.tsx`, `main/main.ts`).
+ *
+ * What keeps its hue is everything that is *not* a surface — the foregrounds,
+ * `--primary`, `--ring`, the rail's section colours and the status colours. The
+ * brand is in what sits on the grey, which is where it was doing the work.
  */
 .dark {
-  --background: oklch(0.16 0.012 285);
+  --background: oklch(0.235 0 0);
   --foreground: oklch(0.97 0.006 285);
-  --card: oklch(0.205 0.014 285);
+  --card: oklch(0.28 0 0);
   --card-foreground: oklch(0.97 0.006 285);
-  --popover: oklch(0.21 0.015 285);
+  --popover: oklch(0.285 0 0);
   --popover-foreground: oklch(0.97 0.006 285);
   --primary: oklch(0.7 0.19 285);
   --primary-foreground: oklch(0.17 0.05 285);
-  --secondary: oklch(0.27 0.018 285);
+  --secondary: oklch(0.345 0 0);
   --secondary-foreground: oklch(0.97 0.006 285);
-  --muted: oklch(0.27 0.016 285);
+  --muted: oklch(0.345 0 0);
   --muted-foreground: oklch(0.71 0.022 285);
-  --accent: oklch(0.3 0.035 285);
+  --accent: oklch(0.375 0 0);
   --accent-foreground: oklch(0.93 0.03 285);
   --destructive: oklch(0.7 0.19 22);
-  --border: oklch(0.75 0.04 285 / 14%);
-  --input: oklch(0.75 0.04 285 / 18%);
+  /* A hair more opaque than the tinted borders these replace: the same alpha
+     over a lighter background is a fainter line, and these are the only thing
+     separating two greys a step apart. */
+  --border: oklch(0.85 0 0 / 16%);
+  --input: oklch(0.85 0 0 / 20%);
   --ring: oklch(0.6 0.17 285);
 
   --success: oklch(0.75 0.16 160);
@@ -169,7 +196,6 @@
   --section-files: oklch(0.72 0.12 200);
   --section-database: oklch(0.7 0.15 250);
   --section-api: oklch(0.72 0.18 320);
-  --section-mail: oklch(0.76 0.16 115);
   --section-terminal: oklch(0.74 0.14 160);
   --section-note: oklch(0.76 0.14 65);
 
@@ -178,13 +204,13 @@
   --chart-3: oklch(0.7 0.15 250);
   --chart-4: oklch(0.74 0.14 160);
   --chart-5: oklch(0.78 0.14 70);
-  --sidebar: oklch(0.185 0.013 285);
+  --sidebar: oklch(0.26 0 0);
   --sidebar-foreground: oklch(0.97 0.006 285);
   --sidebar-primary: oklch(0.7 0.19 285);
   --sidebar-primary-foreground: oklch(0.17 0.05 285);
-  --sidebar-accent: oklch(0.28 0.03 285);
+  --sidebar-accent: oklch(0.355 0 0);
   --sidebar-accent-foreground: oklch(0.97 0.006 285);
-  --sidebar-border: oklch(0.75 0.04 285 / 12%);
+  --sidebar-border: oklch(0.85 0 0 / 14%);
   --sidebar-ring: oklch(0.6 0.17 285);
 }
 

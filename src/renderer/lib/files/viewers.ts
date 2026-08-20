@@ -4,13 +4,18 @@ import { nameOf } from "./paths"
  * How a file can be shown, and which way it is shown by default.
  *
  * Most files have one honest answer — a `.ts` is text, a `.png` is a picture —
- * and for those this decides nothing the extension had not already decided. Two
- * are genuinely more than one thing. An SVG is a picture, and also a text file
- * people open to change a `fill` or a `viewBox`. A `.md` is the source somebody
- * edits, and also a document somebody reads. Both get both, and the tree's
- * right-click menu is where the second one is.
+ * and for those this decides nothing the extension had not already decided.
+ * Two are genuinely more than one thing. An SVG is a picture, and also a text
+ * file people open to change a `fill` or a `viewBox`. A `.md` is three: the
+ * source somebody edits, the document somebody reads, and — since the studio
+ * has a block editor anyway — prose somebody writes without typing the syntax.
+ * A `.note` is the block editor first and its own document second. Every one of
+ * them is reached from the tree's right-click menu.
+ *
+ * `blocks` is that block editor, and it is one viewer rather than two: what
+ * changes between a `.note` and a `.md` is the file it writes, not the pane.
  */
-export type Viewer = "image" | "text" | "markdown"
+export type Viewer = "image" | "text" | "markdown" | "blocks"
 
 /**
  * What the studio will draw as a picture.
@@ -58,6 +63,27 @@ export function isMarkdown(filePath: string): boolean {
 }
 
 /**
+ * What the studio will open in the note editor.
+ *
+ * An extension of this app's own, unlike everything else in this file: the
+ * Explorer's other viewers are chosen for formats that already existed, and
+ * this one is a file the studio writes so that a note can live in the
+ * repository it is about rather than only in the workspace's own directory.
+ */
+export const NOTE_EXTENSION = "note"
+
+export function isNote(filePath: string): boolean {
+  return extensionOf(filePath) === NOTE_EXTENSION
+}
+
+/** What a name typed into `New note…` becomes. The extension is what makes the
+ * file a note, so it is added rather than asked for — and not added twice for
+ * somebody who typed it. */
+export function noteFileName(name: string): string {
+  return isNote(name) ? name : `${name}.${NOTE_EXTENSION}`
+}
+
+/**
  * Every way this file can be shown, best first.
  *
  * The order is the menu's order and the first entry is the default, so there is
@@ -76,7 +102,13 @@ export function viewersFor(filePath: string): Viewer[] {
   // project's files are worked on, and a README clicked from a tree of source
   // is more often on the way to being changed than being read — so the
   // rendered view is the one asked for rather than the one arrived at.
-  if (isMarkdown(filePath)) return ["text", "markdown"]
+  if (isMarkdown(filePath)) return ["text", "markdown", "blocks"]
+
+  // A `.note` is the other way round from a `.md`: the editor is the point of
+  // the file, and the block document underneath it is JSON nobody writes by
+  // hand — offered second all the same, since a note that will not open is a
+  // note whose text somebody needs to see.
+  if (isNote(filePath)) return ["blocks", "text"]
 
   return ["text"]
 }
@@ -85,7 +117,22 @@ export function defaultViewer(filePath: string): Viewer {
   return viewersFor(filePath)[0]!
 }
 
-export const VIEWER_LABELS: Record<Viewer, string> = {
+/**
+ * What a viewer is called, in the menu of the file it would open.
+ *
+ * A function rather than a table because one of the four has two honest names:
+ * the block editor is the **note** editor on a `.note`, whose whole point it
+ * is, and the **markdown** editor on a `.md`, where it is the alternative to
+ * typing the syntax. Naming it once for both would mean naming it after neither.
+ */
+export function viewerLabel(viewer: Viewer, filePath: string): string {
+  if (viewer === "blocks") {
+    return isNote(filePath) ? "Note editor" : "Markdown editor"
+  }
+  return FIXED_LABELS[viewer]
+}
+
+const FIXED_LABELS: Record<Exclude<Viewer, "blocks">, string> = {
   image: "Image preview",
   text: "Text editor",
   markdown: "Markdown preview",

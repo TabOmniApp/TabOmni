@@ -29,12 +29,14 @@ import {
   ExternalLink,
   File,
   FileCode,
+  FileText,
   Image,
   FilePlus,
   Folder,
   FolderOpen,
   FolderPlus,
   GitBranch,
+  NotebookPen,
   Pencil,
   RotateCw,
   SquareTerminal,
@@ -53,7 +55,9 @@ import {
 import { iconFor } from "@/lib/files/icons"
 import {
   isImage,
-  VIEWER_LABELS,
+  isNote,
+  noteFileName,
+  viewerLabel,
   viewersFor,
   type Viewer,
 } from "@/lib/files/viewers"
@@ -74,8 +78,24 @@ type MenuTarget =
   | { kind: "entry"; entry: FileEntry }
   | { kind: "root"; folder: WorkspaceFolder }
 
-/** A pending "name this" dialog: a new file or folder inside `dir`. */
-type Creating = { dir: string; kind: "file" | "directory" }
+/** A pending "name this" dialog: a new file, note or folder inside `dir`. */
+type Creating = { dir: string; kind: "file" | "directory" | "note" }
+
+/**
+ * What the dialog says for each of the three.
+ *
+ * A table rather than three conditionals threaded through the same JSX: a note
+ * made "file or folder" into a third case, and the wording is the only thing
+ * that differs between them.
+ */
+const CREATING_WORDS: Record<
+  Creating["kind"],
+  { title: string; label: string }
+> = {
+  file: { title: "New file", label: "File name" },
+  directory: { title: "New folder", label: "Folder name" },
+  note: { title: "New note", label: "Note name" },
+}
 
 function failureOf(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
@@ -84,8 +104,8 @@ function failureOf(error: unknown, fallback: string): string {
 /**
  * The workspace's folders, as directories.
  *
- * The other sidebars list records this app owns — a request, a note, a captured
- * mail — and can therefore file them however they like. This one lists what is
+ * The other sidebars list records this app owns — a request, a note, a saved
+ * query — and can therefore file them however they like. This one lists what is
  * actually on disk, so its shape is not the studio's to choose: the tree is the
  * directory tree, and a folder is read one level at a time, as it is opened. A
  * repository holds far more files than anybody wants listed, and the ones under
@@ -270,21 +290,30 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
 
         {creating && (
           <RenameDialog
-            title={creating.kind === "file" ? "New file" : "New folder"}
+            title={CREATING_WORDS[creating.kind].title}
             description={
               <>
                 Inside <code className="font-mono">{creating.dir}</code>.
               </>
             }
-            label={creating.kind === "file" ? "File name" : "Folder name"}
+            label={CREATING_WORDS[creating.kind].label}
             currentName=""
             submitLabel="Create"
             pendingLabel="Creating…"
             onRename={async (name) => {
               const { create, createFolder } = useFiles.getState()
               try {
-                if (creating.kind === "file") await create(creating.dir, name)
-                else await createFolder(creating.dir, name)
+                if (creating.kind === "directory") {
+                  await createFolder(creating.dir, name)
+                } else {
+                  // A note is an ordinary empty file with the extension that
+                  // opens it in the note editor — the pane draws an empty
+                  // document for one, so there is nothing to write into it.
+                  await create(
+                    creating.dir,
+                    creating.kind === "note" ? noteFileName(name) : name
+                  )
+                }
                 return null
               } catch (error) {
                 return failureOf(error, "Could not create that.")
@@ -339,6 +368,17 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           >
             <FilePlus />
             New file…
+          </ContextMenuItem>
+          {/* Beside New file rather than in a group of its own: a note is a
+              file in this folder like any other, and what it opens in is what
+              the extension says. */}
+          <ContextMenuItem
+            onClick={() =>
+              setCreating({ dir: menuTarget.folder.path, kind: "note" })
+            }
+          >
+            <NotebookPen />
+            New note…
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() =>
@@ -406,9 +446,10 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           // Rename hands focus to the field it opens — see `useMenuFocusHandoff`.
           finalFocus={menuFocus.finalFocus}
         >
-          {/* Only where there is a choice to make — an SVG and a `.md` are the
-              files the studio can honestly draw two ways; offering the menu on
-              a `.ts` would be offering the same thing twice. */}
+          {/* Only where there is a choice to make — an SVG, a `.md` and a
+              `.note` are the files the studio can honestly draw more than one
+              way; offering the menu on a `.ts` would be offering the same thing
+              twice. */}
           {menuTarget.entry.kind === "file" &&
             viewersFor(menuTarget.entry.path).length > 1 && (
               <>
@@ -429,6 +470,14 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
               >
                 <FilePlus />
                 New file…
+              </ContextMenuItem>
+              <ContextMenuItem
+                onClick={() =>
+                  setCreating({ dir: menuTarget.entry.path, kind: "note" })
+                }
+              >
+                <NotebookPen />
+                New note…
               </ContextMenuItem>
               <ContextMenuItem
                 onClick={() =>
@@ -588,7 +637,7 @@ function OpenWith({ path }: { path: string }) {
       {viewersFor(path).map((viewer) => (
         <ContextMenuRadioItem key={viewer} value={viewer}>
           <ViewerIcon viewer={viewer} />
-          {VIEWER_LABELS[viewer]}
+          {viewerLabel(viewer, path)}
         </ContextMenuRadioItem>
       ))}
     </ContextMenuRadioGroup>
@@ -597,7 +646,13 @@ function OpenWith({ path }: { path: string }) {
 
 function ViewerIcon({ viewer }: { viewer: Viewer }) {
   const Icon =
-    viewer === "image" ? Image : viewer === "markdown" ? BookOpen : FileCode
+    viewer === "image"
+      ? Image
+      : viewer === "markdown"
+        ? BookOpen
+        : viewer === "blocks"
+          ? NotebookPen
+          : FileCode
   return <Icon className="text-muted-foreground" />
 }
 
@@ -694,7 +749,12 @@ function Row({
       : Folder
     : isImage(entry.path)
       ? Image
-      : File
+      : // The same glyph the Notes sidebar draws a note with, so a note reads
+        // as one wherever it is listed. `NotebookPen` is the panel's mark, not
+        // a note's.
+        isNote(entry.path)
+        ? FileText
+        : File
   // A vendored file-type icon where there is one, and the Lucide glyph above
   // otherwise — so a coloured icon reads as "a kind of file the studio knows"
   // rather than as decoration. Folders keep the glyph either way: they are the

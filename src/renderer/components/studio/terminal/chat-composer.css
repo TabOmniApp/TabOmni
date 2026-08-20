@@ -97,10 +97,6 @@
   --mention-hue: var(--section-api);
 }
 
-.composer-prose .ProseMirror a[data-mention="mail"] {
-  --mention-hue: var(--section-mail);
-}
-
 .composer-prose .ProseMirror a[data-mention="note"] {
   --mention-hue: var(--section-note);
 }

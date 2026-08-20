@@ -7,12 +7,12 @@
  * the same reason — this is the half worth testing, and it is the half where a
  * mistake is silent.
  *
- * What a mention *is* — a table, a request, a mail, a note — is the catalogue's
+ * What a mention *is* — a table, a request, a note — is the catalogue's
  * business. This is what one looks like, what its chip carries, and what the chip
  * becomes on the way to the CLI.
  */
 
-export type MentionKind = "table" | "request" | "mail" | "note"
+export type MentionKind = "table" | "request" | "note"
 
 export type Mention = {
   /** Unique per row, and the React key. */
@@ -39,7 +39,6 @@ const MAX_VALUE = 600
 export const MENTION_LABELS: Record<MentionKind, string> = {
   table: "table",
   request: "request",
-  mail: "mail",
   note: "note",
 }
 

@@ -64,8 +64,10 @@ export const SPLASH_FADE_MS = 420
  * Four of the studio's own hues, in the rail's order.
  *
  * Not one dot per section — this is the studio in miniature, not a mirror of
- * it — so the rail losing its Terminal button does not change what is drawn
- * here. `--section-terminal` is still the colour a session is known by.
+ * it — so the rail losing its Terminal button, and later its Mail one, does not
+ * change how many are drawn here. `--section-terminal` is still the colour a
+ * session is known by; `--section-mail` went with the panel, and Explorer's own
+ * cyan took its place in the row.
  *
  * Written out rather than imported from `SECTION_ACCENT` in `activity-bar.tsx`,
  * which is the rail's own copy and the one to change if a section's colour
@@ -75,9 +77,9 @@ export const SPLASH_FADE_MS = 420
  * from `globals.css` either way, so a re-hue there moves both.
  */
 const HUES = [
+  "var(--section-files)",
   "var(--section-database)",
   "var(--section-api)",
-  "var(--section-mail)",
   "var(--section-terminal)",
 ]
 
