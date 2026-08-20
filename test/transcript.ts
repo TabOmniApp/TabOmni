@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os"
 import path from "node:path"
 
-import type { TranscriptEntry, TranscriptUsage } from "../src/shared/api"
+import type { TranscriptEntry } from "../src/shared/api"
 import { check, finish, section } from "./harness"
 
 /**
@@ -51,33 +51,6 @@ const assistantText = (text: string, stop = "end_turn") =>
   JSON.stringify({
     type: "assistant",
     message: { content: [{ type: "text", text }], stop_reason: stop },
-  })
-
-/** An assistant line carrying the token counts the CLI copies from the API
- * response — the shape the usage bar is read out of. */
-const assistantUsage = (
-  text: string,
-  usage: {
-    input?: number
-    output?: number
-    cacheRead?: number
-    cacheCreation?: number
-  },
-  model = "claude-opus-5"
-) =>
-  JSON.stringify({
-    type: "assistant",
-    message: {
-      model,
-      content: [{ type: "text", text }],
-      stop_reason: "end_turn",
-      usage: {
-        input_tokens: usage.input ?? 0,
-        output_tokens: usage.output ?? 0,
-        cache_read_input_tokens: usage.cacheRead ?? 0,
-        cache_creation_input_tokens: usage.cacheCreation ?? 0,
-      },
-    },
   })
 
 const toolUse = (id: string, name: string, input: unknown) =>
@@ -127,8 +100,6 @@ try {
     type: string
     entries: TranscriptEntry[]
     working: boolean
-    permissionMode: string | null
-    usage: TranscriptUsage | null
   }
   const events: Event[] = []
   const mirrors = new TranscriptMirrors((event) =>
@@ -148,17 +119,6 @@ try {
   /** The turn state as of the last event that carried one. */
   function working(): boolean {
     return events.at(-1)?.working ?? false
-  }
-
-  /** The mode as of the last event, which is what the composer follows. */
-  function mode(): string | null {
-    return events.at(-1)?.permissionMode ?? null
-  }
-
-  /** The running total as of the last event, which is what the usage bar
-   * draws — every event carries it whole, not as a delta. */
-  function usage(): TranscriptUsage | null {
-    return events.at(-1)?.usage ?? null
   }
 
   const historyFile = path.join(sessionsDir, "history-session.jsonl")
@@ -268,106 +228,6 @@ try {
   )
 
   // ---------------------------------------------------------------------
-  section("usage")
-
-  const usageFile = path.join(sessionsDir, "usage-session.jsonl")
-  await writeFile(usageFile, `${userLine("start")}\n`, "utf8")
-
-  await mirrors.watch("tab-usage", cwd, "usage-session")
-  await waitFor("the opening line", () => current().length === 1)
-  check(
-    "a conversation with no reply yet reports no usage",
-    usage() === null,
-    usage()
-  )
-
-  await appendFile(
-    usageFile,
-    `${assistantUsage("first", {
-      input: 10,
-      output: 100,
-      cacheRead: 4000,
-      cacheCreation: 500,
-    })}\n`,
-    "utf8"
-  )
-  await waitFor("the first usage", () => usage() !== null)
-  check(
-    "context is everything the request carried, cached or not",
-    usage()?.contextTokens === 4510,
-    usage()
-  )
-  check(
-    "the model that answered is reported",
-    usage()?.model === "claude-opus-5"
-  )
-
-  await appendFile(
-    usageFile,
-    `${assistantUsage("second", {
-      input: 5,
-      output: 200,
-      cacheRead: 4600,
-      cacheCreation: 300,
-    })}\n`,
-    "utf8"
-  )
-  await waitFor("the second usage", () => usage()?.outputTokens === 300)
-  // Tokens are the conversation's, so they are summed; context is the last
-  // request's, so it is replaced. Getting that backwards is what would make a
-  // context bar climb past the window and never come down.
-  check(
-    "token totals are summed across requests",
-    usage()?.inputTokens === 15 &&
-      usage()?.outputTokens === 300 &&
-      usage()?.cacheReadTokens === 8600 &&
-      usage()?.cacheCreationTokens === 800,
-    usage()
-  )
-  check(
-    "context is the last request's, not a sum",
-    usage()?.contextTokens === 4905,
-    usage()
-  )
-
-  // What a compaction looks like from here: the next request carries far less
-  // than the one before it, and the bar has to follow it down.
-  await appendFile(
-    usageFile,
-    `${assistantUsage("after compaction", {
-      input: 2,
-      output: 50,
-      cacheRead: 900,
-      cacheCreation: 100,
-    })}\n`,
-    "utf8"
-  )
-  await waitFor("the compacted request", () => usage()?.contextTokens === 1002)
-  check(
-    "a compaction brings the context back down",
-    usage()?.contextTokens === 1002 && usage()?.outputTokens === 350,
-    usage()
-  )
-
-  // The CLI writes one of these for its own messages — an API error, an
-  // interrupted turn — with no request behind it. Counting it costs nothing,
-  // but it would put `<synthetic>` on screen as the model that answered.
-  await appendFile(
-    usageFile,
-    `${assistantUsage("interrupted", {}, "<synthetic>")}\n`,
-    "utf8"
-  )
-  await waitFor("the synthetic line", () => current().length === 5)
-  check(
-    "a synthetic message leaves the model alone",
-    usage()?.model === "claude-opus-5" && usage()?.contextTokens === 1002,
-    usage()
-  )
-
-  mirrors.unwatch("tab-usage")
-  events.length = 0
-
-  // ---------------------------------------------------------------------
   section("tailing a live transcript")
 
   const liveFile = path.join(sessionsDir, "live-session.jsonl")
@@ -410,19 +270,17 @@ try {
   await waitFor("the closing message", () => working() === false)
   check("an end_turn reply ends the turn", working() === false)
 
-  // Shift+Tab at the CLI's own prompt writes one of these and nothing else —
-  // no entry to draw, which is why an empty batch still has to be reported.
-  check("no mode reported until the CLI writes one", mode() === null)
+  // A record this app has no use for — the CLI writes one of these whenever
+  // the permission mode is cycled — must be ignored rather than drawn: a newer
+  // CLI's own bookkeeping is not part of the conversation.
   await appendFile(
     liveFile,
     `${JSON.stringify({ type: "permission-mode", permissionMode: "plan" })}\n`,
     "utf8"
   )
-  await waitFor("the mode change", () => mode() === "plan")
-  check("a mode cycled at the prompt is reported", mode() === "plan")
-
-  const beforeMode = current().length
-  check("a mode record draws nothing of its own", beforeMode === 5, beforeMode)
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  const afterMode = current().length
+  check("a record this app ignores draws nothing", afterMode === 5, afterMode)
 
   // A read landing mid-write is the case a naive tail gets wrong: the half
   // line must be held, not parsed and dropped.

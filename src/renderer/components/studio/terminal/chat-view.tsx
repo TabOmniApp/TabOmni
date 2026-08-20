@@ -29,12 +29,9 @@ import {
 } from "lucide-react"
 
 import type {
-  ClaudePermissionMode,
-  ClaudeUsageLimits,
   TranscriptBlock,
   TranscriptEntry,
   TranscriptSessionSummary,
-  TranscriptUsage,
 } from "@shared/api"
 import { useSettings } from "@/lib/settings"
 import { useTerminal } from "@/lib/terminal/store"
@@ -48,7 +45,6 @@ import {
 } from "@/lib/terminal/question"
 import { parseUserMessage } from "@/lib/terminal/slash-command"
 import { clamp, describeInput } from "@/lib/terminal/tool-input"
-import { Meter } from "../meter"
 import { MarkdownView } from "../markdown-view"
 import { TouchedFiles } from "./touched-files"
 import "./slash-command.css"
@@ -184,17 +180,10 @@ export function useTranscript(session: {
     entries: Entry[]
     /** Whether the agent owes a reply, as the CLI itself recorded it. */
     working: boolean
-    /** The mode the session is in, which the CLI records on every change —
-     * including a Shift+Tab at its own prompt. */
-    permissionMode: ClaudePermissionMode | null
-    /** What this conversation has spent, as the CLI recorded it. */
-    usage: TranscriptUsage | null
   }>({
     target: null,
     entries: [],
     working: false,
-    permissionMode: null,
-    usage: null,
   })
   const onTarget = feed.target === target
   const entries = onTarget ? feed.entries : []
@@ -225,8 +214,6 @@ export function useTranscript(session: {
       setFeed((current) => ({
         target,
         working: event.working,
-        permissionMode: event.permissionMode,
-        usage: event.usage,
         entries: applyEntries(
           // A `reset`, or the first event for a conversation this pane was
           // only just pointed at: either way what is held belongs to another
@@ -325,11 +312,6 @@ export function useTranscript(session: {
     working,
     target,
     touched,
-    // Both belong to the conversation the pane is on, which is also the one
-    // the pty is running — so neither needs qualifying beyond the feed still
-    // being the previous conversation's for the render after a switch.
-    usage: onTarget ? feed.usage : null,
-    permissionMode: onTarget ? feed.permissionMode : null,
     markSent,
   }
 }
@@ -429,216 +411,6 @@ export function ChatView({
       <TouchedFiles paths={transcript.touched} />
     </div>
   )
-}
-
-/**
- * How much context the conversation is carrying, on the assumption of a
- * 200k window.
- *
- * The transcript says how many tokens went out but never what the ceiling
- * was, and the model name does not settle it either: the 1M window is a beta
- * header rather than a different model id, so a session running with it writes
- * exactly the same lines. Rather than get it wrong in the direction that
- * matters — a bar reading "180k / 200k" on a session with most of its room
- * left — the ceiling is raised once the context is observed above it. Every
- * current model is 200k without the header.
- */
-const CONTEXT_WINDOW = 200_000
-const LARGE_CONTEXT_WINDOW = 1_000_000
-
-function contextWindow(contextTokens: number): number {
-  return contextTokens > CONTEXT_WINDOW ? LARGE_CONTEXT_WINDOW : CONTEXT_WINDOW
-}
-
-/** Tokens at the width a status bar has for them: three significant figures
- * at most, since the difference between 34.5k and 34.6k is not one anybody
- * reads a bar for. */
-function compact(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
-  if (tokens >= 10_000) return `${Math.round(tokens / 1000)}k`
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`
-  return String(tokens)
-}
-
-/** `claude-opus-4-8` as `opus 4.8` — the name the picker and the CLI's own
- * status line use, rather than the API id nothing else in the app shows. */
-function shortModel(model: string): string {
-  const named = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(model)
-  if (!named) return model
-  const [, family, major, minor] = named
-  return minor ? `${family} ${major}.${minor}` : `${family} ${major}`
-}
-
-/**
- * What the conversation has cost it, along the bottom of the terminal.
- *
- * The context number is the part worth a glance mid-session: it is the one
- * that decides whether the next message will fit or set off a compaction, and
- * it falls when the CLI compacts. The totals beside it are the whole
- * conversation's, so they only ever climb.
- *
- * Under the terminal only. That is the view a message is written in, so it is
- * the only one where any of this is a question about to be answered; the chat
- * is for reading back through what happened, and gives the width to the
- * conversation.
- */
-export function UsageBar({
-  usage,
-  limits,
-}: {
-  usage: TranscriptUsage | null
-  /** The account's allowance, which belongs to no one conversation — see
-   * `useClaudeLimits`. Null until the CLI has cached one. */
-  limits: ClaudeUsageLimits | null
-}) {
-  // Before the first reply there is nothing to say about the conversation.
-  // The allowance is worth showing anyway: "have I got the budget" is a
-  // question with an answer before the first message, not only after it.
-  if (!usage && !limits) return null
-
-  const window = usage ? contextWindow(usage.contextTokens) : 0
-  const filled = usage ? Math.min(1, usage.contextTokens / window) : 0
-
-  return (
-    <div className="flex shrink-0 items-center gap-2 border-t bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground">
-      {usage && (
-        <>
-          <Meter percent={filled * 100} label="Context used" className="w-16" />
-
-          <span
-            className="shrink-0 tabular-nums"
-            title="Everything the last request carried, against the model's context window"
-          >
-            {compact(usage.contextTokens)} / {compact(window)}
-          </span>
-
-          <span className="text-muted-foreground/40">·</span>
-
-          <span
-            className="shrink-0 tabular-nums"
-            title={[
-              `Input ${usage.inputTokens.toLocaleString()}`,
-              `Output ${usage.outputTokens.toLocaleString()}`,
-              `Cache write ${usage.cacheCreationTokens.toLocaleString()}`,
-              `Cache read ${usage.cacheReadTokens.toLocaleString()}`,
-            ].join("\n")}
-          >
-            ↑ {compact(usage.inputTokens + usage.cacheCreationTokens)} ↓{" "}
-            {compact(usage.outputTokens)}
-          </span>
-        </>
-      )}
-
-      <LimitsReadout limits={limits} />
-
-      {usage?.model && (
-        <span className="ml-auto min-w-0 truncate" title={usage.model}>
-          {shortModel(usage.model)}
-        </span>
-      )}
-    </div>
-  )
-}
-
-/** One of the account's windows, as far as the row is concerned. */
-type LimitWindow = {
-  /** `5h`, `7d` — the window itself, which is what makes the figure mean
-   * something. */
-  label: string
-  title: string
-  percent: number
-  resetsAt: string | null
-}
-
-/**
- * The account's five-hour and weekly allowance, each with a meter of its own.
- *
- * Not this conversation's — it is the whole account's, spent by every `claude`
- * the user runs, which is exactly why it is worth having here: the tab in
- * front of you is not the only thing drawing on it.
- *
- * A cached figure, not a live one. The CLI refreshes it on its own schedule
- * and this app only reads what it wrote (`electron/claude-usage.ts`), so how
- * old it is goes in the tooltip rather than being quietly dropped — an
- * hour-old number shown as current is worse than one labelled as old.
- */
-function LimitsReadout({ limits }: { limits: ClaudeUsageLimits | null }) {
-  if (!limits) return null
-
-  const windows: LimitWindow[] = []
-  if (limits.sessionPercent !== null)
-    windows.push({
-      label: "5h",
-      title: "Five-hour limit used",
-      percent: limits.sessionPercent,
-      resetsAt: limits.sessionResetsAt,
-    })
-  if (limits.weeklyPercent !== null)
-    windows.push({
-      label: "7d",
-      title: "Weekly limit used",
-      percent: limits.weeklyPercent,
-      resetsAt: limits.weeklyResetsAt,
-    })
-  if (windows.length === 0) return null
-
-  const title = [
-    `Session (5h): ${percentText(limits.sessionPercent)}${resetText(limits.sessionResetsAt)}`,
-    `Weekly: ${percentText(limits.weeklyPercent)}${resetText(limits.weeklyResetsAt)}`,
-    "",
-    `Account-wide, as of ${fetchedText(limits.fetchedAt)}.`,
-    "Claude Code refreshes this on its own schedule; this reads its cache.",
-  ].join("\n")
-
-  return (
-    <>
-      <span className="text-muted-foreground/40">·</span>
-      {windows.map((entry) => (
-        <span
-          key={entry.label}
-          className="flex shrink-0 items-center gap-1.5"
-          title={title}
-        >
-          {/* The window, not an abbreviation of the word "session": a
-              percentage of an unnamed allowance says nothing. */}
-          <span className="text-muted-foreground/70">{entry.label}</span>
-          <Meter percent={entry.percent} label={entry.title} className="w-8" />
-          {/* The meter alone answers "how close", the number answers "how
-              close exactly" — and the colour is left to the meter so that
-              one reading is not shouted twice. */}
-          <span className="tabular-nums">{Math.round(entry.percent)}%</span>
-        </span>
-      ))}
-    </>
-  )
-}
-
-function percentText(percent: number | null): string {
-  return percent === null ? "unknown" : `${percent}% used`
-}
-
-/** ` · resets 21:40` — the date too when it is not today, which the weekly
- * window usually is not. */
-function resetText(iso: string | null): string {
-  if (!iso) return ""
-  const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return ""
-
-  const sameDay = at.toDateString() === new Date().toDateString()
-  return ` · resets ${at.toLocaleString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    ...(sameDay ? {} : { weekday: "short" }),
-  })}`
-}
-
-function fetchedText(fetchedAt: number | null): string {
-  if (fetchedAt === null) return "an unknown time"
-  const minutes = Math.round((Date.now() - fetchedAt) / 60_000)
-  if (minutes < 1) return "just now"
-  if (minutes < 60) return `${minutes} min ago`
-  const hours = Math.round(minutes / 60)
-  return hours === 1 ? "an hour ago" : `${hours} hours ago`
 }
 
 function Header({

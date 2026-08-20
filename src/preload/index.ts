@@ -191,7 +191,6 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.transcriptUnwatch, mirrorId),
   claudeListSessions: (folderId) =>
     ipcRenderer.invoke(IPC.claudeListSessions, folderId),
-  claudeUsageLimits: () => ipcRenderer.invoke(IPC.claudeUsageLimits),
 
   onTranscriptEvent: (listener) =>
     subscribe<TranscriptEvent>(IPC.transcriptEvent, listener),

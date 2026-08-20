@@ -13,14 +13,10 @@ import {
 } from "electron"
 
 import {
-  CLAUDE_MODEL_KEY,
-  CLAUDE_PERMISSION_MODE_KEY,
   HTTP_ENVIRONMENT_KEY,
   IPC,
   MCP_SETTING_KEYS,
   type AgentKind,
-  type ClaudeModel,
-  type ClaudePermissionMode,
   type DatabaseConnectionInput,
   type FileIndexEntry,
   type UpdateDatabaseInput,
@@ -50,7 +46,6 @@ import { sendHttp } from "./http"
 import { McpServers } from "./mcp"
 import { NotePreview } from "./preview"
 import { ProcessManager } from "./process"
-import { claudeUsageLimits } from "./claude-usage"
 import { systemUsage } from "./system-usage"
 import { hasTranscript, listSessions, TranscriptMirrors } from "./transcript"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
@@ -800,23 +795,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       claudeSessionId?: string
     ) => {
       const cwd = await store.resolveFolderDir(folderId)
-      // Read here rather than passed in by the renderer: the composer that
-      // sets them and the pane that starts a session are different
-      // components, and a session started any other way (a restore, a
-      // restart) would otherwise quietly lose the workspace's choice.
-      const [model, permissionMode, mcpConfig] = await Promise.all([
-        store.getSetting(CLAUDE_MODEL_KEY),
-        store.getSetting(CLAUDE_PERMISSION_MODE_KEY),
-        // Null unless a server is switched on, and read here for the same
-        // reason the two above are: what the workspace offers an agent is a
-        // setting, not something the pane that started the session knows.
-        kind === "claude" ? mcp.configPath() : Promise.resolve(null),
-      ])
+      // Null unless a server is switched on, and read here rather than passed
+      // in by the renderer: what the workspace offers an agent is a setting,
+      // not something the pane that started the session knows.
+      const mcpConfig = kind === "claude" ? await mcp.configPath() : null
       // A tab that already has a conversation continues it rather than
-      // starting another — which is what makes "Restart to apply" cost the
-      // settings change and nothing else. Asked of the file rather than of the
-      // caller: an id minted for a session that died before the CLI wrote
-      // anything is one `--resume` would reject.
+      // starting another — which is what makes a restart cost the process and
+      // nothing else. Asked of the file rather than of the caller: an id
+      // minted for a session that died before the CLI wrote anything is one
+      // `--resume` would reject.
       const resume = claudeSessionId
         ? await hasTranscript(cwd, claudeSessionId)
         : false
@@ -824,8 +811,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       const target = {
         cwd,
         command: agentCommandWith(kind, {
-          model: model as ClaudeModel | null,
-          permissionMode: permissionMode as ClaudePermissionMode | null,
           claudeSessionId,
           resume,
           mcpConfig,
@@ -871,8 +856,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.claudeListSessions, async (_event, folderId: string) =>
     listSessions(await store.resolveFolderDir(folderId))
   )
-
-  ipcMain.handle(IPC.claudeUsageLimits, () => claudeUsageLimits())
 
   ipcMain.handle(IPC.systemUsage, () => systemUsage())
 

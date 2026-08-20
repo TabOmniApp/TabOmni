@@ -311,30 +311,6 @@ export type AgentToolStatus = {
 }
 
 /**
- * Which model a Claude Code session runs.
- *
- * Aliases rather than pinned model names (`--model opus`, not a dated id):
- * the CLI resolves an alias to the current model behind it, which is what
- * someone picking "Opus" from a menu means — a list of dated ids here would
- * be wrong within weeks and this app has no way to learn the new ones.
- * `default` passes no flag at all, leaving whatever the CLI is configured
- * with alone.
- */
-export type ClaudeModel =
-  "default" | "fable" | "opus" | "opusplan" | "sonnet" | "haiku"
-
-/**
- * How much a Claude Code session asks before acting.
- *
- * A deliberate subset of the CLI's own `--permission-mode` choices.
- * `bypassPermissions` is left out because it does not work on its own — the
- * CLI refuses it unless the session was also launched with
- * `--dangerously-skip-permissions` — and `manual` because the CLI documents
- * it as an alias for the default, which `default` already is.
- */
-export type ClaudePermissionMode = "default" | "plan" | "acceptEdits" | "auto"
-
-/**
  * One chat with the workspace assistant.
  *
  * `id` is the `claude` session id the conversation runs under, so it is also
@@ -385,19 +361,6 @@ export type AssistantEvent =
   | { type: "done"; error: string | null }
 
 /**
- * Where the workspace's choice of the two above is kept.
- *
- * Spelled out here rather than in each side's own file, so the renderer that
- * writes them and the main process that turns them into CLI flags cannot
- * disagree about the key. One choice for the workspace rather than one per
- * folder: it is a preference about how you like to work, not something a
- * repository has an opinion on.
- */
-export const CLAUDE_MODEL_KEY = "claude.model"
-
-export const CLAUDE_PERMISSION_MODE_KEY = "claude.permissionMode"
-
-/**
  * The three MCP servers the studio can put in front of an agent: the
  * workspace's databases, its saved requests, and its notes.
  *
@@ -413,9 +376,9 @@ export type McpServerName = "database" | "api" | "notes"
 /**
  * Which environment the API panel has selected.
  *
- * Spelled out here for the reason the two `claude.*` keys above are: the panel
- * writes it and the MCP server reads it, because a request an agent sends has
- * to go to the same host the panel would have sent it to.
+ * Spelled out here rather than in either side's own file: the panel writes it
+ * and the MCP server reads it, because a request an agent sends has to go to
+ * the same host the panel would have sent it to.
  */
 export const HTTP_ENVIRONMENT_KEY = "http.environment"
 
@@ -490,66 +453,6 @@ export type TranscriptEntry =
   | { type: "tool-result"; toolUseId: string; text: string; isError: boolean }
 
 /**
- * What a conversation has spent, as the CLI's own transcript records it.
- *
- * Read off the `usage` the CLI copies onto every assistant line from the API
- * response it came from — not counted or estimated here. That is also the
- * limit of what this can be: these are one conversation's tokens, and there is
- * nothing on disk about the account's own five-hour or weekly allowance (the
- * TUI's `/usage` asks the API for it, and only reaches the file when a request
- * is actually refused).
- *
- * No cost: the CLI does not write one, and a figure this app worked out from a
- * price list it carries would be wrong the day prices move and meaningless on
- * a subscription.
- */
-/**
- * The account's allowance, as the CLI last saw it.
- *
- * Percentages rather than token counts because that is all the usage endpoint
- * gives for a subscription — `/usage` in the TUI draws the same two bars from
- * the same numbers. Account-wide, so it is spent by every `claude` the user
- * runs, not only by the session in front of them.
- */
-export type ClaudeUsageLimits = {
-  /** Percent of the rolling five-hour window used, 0–100, or null when the
-   * cache does not carry it. */
-  sessionPercent: number | null
-  /** Percent of the weekly window used, 0–100, or null. */
-  weeklyPercent: number | null
-  /** ISO timestamps the windows roll over at, when known. */
-  sessionResetsAt: string | null
-  weeklyResetsAt: string | null
-  /**
-   * When the CLI last asked the API, in epoch milliseconds — not when this app
-   * read the file. The gap between the two is the age of the figures, and it
-   * can be an hour: nothing this app does refreshes them.
-   */
-  fetchedAt: number | null
-}
-
-export type TranscriptUsage = {
-  /**
-   * How much context the most recent request carried — everything the model
-   * was sent, cached or not.
-   *
-   * A level, not a total: it falls when the CLI compacts, which is the point
-   * of showing it.
-   */
-  contextTokens: number
-  /** The conversation's totals, summed over every request in it. Cache reads
-   * are kept apart from `inputTokens` because they dwarf it — a long session
-   * re-reads its whole prompt on every turn. */
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number
-  cacheCreationTokens: number
-  /** The model that answered most recently, or null if none has. `/model`
-   * mid-conversation means the totals above may span more than one. */
-  model: string | null
-}
-
-/**
  * What the chat view is told as a session's transcript is written.
  *
  * Only two shapes, because a file is only ever replaced or appended to:
@@ -571,25 +474,6 @@ export type TranscriptEventBody = {
    * the file gets, and it is an exact one.
    */
   working: boolean
-  /**
-   * The mode the session was in for its most recent turn, or null before it
-   * has had one.
-   *
-   * The CLI writes a `permission-mode` record as each prompt is submitted —
-   * not when the mode is changed. So this is authoritative but late: a mode
-   * cycled with Shift+Tab shows up here only once the next message is sent.
-   * What closes that gap is the terminal's own status line, which the pane
-   * reads as it goes (`agent-session-view.tsx`).
-   */
-  permissionMode: ClaudePermissionMode | null
-  /**
-   * The conversation's usage so far, or null before it has had a reply.
-   *
-   * Carried on every event rather than sent as a delta: it is a running total
-   * the pane draws whole, and a reader that missed one event would otherwise
-   * be permanently short.
-   */
-  usage: TranscriptUsage | null
 }
 
 /**
@@ -1364,11 +1248,6 @@ export type DesktopApi = {
    * directory writes to the same place. */
   claudeListSessions: (folderId: string) => Promise<TranscriptSessionSummary[]>
 
-  /** The account's five-hour and weekly allowance, or null when the CLI has
-   * never cached one. Read from `~/.claude.json`, never fetched — see
-   * `electron/claude-usage.ts`. */
-  claudeUsageLimits: () => Promise<ClaudeUsageLimits | null>
-
   /** Subscribes to transcript events for every mirror. Returns an unsubscribe
    * function. */
   onTranscriptEvent: (listener: (event: TranscriptEvent) => void) => () => void
@@ -1485,6 +1364,5 @@ export const IPC = {
   transcriptUnwatch: "transcript:unwatch",
   transcriptEvent: "transcript:event",
   claudeListSessions: "claude:list-sessions",
-  claudeUsageLimits: "claude:usage-limits",
   systemUsage: "system:usage",
 } as const

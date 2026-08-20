@@ -7,12 +7,10 @@ import { createInterface } from "node:readline"
 import { StringDecoder } from "node:string_decoder"
 
 import type {
-  ClaudePermissionMode,
   TranscriptBlock,
   TranscriptEntry,
   TranscriptEvent,
   TranscriptSessionSummary,
-  TranscriptUsage,
 } from "../shared/api"
 
 /**
@@ -91,11 +89,6 @@ type Mirror = {
   /** Whether the agent still owes a reply, carried between reads: a batch
    * that says nothing about the turn leaves it as it was. */
   working: boolean
-  /** The mode of the last turn the CLI recorded, carried the same way. */
-  permissionMode: ClaudePermissionMode | null
-  /** The conversation's running totals, since a batch only ever carries what
-   * the requests in it spent. */
-  usage: TranscriptUsage | null
 }
 
 export class TranscriptMirrors {
@@ -129,8 +122,6 @@ export class TranscriptMirrors {
       reading: false,
       again: false,
       working: false,
-      permissionMode: null,
-      usage: null,
     }
     this.mirrors.set(mirrorId, mirror)
 
@@ -141,8 +132,6 @@ export class TranscriptMirrors {
       type: "reset",
       entries: [],
       working: false,
-      permissionMode: null,
-      usage: null,
     })
 
     try {
@@ -214,15 +203,11 @@ export class TranscriptMirrors {
       mirror.pending = ""
       mirror.decoder = new StringDecoder("utf8")
       mirror.working = false
-      mirror.permissionMode = null
-      mirror.usage = null
       this.emit({
         mirrorId,
         type: "reset",
         entries: [],
         working: false,
-        permissionMode: null,
-        usage: null,
       })
     }
 
@@ -257,28 +242,18 @@ export class TranscriptMirrors {
     // otherwise it is the start of one still being written.
     mirror.pending = lines.pop() ?? ""
 
-    const { entries, working, permissionMode, spent } = interpret(lines)
+    const { entries, working } = interpret(lines)
     if (working !== null) mirror.working = working
-    if (permissionMode !== null) mirror.permissionMode = permissionMode
-    if (spent !== null) mirror.usage = accumulate(mirror.usage, spent)
 
     // Lines the CLI keeps for itself — sidechains, meta turns, `ai-title` —
     // are real appends that yield nothing to draw. A batch that changed the
-    // turn or the mode still has to go out, though: neither carries an entry
-    // of its own, and a mode cycled at the prompt is exactly such a line.
-    if (
-      entries.length > 0 ||
-      working !== null ||
-      permissionMode !== null ||
-      spent !== null
-    ) {
+    // turn still has to go out, though: that carries no entry of its own.
+    if (entries.length > 0 || working !== null) {
       this.emit({
         mirrorId,
         type: "append",
         entries,
         working: mirror.working,
-        permissionMode: mirror.permissionMode,
-        usage: mirror.usage,
       })
     }
   }
@@ -354,15 +329,12 @@ export async function listSessions(
  */
 type TranscriptLine = {
   type?: string
-  /** Carried by a `permission-mode` record, and nothing else. */
-  permissionMode?: ClaudePermissionMode
   message?: {
     model?: string
     content?: RawBlock[] | string
     /** Why the assistant stopped. `tool_use` is the one value that means the
      * turn is not over — see `interpret`. */
     stop_reason?: string | null
-    usage?: RawUsage
   }
   /** A subagent's own conversation (a `Task` tool call's inner turns), not
    * part of what the person sees. */
@@ -370,34 +342,6 @@ type TranscriptLine = {
   /** Housekeeping the CLI records as a `user` turn for its own bookkeeping —
    * a slash command's own stdout, not something a person sent. */
   isMeta?: boolean
-}
-
-/**
- * The token counts the CLI copies onto an assistant line from the API response
- * that produced it.
- *
- * Every field is optional on purpose: this is another process's record, and a
- * count that is missing should cost that one number rather than the whole
- * readout. `server_tool_use`, `service_tier` and the rest of what the CLI
- * writes here are ignored — nothing draws them.
- */
-type RawUsage = {
-  input_tokens?: number
-  output_tokens?: number
-  cache_read_input_tokens?: number
-  cache_creation_input_tokens?: number
-}
-
-/** What one batch of lines spent, before it is folded into the running total.
- * The token counts are sums; `contextTokens` and `model` are levels, taken
- * from the last request in the batch. */
-type Spend = {
-  input: number
-  output: number
-  cacheRead: number
-  cacheCreation: number
-  contextTokens: number
-  model: string | null
 }
 
 /** The subset of the CLI's message vocabulary this app reads. */
@@ -427,15 +371,9 @@ function interpret(lines: string[]): {
   /** The turn state after these lines, or null when none of them said
    * anything about it. */
   working: boolean | null
-  /** The mode after these lines, or null when none of them said. */
-  permissionMode: ClaudePermissionMode | null
-  /** What these lines spent, or null when none of them carried a usage. */
-  spent: Spend | null
 } {
   const entries: TranscriptEntry[] = []
   let working: boolean | null = null
-  let permissionMode: ClaudePermissionMode | null = null
-  let spent: Spend | null = null
 
   for (const line of lines) {
     if (line.trim() === "") continue
@@ -444,13 +382,6 @@ function interpret(lines: string[]): {
     try {
       record = JSON.parse(line) as TranscriptLine
     } catch {
-      continue
-    }
-
-    // Written as each prompt is submitted, recording the mode that turn ran
-    // under — not when the mode is changed. Authoritative, and a turn behind.
-    if (record.type === "permission-mode") {
-      if (record.permissionMode) permissionMode = record.permissionMode
       continue
     }
 
@@ -494,61 +425,12 @@ function interpret(lines: string[]): {
       // turn's empty reason all mean it has stopped.
       working = record.message?.stop_reason === "tool_use"
 
-      spent = spend(spent, record)
-
       const blocks = contentOf(record).flatMap(assistantBlock)
       if (blocks.length > 0) entries.push({ type: "assistant", blocks })
     }
   }
 
-  return { entries, working, permissionMode, spent }
-}
-
-/**
- * One assistant line's tokens, added to what the batch has spent so far.
- *
- * `<synthetic>` is skipped: the CLI writes an assistant line under that model
- * for its own messages — an API error it is reporting, a turn it interrupted —
- * with no request behind it. Its usage is zeros, so including it would cost
- * nothing but it would still put `<synthetic>` on screen as the model that
- * answered.
- */
-function spend(soFar: Spend | null, record: TranscriptLine): Spend | null {
-  const model = record.message?.model
-  const usage = record.message?.usage
-  if (!usage || model === "<synthetic>") return soFar
-
-  const input = usage.input_tokens ?? 0
-  const cacheRead = usage.cache_read_input_tokens ?? 0
-  const cacheCreation = usage.cache_creation_input_tokens ?? 0
-
-  return {
-    input: (soFar?.input ?? 0) + input,
-    output: (soFar?.output ?? 0) + (usage.output_tokens ?? 0),
-    cacheRead: (soFar?.cacheRead ?? 0) + cacheRead,
-    cacheCreation: (soFar?.cacheCreation ?? 0) + cacheCreation,
-    // Everything the request carried, cached or not — which is what the
-    // context window is filled with. The output is not part of it: it becomes
-    // context for the *next* request, and that one reports its own.
-    contextTokens: input + cacheRead + cacheCreation,
-    model: model ?? soFar?.model ?? null,
-  }
-}
-
-/** The running total after a batch. */
-function accumulate(
-  total: TranscriptUsage | null,
-  spent: Spend
-): TranscriptUsage {
-  return {
-    contextTokens: spent.contextTokens,
-    inputTokens: (total?.inputTokens ?? 0) + spent.input,
-    outputTokens: (total?.outputTokens ?? 0) + spent.output,
-    cacheReadTokens: (total?.cacheReadTokens ?? 0) + spent.cacheRead,
-    cacheCreationTokens:
-      (total?.cacheCreationTokens ?? 0) + spent.cacheCreation,
-    model: spent.model ?? total?.model ?? null,
-  }
+  return { entries, working }
 }
 
 function contentOf(record: TranscriptLine): RawBlock[] {

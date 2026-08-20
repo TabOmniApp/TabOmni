@@ -15,8 +15,8 @@ import type { SystemUsage } from "@shared/api"
 const POLL_MS = 2000
 
 /**
- * One poller for the whole window, as with `useClaudeLimits`, and here it is
- * not only about waste: the reading *is* the interval between two calls, so a
+ * One poller for the whole window, and not only to avoid waste: the reading
+ * *is* the interval between two calls, so a
  * second timer asking on its own schedule would shorten both of theirs and
  * both would report a fraction of the truth.
  */

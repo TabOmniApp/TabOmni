@@ -9,17 +9,16 @@ import {
 import { cn } from "@/lib/utils"
 import { MessagesSquare, RotateCw, SquareTerminal } from "lucide-react"
 
-import type { AgentKind, ClaudePermissionMode } from "@shared/api"
+import type { AgentKind } from "@shared/api"
 import { useFiles } from "@/lib/files/store"
 import { SESSION_TYPES } from "@/lib/terminal/catalog"
-import { useClaudeLimits } from "@/lib/terminal/limits"
 import {
   useTerminal,
   type TerminalSession,
   type SessionView,
 } from "@/lib/terminal/store"
 import { ChatComposer } from "./chat-composer"
-import { ChatView, UsageBar, useTranscript } from "./chat-view"
+import { ChatView, useTranscript } from "./chat-view"
 import { TerminalView, type TerminalHandle } from "../terminal-view"
 
 /** What a session's start resolves to, either way it got there — an installer
@@ -62,53 +61,6 @@ async function createSession(
     claudeSessionId ?? undefined
   )
   return { id, claudeSessionId }
-}
-
-/**
- * The mode the CLI's own status line is showing, read out of the terminal
- * stream.
- *
- * The transcript is the authoritative record but a turn behind: the CLI writes
- * `permission-mode` as a prompt is *submitted*, so a mode cycled with
- * Shift+Tab would not reach the composer until the next message. The status
- * line changes immediately, and this app already has every byte of it.
- *
- * Reading a TUI's own chrome is as brittle as it sounds — a reworded status
- * line stops this working. It fails in the only acceptable direction: the
- * control keeps showing the last mode it was sure of, which is what it did
- * before this existed. The `⏸`/`⏵` glyphs are required so that the same words
- * appearing in a reply the agent has printed cannot be mistaken for the
- * indicator.
- */
-const MODE_LINE =
-  /[\u23f8\u23f5]+\s*(manual mode|accept edits|plan mode|auto mode) on/g
-
-const MODE_NAMES: Record<string, ClaudePermissionMode> = {
-  "manual mode": "default",
-  "accept edits": "acceptEdits",
-  "plan mode": "plan",
-  "auto mode": "auto",
-}
-
-/**
- * The last mode named in `chunk`, or null.
- *
- * `tail` carries the end of the previous chunk, because a redraw can put the
- * indicator across a read boundary — the same reason the transcript mirror
- * holds a partial line.
- */
-function readModeLine(
-  tail: { current: string },
-  chunk: string
-): ClaudePermissionMode | null {
-  const text = tail.current + chunk
-  tail.current = text.slice(-80)
-
-  let found: ClaudePermissionMode | null = null
-  for (const match of text.matchAll(MODE_LINE)) {
-    found = MODE_NAMES[match[1]!] ?? found
-  }
-  return found
 }
 
 /**
@@ -185,16 +137,6 @@ export function TerminalSessionView({
     if (touchedKey === "") return
     void useFiles.getState().syncPaths(touchedKey.split("\n"))
   }, [touchedKey])
-  // Account-wide rather than this session's, and shared with every other tab
-  // reading it — see `lib/terminal/limits.ts`.
-  const limits = useClaudeLimits()
-
-  /** The mode the CLI's status line last showed — see `readModeLine`. Null
-   * until it has shown one, when the transcript's slower answer stands in. */
-  const [cycledMode, setCycledMode] = useState<ClaudePermissionMode | null>(
-    null
-  )
-  const modeTail = useRef("")
 
   const onReady = useCallback(
     (terminal: TerminalHandle) => {
@@ -203,10 +145,6 @@ export function TerminalSessionView({
       let unsubscribeExit: (() => void) | undefined
 
       setReady(false)
-      // A restart is a different process, so whatever its predecessor's status
-      // line last said is not about this one.
-      setCycledMode(null)
-      modeTail.current = ""
 
       const start: Promise<Started> = installing
         ? window.desktop
@@ -241,10 +179,6 @@ export function TerminalSessionView({
           unsubscribeData = window.desktop.onTerminalData((event) => {
             if (event.terminalId !== created) return
             terminal.write(event.chunk)
-
-            if (kind !== "claude" || installing) return
-            const mode = readModeLine(modeTail, event.chunk)
-            if (mode) setCycledMode(mode)
           })
 
           unsubscribeExit = window.desktop.onTerminalExit((event) => {
@@ -342,14 +276,8 @@ export function TerminalSessionView({
    * matches what the CLI was told. */
   const pane = claudeSession ? (
     <div className="relative h-full w-full">
-      <div
-        className={cn("absolute inset-0 flex flex-col", chat && "invisible")}
-      >
-        <div className="min-h-0 flex-1">{terminalView}</div>
-        {/* Only under the terminal: this is the view a message is written
-            in, so it is the only one where any of these numbers is a
-            question about to be answered. */}
-        <UsageBar usage={transcript.usage} limits={limits} />
+      <div className={cn("absolute inset-0", chat && "invisible")}>
+        {terminalView}
       </div>
       <div className={cn("absolute inset-0", !chat && "invisible")}>
         <ChatView
@@ -433,29 +361,6 @@ export function TerminalSessionView({
                   // This composer writes into the CLI's own prompt, so a `/…`
                   // line it sends is run as a command rather than read as text.
                   runsSlashCommands={kind === "claude"}
-                  // Model is the one the CLI will change from its own prompt.
-                  // Permission mode gets no callback: it stays a startup flag
-                  // on purpose (see `agentCommandWith`), so it needs the
-                  // restart below — which resumes the same conversation.
-                  onApplyModel={
-                    kind === "claude"
-                      ? (model) => sendFromComposer(`/model ${model}`)
-                      : undefined
-                  }
-                  // The composer's permission mode only reaches the CLI at
-                  // startup, so it needs a way to start the session over —
-                  // the same `restart` the exited-session button uses.
-                  onRestart={() => restart(id)}
-                  // What the session is actually in, so cycling it with
-                  // Shift+Tab in the terminal moves this control too.
-                  // The status line first, since it is the one that moves the
-                  // moment the mode does; the transcript's record stands in
-                  // until the CLI has drawn one.
-                  permissionMode={
-                    claudeSession
-                      ? (cycledMode ?? transcript.permissionMode)
-                      : null
-                  }
                 />
               </ResizablePanel>
             </>

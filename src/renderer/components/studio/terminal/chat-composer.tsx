@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ClipboardEvent,
@@ -17,13 +16,6 @@ import {
   useInstance,
 } from "@milkdown/react"
 import { Button } from "@/components/ui/button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import {
@@ -31,25 +23,12 @@ import {
   AtSign,
   ImageOff,
   Paperclip,
-  RotateCw,
   Slash,
   Square,
   X,
 } from "lucide-react"
 
-import {
-  CLAUDE_MODEL_KEY,
-  CLAUDE_PERMISSION_MODE_KEY,
-  type ClaudeModel,
-  type ClaudePermissionMode,
-  type ClaudeSlashCommand,
-} from "@shared/api"
-import {
-  CLAUDE_MODEL_IDS,
-  CLAUDE_MODELS,
-  CLAUDE_PERMISSION_MODE_IDS,
-  CLAUDE_PERMISSION_MODES,
-} from "@/lib/terminal/catalog"
+import { type ClaudeSlashCommand } from "@shared/api"
 import { IconButton } from "../icon-button"
 import { linkAttr } from "@milkdown/kit/preset/commonmark"
 import { expandMentions, mentionKindOf } from "@/lib/terminal/mention-text"
@@ -224,94 +203,6 @@ function useSlashCommands(folderId: string | null) {
 }
 
 /**
- * The workspace's choice of model or permission mode, remembered across runs.
- *
- * `applied` is what the value was when this composer mounted, which is what
- * the session running above it was started with — the main process reads
- * these same keys when it builds the CLI's command line. Keeping the two
- * apart is what lets the UI say "restart to apply" only when it is true.
- */
-function usePersistedChoice<T extends string>(
-  key: string | null,
-  allowed: Set<string>,
-  fallback: T,
-  /**
-   * What the running session is really on, when something can see it.
-   *
-   * The permission mode has this and the model does not: the mode can be
-   * cycled with Shift+Tab at the CLI's own prompt, and the CLI records each
-   * change in the transcript the chat view is already tailing. Without it this
-   * control would go on showing the mode the session *started* in.
-   */
-  observed?: T | null
-) {
-  const [value, setValue] = useState<T>(fallback)
-  const [applied, setApplied] = useState<T>(fallback)
-
-  useEffect(() => {
-    if (key === null) return
-    let cancelled = false
-
-    void window.desktop.getSetting(key).then((stored) => {
-      // A value this build does not know is treated as unset rather than
-      // passed along: it would reach the CLI as a flag it rejects, and a
-      // session that refuses to start is a poor way to learn that.
-      if (cancelled || stored === null || !allowed.has(stored)) return
-      setValue(stored as T)
-      setApplied(stored as T)
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [key, allowed])
-
-  /**
-   * Follows the session when the mode is changed somewhere else.
-   *
-   * Adjusted during render rather than from an effect — React's own pattern
-   * for a value that has to track a prop — and keyed on `observed` *changing*
-   * rather than on every report of it: the transcript repeats the current mode
-   * with each batch, and re-applying it would wipe a choice made here that is
-   * still waiting for a restart. A real change is the session's own, so it
-   * wins over that pending choice; the control would otherwise be claiming a
-   * mode the session is not in.
-   */
-  const [seen, setSeen] = useState<T | null>(observed ?? null)
-  if (observed !== undefined && observed !== null && observed !== seen) {
-    setSeen(observed)
-    setValue(observed)
-    setApplied(observed)
-  }
-
-  /*
-   * Remembered as well as shown, and this is not optional: the mode a session
-   * starts in is read from this key, so a control that displayed the cycled
-   * mode without storing it would promise one thing and restart into another.
-   */
-  useEffect(() => {
-    if (observed === undefined || observed === null || key === null) return
-    void window.desktop.setSetting(key, observed)
-  }, [observed, key])
-
-  const choose = useCallback(
-    (next: T) => {
-      setValue(next)
-      if (key !== null) void window.desktop.setSetting(key, next)
-    },
-    [key]
-  )
-
-  return {
-    value,
-    /** True once the choice differs from what the running session got. */
-    pending: value !== applied,
-    choose,
-    markApplied: setApplied,
-  }
-}
-
-/**
  * A composer for `claude` sessions, so a multi-line, markdown, or
  * image-carrying message does not have to be typed straight into the raw
  * terminal — Send hands the finished text to `onSend`, which is what
@@ -326,10 +217,6 @@ export function ChatComposer({
   onInterrupt,
   claudeFolderId = null,
   runsSlashCommands = false,
-  onApplyModel,
-  onApplyPermissionMode,
-  onRestart,
-  permissionMode = null,
 }: {
   onSend: (text: string) => void
   disabled?: boolean
@@ -345,134 +232,54 @@ export function ChatComposer({
    * concept of a turn this side could ask to stop. */
   onInterrupt?: () => void
   /** The folder this is a Claude Code session for, or null for a kind that is
-   * not one. Turns on the model and permission controls, which work for any
-   * Claude session because they reach the CLI as startup flags. */
+   * not one. Turns on the `/` menu, which is built from that CLI's own
+   * commands and skills. */
   claudeFolderId?: string | null
   /**
    * Whether a `/…` line handed to `onSend` is *run* by the other end rather
    * than read as message text. True for a `claude` session, whose composer
    * writes into the CLI's own prompt; false for `claude-gui`, which feeds it
-   * stream-json instead — a difference that decides both whether the `/`
-   * menu is worth offering and whether a model change can apply live.
+   * stream-json instead — a difference that decides whether the `/` menu is
+   * worth offering.
    */
   runsSlashCommands?: boolean
-  /**
-   * Applies a setting to the session already running. Absent means the other
-   * end has no way to be told mid-flight, and the choice waits for the next
-   * session — which is the only thing "Restart to apply" ever appears for.
-   *
-   * The two kinds differ here: a GUI session takes both over its stream-json
-   * transport, while a terminal one takes only the model, through the CLI's
-   * own `/model`.
-   */
-  onApplyModel?: (model: ClaudeModel) => void
-  onApplyPermissionMode?: (mode: ClaudePermissionMode) => void
-  /** Starts the session over, for a choice that could not be applied live.
-   * Absent when there is nothing to restart. */
-  onRestart?: () => void
-  /** The mode the session is really in, when the caller can see it — a
-   * `claude` session's transcript reports every change, Shift+Tab included.
-   * Null for a kind with no such report. */
-  permissionMode?: ClaudePermissionMode | null
 }) {
   return (
     <MilkdownProvider>
       <ComposerBody
-        permissionMode={permissionMode}
         onSend={onSend}
         disabled={disabled}
         busy={busy}
         onInterrupt={onInterrupt}
         claudeFolderId={claudeFolderId}
         runsSlashCommands={runsSlashCommands}
-        onApplyModel={onApplyModel}
-        onApplyPermissionMode={onApplyPermissionMode}
-        onRestart={onRestart}
       />
     </MilkdownProvider>
   )
 }
 
 function ComposerBody({
-  permissionMode,
   onSend,
   disabled,
   busy,
   onInterrupt,
   claudeFolderId,
   runsSlashCommands,
-  onApplyModel,
-  onApplyPermissionMode,
-  onRestart,
 }: {
-  permissionMode: ClaudePermissionMode | null
   onSend: (text: string) => void
   disabled: boolean
   busy: boolean
   onInterrupt?: () => void
   claudeFolderId: string | null
   runsSlashCommands: boolean
-  onApplyModel?: (model: ClaudeModel) => void
-  onApplyPermissionMode?: (mode: ClaudePermissionMode) => void
-  onRestart?: () => void
 }) {
   const [text, setText] = useState("")
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [dragOver, setDragOver] = useState(false)
   const [loading, getInstance] = useInstance()
 
-  const model = usePersistedChoice<ClaudeModel>(
-    claudeFolderId && CLAUDE_MODEL_KEY,
-    CLAUDE_MODEL_IDS,
-    "default"
-  )
-  const permission = usePersistedChoice<ClaudePermissionMode>(
-    claudeFolderId && CLAUDE_PERMISSION_MODE_KEY,
-    CLAUDE_PERMISSION_MODE_IDS,
-    "default",
-    permissionMode
-  )
-
   const canSend =
     !disabled && !loading && (text.trim() !== "" || attachments.length > 0)
-
-  /**
-   * Remembers the choice, and applies it to the running session when that is
-   * possible at all.
-   *
-   * `default` needs no special case: both ways of applying one of these take
-   * it as a value in its own right — `/model default` resets a terminal
-   * session, and the control protocol answers a `default` permission mode
-   * with `{ mode: "default" }`. Only a setting with no `apply` at all is
-   * left waiting for a restart.
-   */
-  function choose<T extends ClaudeModel | ClaudePermissionMode>(
-    setting: { choose: (next: T) => void; markApplied: (next: T) => void },
-    apply: ((next: T) => void) | undefined,
-    next: T
-  ) {
-    setting.choose(next)
-    if (!apply) return
-
-    // Not gated on `disabled`: both callers already no-op when there is no
-    // live session to talk to, and in that case the choice is applied
-    // anyway — whatever starts next reads these same settings on its way up.
-    // Gating here would instead leave "Restart to apply" showing for a
-    // session that had not even started yet.
-    apply(next)
-    setting.markApplied(next)
-  }
-
-  /** Whether the running session is still on something other than what is
-   * selected — and so whether restarting would actually change anything.
-   * In practice only a terminal session's permission mode ever gets here. */
-  const pending = model.pending || permission.pending
-
-  function restart() {
-    permission.markApplied(permission.value)
-    model.markApplied(model.value)
-    onRestart?.()
-  }
 
   /**
    * Types a `/` for the person who did not know they could.
@@ -744,51 +551,6 @@ function ComposerBody({
             <AtSign />
           </IconButton>
 
-          {claudeFolderId !== null && (
-            <>
-              <BarSelect
-                label="Model"
-                value={model.value}
-                onChange={(next) =>
-                  choose(model, onApplyModel, next as ClaudeModel)
-                }
-                options={CLAUDE_MODELS}
-              />
-              <BarSelect
-                label="Permission mode"
-                value={permission.value}
-                onChange={(next) =>
-                  choose(
-                    permission,
-                    onApplyPermissionMode,
-                    next as ClaudePermissionMode
-                  )
-                }
-                options={CLAUDE_PERMISSION_MODES}
-              />
-
-              {/* In practice only ever the permission mode: it is the one
-                setting this app keeps as a startup flag on purpose, so that a
-                per-project choice does not end up in the user's own
-                `~/.claude/settings.json` (see `agentCommandWith`). Everything
-                else has already taken effect by the time this would have
-                rendered. */}
-              {pending && onRestart && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={restart}
-                  className="h-7 gap-1 px-2 text-xs text-muted-foreground"
-                  title="Restarts the session with this setting. The conversation is resumed, not lost."
-                >
-                  <RotateCw className="size-3" />
-                  Restart to apply
-                </Button>
-              )}
-            </>
-          )}
-
           {/* `ml-auto` on the wrapper rather than on Send itself, so Stop —
               rendered only once there is a turn worth stopping — sits right
               beside it instead of opening a second gap of its own. */}
@@ -821,69 +583,6 @@ function ComposerBody({
         </div>
       </div>
     </div>
-  )
-}
-
-/**
- * One of the composer bar's two dropdowns — the same `Select` the project
- * switcher in `studio.tsx` uses, and set up the same way.
- *
- * `items` is not optional dressing: without it Base UI renders the raw value
- * in the trigger, so this would read "opusplan" or "acceptEdits" instead of
- * the label. Passing it is also what lets each row carry a description the
- * trigger does not repeat.
- */
-function BarSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string
-  value: string
-  onChange: (next: string) => void
-  options: { id: string; label: string; description?: string }[]
-}) {
-  const items = useMemo(
-    () => options.map((option) => ({ value: option.id, label: option.label })),
-    [options]
-  )
-
-  return (
-    <Select
-      items={items}
-      value={value}
-      // Base UI (what this Select is built on) types a cleared selection as
-      // null; neither of these two is clearable — there is always a model
-      // and always a mode — so nothing meaningful is being dropped.
-      onValueChange={(next) => {
-        if (next !== null) onChange(next)
-      }}
-    >
-      <SelectTrigger size="sm" aria-label={label} className="max-w-44 min-w-0">
-        <SelectValue />
-      </SelectTrigger>
-      {/* Same treatment as the project switcher: a row that carries a
-          description is wider than the trigger it opens from. */}
-      <SelectContent
-        align="start"
-        alignItemWithTrigger={false}
-        className="w-auto min-w-(--anchor-width)"
-      >
-        {options.map((option) => (
-          <SelectItem key={option.id} value={option.id}>
-            <span className="flex flex-col gap-0.5">
-              <span>{option.label}</span>
-              {option.description && (
-                <span className="text-xs text-muted-foreground">
-                  {option.description}
-                </span>
-              )}
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   )
 }
 

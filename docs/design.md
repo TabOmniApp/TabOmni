@@ -1205,21 +1205,17 @@ transcript would both be appending to it.
 
 The composer sits under the terminal, and only there: it writes into the CLI's
 own prompt, which is the terminal's, and the chat is the view for reading the
-conversation rather than adding to it. The mode is the one setting
-that still waits for a restart, and deliberately: the CLI would take
-`/config permissionMode=…` live, but that writes `permissions.defaultMode` into
-your own `~/.claude/settings.json`, where the workspace's choice would become
-the default for every other repository and every `claude` you run yourself.
-Restarting
-resumes the same conversation — `--resume` writes on into the same transcript —
-so it costs the process and nothing else. A mode cycled with Shift+Tab at the
-CLI's own prompt moves the control too, from two sources with different
-weaknesses: the transcript records the mode as each prompt is _submitted_, so
-it is authoritative but a turn behind, while the terminal's own status line
-(`⏵⏵ accept edits on`) changes immediately and is read straight out of the pty.
-The status line wins when it has spoken. Reading a TUI's chrome is brittle by
-nature — a reworded indicator simply stops moving the control, leaving the
-transcript's slower answer, which is what it did before.
+conversation rather than adding to it. It carries no model or permission-mode
+control, and that is deliberate: both are the CLI's own settings, chosen at its
+prompt (`/model`, Shift+Tab) or in the user's own configuration, so a session
+started here runs on exactly what `claude` would have run on anyway. There were
+two dropdowns for them, kept as startup flags — `--model` and
+`--permission-mode` — with a "Restart to apply" beside them and a reader of the
+terminal's own status line (`⏵⏵ accept edits on`) to keep the control honest
+when the mode was cycled at the prompt. All of it was a second place to say
+what the CLI already says better, and it is gone: nothing here passes either
+flag, and `claude.model` / `claude.permissionMode` in a workspace's settings are
+no longer read.
 
 A question does not reach the chat until it has been answered, and that is a
 consequence of reading a file rather than a gap worth closing. Measured, not
@@ -1329,52 +1325,19 @@ where those cannot see it. A read-only conversation shows the same strip and syn
 writes happened whenever it ran, and a tree refreshed from a transcript days old
 would be answering a question nobody asked.
 
-A bar along the bottom of both views shows what the conversation has spent,
-read off the `usage` the CLI copies onto every assistant line. The figure that
-matters is the context the last request carried: it says whether the next
-message will fit, and it drops when the CLI compacts. Beside it are the
-conversation's totals, which only climb.
-
-The bar is under the terminal only. That is the view a message is written in,
-so it is the only one where any of this is a question about to be answered;
-the chat, which you switch to in order to read back through what happened,
-carries no bar and no composer, and gives its whole height to the
-conversation.
-
-Beside the conversation's own figures it shows the account's allowance as
-`5h ▁▃ 55%   7d ▁▁ 37%` — the rolling five-hour window and the weekly one,
-the two bars `/usage` draws in the TUI, each with a meter of the same
-make as the context one beside it. Three meters read as one control only if
-they are the same drawing, so there is a single `Meter` and a single set of
-thresholds: amber at 70%, red at 90%, whichever ceiling is being measured.
-The number sits next to its meter and stays the row's ordinary colour —
-the meter already carries the warning, and shouting it twice reads as two
-things going wrong.
-
-The windows are labelled `5h` and `7d` rather than abbreviated to the word
-"session", because a percentage of an unnamed allowance says nothing. They
-are **account-wide**, not this conversation's: spent by every `claude` the
-user runs, which is the reason they are worth having in front of a session
-that is only one of them. Percentages because that is all the usage endpoint
-returns for a subscription.
-
-This app never asks the API for them. `/usage` does, and caches what it got
-in `cachedUsageUtilization` in `~/.claude.json`; `electron/claude-usage.ts`
-reads that cache and nothing else, which is the transcript arrangement again
-— a reader of what the CLI already writes rather than a second client of the
-API, which would want the OAuth token the CLI holds. The consequence is that
-the figures are as fresh as the CLI last made them and no fresher, so the
-tooltip says how old they are rather than presenting an hour-old number as
-current.
-
-Two things it still deliberately does not show. **Cost**: the CLI writes
-none, and a figure worked out here from a price list the app carried would be
-wrong the day prices move and meaningless on a subscription. **A token count
-against the allowance**, because the endpoint gives percentages and a count
-reconstructed from them would be invented. The context window is a guess for
-a related reason: the transcript records the tokens sent but never the
-ceiling, and the 1M window is a beta header rather than a model of its own,
-so 200k is assumed until a request is seen to exceed it.
+There was a bar along the bottom of the terminal view showing what the
+conversation had spent — the context the last request carried, the
+conversation's running totals, the model that answered — beside the account's
+own allowance as `5h ▁▃ 55%   7d ▁▁ 37%`, read out of the
+`cachedUsageUtilization` the TUI's `/usage` leaves in `~/.claude.json`. All of
+it is gone, deleted rather than hidden: the numbers are the CLI's own and it
+draws them better, in the pane right above where the bar was. What went with it
+is the whole chain behind it — the usage the transcript mirror accumulated off
+each assistant line, the `claude:usage-limits` call and its reader, and the
+poller that shared one answer between every open tab. The one figure that had to
+be guessed at, the context window (the transcript records the tokens sent but
+never the ceiling, and the 1M window is a beta header rather than a model of its
+own), is not a guess this app makes any more.
 
 ## The workspace's databases
 
