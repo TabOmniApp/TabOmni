@@ -33,7 +33,6 @@ import {
   type NoteBody,
   type NoteFolder,
   type NoteRecord,
-  type NoteTemplate,
 } from "../shared/api"
 import {
   agentCommandWith,
@@ -733,24 +732,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.deleteNotes, (_event, ids: string[]) =>
     store.deleteNotes(ids)
-  )
-
-  ipcMain.handle(IPC.listNoteTemplates, () => store.listNoteTemplates())
-
-  ipcMain.handle(IPC.saveNoteTemplates, (_event, templates: NoteTemplate[]) =>
-    store.saveNoteTemplates(templates)
-  )
-
-  ipcMain.handle(IPC.readNoteTemplate, (_event, id: string) =>
-    store.readNoteTemplate(id)
-  )
-
-  ipcMain.handle(IPC.writeNoteTemplate, (_event, id: string, body: NoteBody) =>
-    store.writeNoteTemplate(id, body)
-  )
-
-  ipcMain.handle(IPC.deleteNoteTemplates, (_event, ids: string[]) =>
-    store.deleteNoteTemplates(ids)
   )
 
   ipcMain.handle(IPC.readDrawing, (_event, id: string) => store.readDrawing(id))

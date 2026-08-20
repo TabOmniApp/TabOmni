@@ -79,8 +79,7 @@ export async function uploadNoteFile(file: File): Promise<string> {
 
 /**
  * Copies every file a note refers to and points the copy at the copies — what
- * duplicating a note, making one from a template, and saving one as a template
- * all need, exactly as `cloneDrawings` does.
+ * duplicating a note needs, exactly as `cloneDrawings` does.
  *
  * Without it two notes share one file, and deleting either takes the other's
  * pictures with it.

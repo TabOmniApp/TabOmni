@@ -27,7 +27,7 @@ import "@blocknote/shadcn/style.css"
 import "./note-editor.css"
 
 /**
- * The studio's one prose editor: a note, and a note template, edited as blocks.
+ * The studio's one prose editor: a note, edited as blocks.
  *
  * BlockNote rather than a bare ProseMirror, for the same reason Crepe was
  * chosen before it — the slash menu, the drag handles, the formatting toolbar

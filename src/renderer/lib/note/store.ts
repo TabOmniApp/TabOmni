@@ -14,7 +14,6 @@ import {
 } from "./blocks"
 import { cloneNoteFiles, deleteNoteFiles } from "./uploads"
 import { blocksOf } from "./from-markdown"
-import { useNoteTemplates } from "./templates"
 
 /** How long typing settles before a note is written back. */
 const SAVE_DELAY_MS = 400
@@ -57,14 +56,6 @@ type NoteState = {
   refresh: () => Promise<void>
 
   create: (folderId?: string | null) => Promise<void>
-  /** A new note starting from a template's text, named after it. */
-  createFromTemplate: (
-    templateId: string,
-    folderId?: string | null
-  ) => Promise<void>
-  /** Files this note's text away as a template. Returns the new template's id
-   * so the caller can open the manage dialog on it. */
-  saveAsTemplate: (id: string) => Promise<string | null>
   rename: (id: string, name: string) => void
   duplicate: (id: string) => Promise<void>
   remove: (id: string) => void
@@ -116,11 +107,10 @@ function blankNoteName(index: number): string {
  * A body ready to become a second note: blocks, with every drawing in it
  * copied and the blocks pointed at the copies.
  *
- * The three paths that make a note out of another one — from a template, into a
- * template, and duplicate — all want exactly this, and all three can be handed a
- * note an older build wrote, so the conversion happens here rather than three
- * times. What lands is blocks either way: a copy is a new file, and writing it
- * in the old format only to convert it on the first open would be keeping the
+ * Duplicating a note wants exactly this, and can be handed a note an older
+ * build wrote, so the conversion happens here rather than at the call site.
+ * What lands is blocks either way: a copy is a new file, and writing it in the
+ * old format only to convert it on the first open would be keeping the
  * migration alive on purpose.
  */
 async function copyOf(body: NoteBody): Promise<string> {
@@ -194,12 +184,11 @@ export const useNotes = create<NoteState>((set, get) => {
   /**
    * Adds a note with the text it starts with, and opens it.
    *
-   * Blank and from-a-template differ only in that text and that name, so the
-   * ordering both depend on lives here once: the body is cached before the
-   * listing is committed, so the editor that the `select` below mounts finds
-   * the text already there rather than reading a file still being written.
-   * `duplicate` keeps its own copy of this because it inserts beside the note
-   * it copied rather than at the end.
+   * The ordering is what matters: the body is cached before the listing is
+   * committed, so the editor that the `select` below mounts finds the text
+   * already there rather than reading a file still being written. `duplicate`
+   * keeps its own copy of this because it inserts beside the note it copied
+   * rather than at the end.
    */
   async function addNote(name: string, folderId: string | null, body: string) {
     const note: NoteRecord = {
@@ -326,43 +315,6 @@ export const useNotes = create<NoteState>((set, get) => {
 
     async create(folderId = null) {
       await addNote(blankNoteName(get().notes.length), folderId, "")
-    },
-
-    async createFromTemplate(templateId, folderId = null) {
-      // Read through the store rather than the disk so a template being edited
-      // in the manage dialog right now is taken as it stands on screen.
-      const templates = useNoteTemplates.getState()
-      const template = templates.templates.find(
-        (candidate) => candidate.id === templateId
-      )
-      if (!template) return
-
-      // Each drawing in the template is copied and the new note pointed at the
-      // copy — the same reason `duplicate` does it. Sharing them would mean
-      // every note made from this template drew on one canvas, and deleting any
-      // of them took that canvas from all the others.
-      await addNote(
-        template.name,
-        folderId,
-        await copyOf(await templates.loadBody(templateId))
-      )
-    },
-
-    async saveAsTemplate(id) {
-      const note = get().notes.find((candidate) => candidate.id === id)
-      if (!note) return null
-
-      // The list is re-read first: `create` appends to what the store holds and
-      // writes the whole thing back, so adding to a list that was never loaded
-      // would write this template over every other one.
-      const templates = useNoteTemplates.getState()
-      await templates.refresh()
-
-      const template = await templates.create({
-        name: note.name,
-        markdown: await copyOf(await get().loadBody(id)),
-      })
-      return template.id
     },
 
     rename(id, name) {

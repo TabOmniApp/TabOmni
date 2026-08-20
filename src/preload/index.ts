@@ -131,14 +131,6 @@ const api: DesktopApi = {
   writeNote: (id, body) => ipcRenderer.invoke(IPC.writeNote, id, body),
   deleteNotes: (ids) => ipcRenderer.invoke(IPC.deleteNotes, ids),
   notePreviewUrl: (id) => ipcRenderer.invoke(IPC.notePreviewUrl, id),
-  listNoteTemplates: () => ipcRenderer.invoke(IPC.listNoteTemplates),
-  saveNoteTemplates: (templates) =>
-    ipcRenderer.invoke(IPC.saveNoteTemplates, templates),
-  readNoteTemplate: (id) => ipcRenderer.invoke(IPC.readNoteTemplate, id),
-  writeNoteTemplate: (id, body) =>
-    ipcRenderer.invoke(IPC.writeNoteTemplate, id, body),
-  deleteNoteTemplates: (ids) =>
-    ipcRenderer.invoke(IPC.deleteNoteTemplates, ids),
 
   readDrawing: (id) => ipcRenderer.invoke(IPC.readDrawing, id),
   writeDrawing: (id, scene) => ipcRenderer.invoke(IPC.writeDrawing, id, scene),

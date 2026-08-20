@@ -23,7 +23,6 @@ import type {
   NoteBody,
   NoteFolder,
   NoteRecord,
-  NoteTemplate,
   UpdateDatabaseInput,
   WorkspaceFolder,
   WorkspaceRecord,
@@ -130,19 +129,6 @@ export const NOTE_FOLDERS_FILE = "note-folders.json"
  * that grep, an editor or git can read without going through this app.
  */
 export const NOTES_DIR = "notes"
-
-/** The note templates' listing; each body is a file of its own, as a note's is. */
-export const NOTE_TEMPLATES_FILE = "note-templates.json"
-
-/**
- * Where each template's markdown is kept, one `<id>.md` per template.
- *
- * A directory of its own rather than sharing `NOTES_DIR`: the two are separate
- * lists with separate ids, and interleaving them would leave a directory the
- * user cannot read without the listing beside it — which is exactly what
- * keeping the bodies as plain files was for.
- */
-export const NOTE_TEMPLATES_DIR = "note-templates"
 
 /**
  * Where a note's drawings are kept, one `<id>.excalidraw` per drawing.
@@ -661,40 +647,6 @@ export class Store {
     )
   }
 
-  listNoteTemplates(): Promise<NoteTemplate[]> {
-    return this.readList(NOTE_TEMPLATES_FILE)
-  }
-
-  saveNoteTemplates(templates: NoteTemplate[]): Promise<void> {
-    return this.writeList(NOTE_TEMPLATES_FILE, templates)
-  }
-
-  /** A template's blocks, or the markdown an older build left. */
-  readNoteTemplate(id: string): Promise<NoteBody> {
-    return this.readBody(
-      this.noteTemplatePath(id),
-      this.legacyNoteTemplatePath(id)
-    )
-  }
-
-  writeNoteTemplate(id: string, body: NoteBody): Promise<void> {
-    return this.writeOwnFile(
-      body.format === "blocks"
-        ? this.noteTemplatePath(id)
-        : this.legacyNoteTemplatePath(id),
-      body.text
-    )
-  }
-
-  deleteNoteTemplates(ids: string[]): Promise<void> {
-    return this.deleteOwnFiles(
-      ids.flatMap((id) => [
-        this.noteTemplatePath(id),
-        this.legacyNoteTemplatePath(id),
-      ])
-    )
-  }
-
   /**
    * A body, preferring the blocks and falling back to what an older build
    * wrote.
@@ -834,16 +786,6 @@ export class Store {
   /** Where the same note's text was kept when a note was markdown. */
   private legacyNotePath(id: string): string {
     return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.md`)
-  }
-
-  /** One template's blocks. `ownId` guards this path for the same reason it
-   * guards a note's: the id comes from the renderer and becomes a filename. */
-  private noteTemplatePath(id: string): string {
-    return path.join(this.workspaceDir, NOTE_TEMPLATES_DIR, `${ownId(id)}.json`)
-  }
-
-  private legacyNoteTemplatePath(id: string): string {
-    return path.join(this.workspaceDir, NOTE_TEMPLATES_DIR, `${ownId(id)}.md`)
   }
 
   /** One drawing's scene, in Excalidraw's own file format. */

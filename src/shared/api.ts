@@ -825,29 +825,6 @@ export type NoteRecord = {
 }
 
 /**
- * One note template — a note's starting text, kept apart from the notes.
- *
- * Its own listing and its own directory rather than a flag on `NoteRecord`,
- * because a template is not a note that happens to be filed elsewhere: it has
- * no folder, never appears in the tree or the tab strip, and is not something
- * the work accumulates. Mixing the two would mean every read of the notes
- * remembering to filter, and one forgotten filter is a template showing up as
- * a note.
- *
- * The body lives beside the listing as its own `.md`, for the same two reasons
- * a note's does — see `NoteRecord`.
- */
-export type NoteTemplate = {
-  id: string
-  name: string
-  /** What the template is for, shown under its name in the picker. Empty is
-   * allowed: a name like "Bug repro" does not need a second sentence. */
-  description: string
-  createdAt: string
-  updatedAt: string
-}
-
-/**
  * The language a note's fenced block carries when it holds a drawing.
  *
  * A drawing is a scene of shapes and images, which markdown has no syntax for,
@@ -860,7 +837,7 @@ export type NoteTemplate = {
 export const DRAWING_LANGUAGE = "drawing"
 
 /**
- * A note's or a template's body, and which of the two formats it is in.
+ * A note's body, and which of the two formats it is in.
  *
  * A note is BlockNote's block model, written as JSON — the editor's own
  * document rather than a markdown rendering of it, because BlockNote's markdown
@@ -1248,20 +1225,6 @@ export type DesktopApi = {
   notePreviewUrl: (id: string) => Promise<string>
 
   /**
-   * The note templates, and one template's body.
-   *
-   * The same five calls as the notes above and deliberately not the same ones:
-   * a template id and a note id name files in different directories, and a
-   * single set of calls would need a "which kind" argument that every caller
-   * would have to get right.
-   */
-  listNoteTemplates: () => Promise<NoteTemplate[]>
-  saveNoteTemplates: (templates: NoteTemplate[]) => Promise<void>
-  readNoteTemplate: (id: string) => Promise<NoteBody>
-  writeNoteTemplate: (id: string, body: NoteBody) => Promise<void>
-  deleteNoteTemplates: (ids: string[]) => Promise<void>
-
-  /**
    * One drawing's scene, as the text of its `.excalidraw` file — Excalidraw's
    * own format, so a scene can be opened at excalidraw.com or in the editor's
    * desktop app without this studio.
@@ -1498,11 +1461,6 @@ export const IPC = {
   writeNote: "notes:write",
   deleteNotes: "notes:delete",
   notePreviewUrl: "notes:preview-url",
-  listNoteTemplates: "note-templates:list",
-  saveNoteTemplates: "note-templates:save",
-  readNoteTemplate: "note-templates:read",
-  writeNoteTemplate: "note-templates:write",
-  deleteNoteTemplates: "note-templates:delete",
   readDrawing: "drawings:read",
   writeDrawing: "drawings:write",
   deleteDrawings: "drawings:delete",

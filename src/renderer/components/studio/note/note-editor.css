@@ -22,9 +22,9 @@
 .bn-root,
 .bn-root[data-color-scheme] {
   --bn-colors-editor-text: var(--foreground);
-  /* Transparent rather than `--background`, so a note in the templates dialog
-   * takes that dialog's surface instead of punching the workbench's own
-   * background through it. */
+  /* Transparent rather than `--background`, so the editor takes the surface it
+   * is mounted on instead of punching the workbench's own background through
+   * it. */
   --bn-colors-editor-background: transparent;
 
   --bn-colors-menu-text: var(--popover-foreground);

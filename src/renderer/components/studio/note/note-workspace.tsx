@@ -17,9 +17,9 @@ import { LoadedBlockEditor } from "./block-editor"
 /**
  * One note, edited as rich text and stored as markdown.
  *
- * The editor itself is `MarkdownEditor`, shared with the templates dialog —
- * a template is the same markdown in a different file, and two editors would
- * be two block menus to keep in step.
+ * The editor itself is `block-editor.tsx`, which the Explorer's `.note` tabs
+ * mount too — a note in a repository is the same document in a different file,
+ * and two editors would be two block menus to keep in step.
  */
 export function NoteWorkspace() {
   const notes = useNotes((state) => state.notes)
