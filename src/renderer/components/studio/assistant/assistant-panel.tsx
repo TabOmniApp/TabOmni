@@ -19,7 +19,7 @@ import {
   useAssistant,
   type AssistantMessage,
 } from "@/lib/assistant/store"
-import { relativeTime } from "@/lib/terminal/conversations"
+import { relativeTime } from "@/lib/relative-time"
 import { useSettings } from "@/lib/settings"
 import { IconButton } from "../icon-button"
 import { MarkdownView } from "../markdown-view"

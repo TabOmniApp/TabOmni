@@ -69,7 +69,6 @@ import { IconButton } from "../icon-button"
 import { PanelHeader } from "../panel-header"
 import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
-import { ConversationsList } from "./conversations-list"
 import { SessionsList } from "./sessions-list"
 
 /** What the right-click menu is about: a row in the tree, or the workspace
@@ -280,13 +279,9 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           })}
         </ContextMenuTrigger>
 
-        {/* Under the tree rather than inside it: the tree is the directory tree,
-            and neither a session nor a conversation is a file in any folder.
-            Sessions first because they are running now and the conversations are
-            a history; Conversations starts folded, so the panel is still the
-            files first. */}
+        {/* Under the tree rather than inside it: the tree is the directory
+            tree, and a session is not a file in any folder. */}
         <SessionsList />
-        <ConversationsList />
 
         {creating && (
           <RenameDialog

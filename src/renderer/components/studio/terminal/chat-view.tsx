@@ -33,9 +33,9 @@ import type {
   TranscriptEntry,
   TranscriptSessionSummary,
 } from "@shared/api"
+import { relativeTime } from "@/lib/relative-time"
 import { useSettings } from "@/lib/settings"
 import { useTerminal } from "@/lib/terminal/store"
-import { relativeTime } from "@/lib/terminal/conversations"
 import { writtenPaths } from "@/lib/terminal/touched"
 import {
   ASK_USER_QUESTION,
@@ -161,9 +161,7 @@ export function useTranscript(session: {
    * For a session tab this is always the one its own pty is running: picking
    * another from the drawer restarts the pty onto it (`resumeSession` in
    * `lib/terminal/store.ts`), so what is read and what is written to are the
-   * same conversation and the composer is never pointed elsewhere. A
-   * conversation opened from the Explorer sidebar has no pty at all and is read
-   * and nothing else — see `conversation-view.tsx`.
+   * same conversation and the composer is never pointed elsewhere.
    */
   const target = claudeSessionId
 

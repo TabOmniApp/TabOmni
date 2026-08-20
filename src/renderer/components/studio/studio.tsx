@@ -14,7 +14,6 @@ import { watchExpandedDirectories } from "@/lib/files/watch"
 import { useNotes } from "@/lib/note/store"
 import { useActiveTabId, useHasOpenTabs } from "@/lib/panels"
 import { isEditingRichText, isStudioShortcut } from "@/lib/shortcuts"
-import { useConversations } from "@/lib/terminal/conversations"
 import { useTerminal } from "@/lib/terminal/store"
 import { useAssistant } from "@/lib/assistant/store"
 import { useRail } from "@/lib/rail"
@@ -88,7 +87,6 @@ export function Studio() {
     void useDatabases.getState().refresh()
     void useNotes.getState().refresh()
     void useFiles.getState().restore()
-    void useConversations.getState().restore()
   }, [])
 
   // The assistant's turn belongs to the main process, so the panel is only a

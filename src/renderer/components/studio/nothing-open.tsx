@@ -19,7 +19,7 @@ import type { Section } from "@/lib/rail"
  */
 const HINTS: Record<Section, string> = {
   files:
-    "Pick a file from the tree on the left, or start a session or open a conversation from the lists under it.",
+    "Pick a file from the tree on the left, or start a session from the list under it.",
   database: "Pick a table from the list on the left, or open a query tab.",
   api: "Pick a request from the list on the left, or create one.",
   note: "Pick a note from the list on the left, or write a new one.",

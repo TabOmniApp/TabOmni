@@ -289,18 +289,14 @@ watchers because it names a file as the tool call is recorded, without their
 debounce, and works where `fs.watch` does not. Both are in the Terminal sessions part of
 `docs/design.md`.
 
-**Conversations** is the section under the tree: every `claude` transcript the
-workspace's folders have on disk (`listSessions` in `src/main/transcript.ts`
-reads the directory `--resume` reads), which includes runs this app never
-started — a `claude` in the user's own terminal writes to the same place. A row
-opens read-only in the Explorer pane, with `Resume` handing it to a real session
-and closing the read-only tab. The tabs live in the Explorer pane rather than the
-Terminal one because `showPane` moves the sidebar too and the row is in this
-sidebar; they are their own store (`lib/terminal/conversations.ts`) rather than
-more `openIds` in `lib/files/store.ts`, whose ids are all absolute paths.
-`lib/panels.ts` adds the two lists into the one pane's tabs and `onScreen` is
-what says which of the two is drawn. See the Conversations part of the Explorer
-section in `docs/design.md`.
+There was a **Conversations** section under the tree — every `claude` transcript
+the workspace's folders had on disk, read-only in a tab of the Explorer pane with
+a `Resume` that handed one to a real session. It is gone, deleted rather than
+hidden: no list, no read-only view, no store, and the Explorer pane's tabs are
+files again. `listSessions` in `src/main/transcript.ts` stays, because the chat
+view's **Past sessions** drawer reads the same directory `--resume` reads — that
+drawer, inside a running session, is now the only way to a conversation this app
+did not start. See the Conversations, removed section of `docs/design.md`.
 
 **The workspace's folders belong to Explorer**, and are added, renamed and
 removed there and nowhere else (`components/studio/files/file-tree.tsx`) — the

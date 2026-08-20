@@ -545,8 +545,7 @@ answer to "which folder are you working in?" would otherwise be the name of an
 empty scratch directory: it says there is no working directory, that the folders
 are readable and equal, that the workspace's panels are the `tabomni-*` tools,
 and that it cannot run or change anything. Its transcripts therefore land under a
-project of their own rather than mixed into a repository's, which is also why
-these chats are not in Explorer's Conversations list.
+project of their own rather than mixed into a repository's.
 
 **What it can do, and how that is enforced.** It gets the MCP servers that are
 switched on, every folder in the workspace through `--add-dir` rather than one
@@ -880,53 +879,22 @@ byte in its first 8 KB, and anything over 2 MB. Both come back as results rather
 errors — "this is a PNG" and "this is a 40 MB log" are things the pane can say
 plainly, and rejecting would file them beside "the disk went away".
 
-### Conversations
+### Conversations, removed
 
-**Under the tree, the agent history of each folder — including the parts this
-app had nothing to do with.**
+**There was a Conversations section under the tree** — every `claude` transcript
+the workspace's folders had on disk, this app's runs and the user's own alike,
+read-only in a tab of the Explorer pane with a `Resume` that handed one to a real
+session. It is gone, deleted rather than hidden, the way the git, code search,
+specs, webhook and Mail panels went: nothing of the list, the read-only view or
+its store is left in the code or the tab strip.
 
-A `claude` conversation is a file the CLI wrote. Every run of it appends to
-`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, whether it was started
-from a session in this app or typed into Terminal.app, and `listSessions` in
-`src/main/transcript.ts` reads that directory — the one `--resume` itself reads.
-So the studio can list, and draw, conversations it never started and has no
-process for. That is the whole reason this list is worth having: it is the agent
-history of a repository, not the history of this app's use of it, which is
-something an editor's own chat panel cannot offer for a CLI run in a terminal it
-does not own.
-
-It was already possible to reach one and only in the worst place: the **Past
-sessions** drawer, inside a running session's chat view. The way back to
-yesterday's conversation therefore began with starting a new one. Here it is a
-list beside the files, and a click reads it without starting anything at all.
-
-**A conversation opens read-only, and `Resume` is the way to talk to it.** The
-pane is the chat view's own transcript feed with a different strip above it and
-no composer under it — there is no process to type at. `Resume` hands the
-conversation to a real session (`terminalCreate` with its id, which the CLI
-resumes) and closes the read-only tab, because what that tab was for is then on
-screen with a composer. A conversation that is _already_ running in a session
-says `Go to session` instead and selects that tab: two `claude` processes
-appending to one transcript is not a state worth being able to reach, and the
-CLI refuses a session id that is in use anyway.
-
-**These tabs belong to the Explorer pane**, not the Terminal one, because
-`showPane` moves the sidebar with the pane — and the row a conversation was
-picked from is in _this_ sidebar. Opening one into the Terminal pane would take
-the rail to a sidebar with no row for it to mark, which is the failure that rule
-exists to prevent. They are a store of their own
-(`lib/terminal/conversations.ts`) rather than more `openIds` in the files store:
-a file tab is an absolute path, and `prune`, `restore`, `flush` and `movedPath`
-all read one as a path. `lib/panels.ts` adds the two lists up into the one
-pane's tabs, and `onScreen` there is what settles which of the two the pane
-draws — set when a conversation is picked, cleared by `useFiles.select`.
-
-**Read when the section is opened**, not on launch: this is a `readdir` plus the
-head of every transcript in it, per folder, and a repository worked in for months
-has hundreds. Refresh is the section's own button. The list is grouped by folder
-only when the workspace has more than one, the same rule the Terminal sidebar
-groups sessions by, and it scrolls in a box of its own so the tree above stays
-what the panel is mostly for.
+What it was built against is still answered elsewhere. `listSessions` in
+`src/main/transcript.ts` still reads `~/.claude/projects/<encoded-cwd>/`, and the
+**Past sessions** drawer inside a running session's chat view is what reads it —
+the same directory `--resume` reads, so a conversation typed into Terminal.app is
+still reachable from this app. What went with the section is reaching one
+_without_ a session already running, and the read-only pane that showed a
+transcript with no process behind it.
 
 ### The editor
 
@@ -1069,9 +1037,9 @@ one folder — every session in a single-folder workspace is in the only folder
 there is — and it carries no branch, because the tree's own heading says that
 once, a few rows higher.
 
-The section is expanded by default, unlike Conversations below it: these are live
-processes, and a session on screen with nothing in the sidebar selecting it is
-how a session gets forgotten about. With nothing running it is a header and no
+The section is expanded by default: these are live processes, and a session on
+screen with nothing in the sidebar selecting it is how a session gets forgotten
+about. With nothing running it is a header and no
 more, and folded it says how many sessions are running under it. Nothing folds
 per folder any more — the section itself folds, and a fold inside a box that
 already scrolls was a third level of hiding for a list of a few rows.
@@ -1098,12 +1066,8 @@ back — start a session, switch to Chat, open the drawer, find it. A closed row
 is that handle, and reopening one passes its `claudeSessionId` back to
 `terminalCreate`, which resumes it if `hasTranscript` finds the file.
 
-A closed row is no longer the _only_ handle. Explorer's Conversations section
-lists every transcript a folder has on disk, this app's sessions and the user's
-own `claude` runs alike, and reading one there starts nothing — see the
-Conversations part of the Explorer section. What a closed row still is, and that
-list is not, is a record of the session as this app had it: its name, its kind,
-and its place under a folder.
+What a closed row is, and the drawer is not, is a record of the session as this
+app had it: its name, its kind, and its place under a folder.
 
 A closed shell is honest about offering less: there is no transcript and no
 saved scrollback, so running it again is a fresh pty in the same directory.

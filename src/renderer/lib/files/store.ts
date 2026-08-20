@@ -3,7 +3,6 @@ import { create } from "zustand"
 import type { FileEntry, FileIndexEntry } from "@shared/api"
 import { useStudio } from "../store"
 import { isRememberedTabs, recall, remember } from "../tab-memory"
-import { useConversations } from "../terminal/conversations"
 import { isInside, movedPath, parentOf } from "./paths"
 import { defaultViewer, type Viewer } from "./viewers"
 
@@ -536,10 +535,6 @@ export const useFiles = create<FilesState>((set, get) => {
 
     select(filePath) {
       useStudio.getState().showPane("files")
-      // This pane holds two lists — files, and the conversations opened from
-      // the sidebar below the tree — and only one screen. Picking a file is
-      // what says the screen is a file's.
-      useConversations.getState().blur()
       // The tree follows whatever lands in the pane, wherever it was picked —
       // a tab in the strip, the palette, a definition jumped to. `SideRow`
       // scrolls the row into view once the folders holding it are open, which
