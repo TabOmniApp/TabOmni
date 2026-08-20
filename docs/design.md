@@ -888,13 +888,18 @@ session. It is gone, deleted rather than hidden, the way the git, code search,
 specs, webhook and Mail panels went: nothing of the list, the read-only view or
 its store is left in the code or the tab strip.
 
-What it was built against is still answered elsewhere. `listSessions` in
-`src/main/transcript.ts` still reads `~/.claude/projects/<encoded-cwd>/`, and the
-**Past sessions** drawer inside a running session's chat view is what reads it —
-the same directory `--resume` reads, so a conversation typed into Terminal.app is
-still reachable from this app. What went with the section is reaching one
-_without_ a session already running, and the read-only pane that showed a
-transcript with no process behind it.
+The **Past sessions** drawer in the chat view went the same way, and shortly
+after — see the chat view section — so `listSessions` in
+`src/main/transcript.ts`, the `claudeListSessions` call and
+`TranscriptSessionSummary` are gone from the contract too. Nothing in the app
+lists the transcripts in `~/.claude/projects/<encoded-cwd>/` any more. What is
+left of the CLI's own directory is `hasTranscript`, which answers one yes/no
+question about one id: whether reopening a closed row can pass `--resume`.
+
+What this costs, plainly: a conversation the app did not start — a `claude` run
+from Terminal.app — is no longer reachable from inside it, and neither is a
+conversation whose session tab has been forgotten. `claude --resume` in a
+terminal still is.
 
 ### The editor
 
@@ -1061,13 +1066,15 @@ act, because a pty cannot be resumed, only started over.
 This is about `claude` in particular. The conversation was never the studio's to
 delete: the CLI wrote it to `~/.claude/projects/…/<session-id>.jsonl` and it is
 still there after the tab goes. What closing used to do was drop the only handle
-onto it, leaving the Past sessions drawer inside a _running_ session as the way
-back — start a session, switch to Chat, open the drawer, find it. A closed row
-is that handle, and reopening one passes its `claudeSessionId` back to
-`terminalCreate`, which resumes it if `hasTranscript` finds the file.
+onto it. A closed row is that handle, and reopening one passes its
+`claudeSessionId` back to `terminalCreate`, which resumes it if `hasTranscript`
+finds the file.
 
-What a closed row is, and the drawer is not, is a record of the session as this
-app had it: its name, its kind, and its place under a folder.
+It is now the _only_ handle: nothing in the app lists what is in
+`~/.claude/projects/` any more. So `Forget` is the one destructive-feeling
+action here, and it is named for what it does — the transcript on disk is
+untouched and `claude --resume <id>` still finds it — but this app will not
+offer it again.
 
 A closed shell is honest about offering less: there is no transcript and no
 saved scrollback, so running it again is a fresh pty in the same directory.
@@ -1136,10 +1143,9 @@ whether the agent is done, since it still owes a reply to the result.
 
 The chat says it in words and never spins. A turn can run for minutes, and
 this is the view you switch to in order to _read_: an indicator turning at
-the edge of the eye for all of it adds motion, not information. The two
-spinners left in the chat are the ones that resolve — a tool call's status
-icon, which becomes a tick or a cross, and the sessions drawer's list while
-it loads.
+the edge of the eye for all of it adds motion, not information. The one
+spinner left in the chat is the one that resolves: a tool call's status icon,
+which becomes a tick or a cross.
 
 - **Permission prompts are answered in the terminal view**, at the CLI's own
   prompt, and so is **`AskUserQuestion`** — the agent asking you to choose
@@ -1148,24 +1154,28 @@ it loads.
   "Show tool calls" says: a collapsed row labelled `AskUserQuestion` is exactly
   the point in a transcript where what was asked is worth reading.
 - **`/clear` at the prompt** starts a conversation under a new id, which the
-  pinned file cannot follow. The sessions drawer is the way back: it lists
-  every conversation on disk for the folder, and the new one is the top of
-  that list.
+  pinned file cannot follow, so the chat stops growing while the terminal
+  carries on. There used to be a way back — see below — and there is not one
+  now: the tab reads the conversation it was started under. A new session is
+  the answer, and the terminal view is unaffected either way.
 
-The drawer switches which conversation the tab is _having_, not just which one
-it is showing. Picking one replaces the tab's session id and starts its pty
-again, resuming it — so what you are reading is what the composer talks to.
-An earlier version pointed the pane at the transcript and left the pty on its
-own conversation, which meant the only way to reply to what was on screen was
-"Back to live", and the only way to know that was to try. A pty runs exactly
-one conversation; a chat that reads one and writes to another has no honest
-way to say so.
+**The chat has no header.** It had one — a "Following this session" line with
+the conversation's id, a Display settings dialog and a Past sessions drawer —
+and every part of it has gone. The line said what the tab strip and the view
+switch already said. The dialog was a second home for two switches that live in
+Settings › Chat, which is where a preference outliving the pane belongs. And the
+drawer let this tab follow a _different_ conversation, which is the one thing
+this view is not for: the pane is this session's transcript, given the whole
+height.
 
-What it costs is the process: a turn in flight ends, the same as any other
-restart. The conversation does not — it is on disk, and the drawer is the way
-back to it. A conversation another tab of the folder already has open is
-listed but not offered, since two `claude` processes resumed onto one
-transcript would both be appending to it.
+The drawer is worth a paragraph because it was not only a list. Picking one
+replaced the tab's session id and started its pty again, resuming it — it
+switched which conversation the tab was _having_, not just which one it was
+showing, because a pty runs exactly one conversation and a chat that reads one
+while writing to another has no honest way to say so. That is also why it cost
+the process: a turn in flight ended, the same as any other restart. With it went
+`resumeSession` in the terminal store and the whole `claudeListSessions` path
+through the contract.
 
 The composer sits under the terminal, and only there: it writes into the CLI's
 own prompt, which is the terminal's, and the chat is the view for reading the
@@ -1180,6 +1190,17 @@ when the mode was cycled at the prompt. All of it was a second place to say
 what the CLI already says better, and it is gone: nothing here passes either
 flag, and `claude.model` / `claude.permissionMode` in a workspace's settings are
 no longer read.
+
+**It can be put away.** The button on the right of the Terminal/Chat switch
+collapses the composer's panel and gives its height back to the terminal, which
+is what a long build or a `tail -f` wants the pane for. Collapsed rather than
+unmounted, because a half-written message and its attachments are the composer's
+own state; `expand()` brings back whatever height the handle was last dragged
+to, so this is a toggle and not a reset. It is per session and not remembered
+across launches, the same as which view a session is on: the answer is about the
+run in front of you rather than about how the app should open. The chat view
+collapses the composer regardless — there the toggle is not drawn at all, since a
+control that changes nothing is worse than no control.
 
 A question does not reach the chat until it has been answered, and that is a
 consequence of reading a file rather than a gap worth closing. Measured, not

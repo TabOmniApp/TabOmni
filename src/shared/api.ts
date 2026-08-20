@@ -484,18 +484,6 @@ export type TranscriptEventBody = {
  */
 export type TranscriptEvent = { mirrorId: string } & TranscriptEventBody
 
-/** A conversation the CLI has on disk for a folder's directory. */
-export type TranscriptSessionSummary = {
-  /** The CLI's own session id — what `--session-id` set and the transcript
-   * file is named after. */
-  id: string
-  /** The CLI's own generated title, or the session's first message if it has
-   * not written one yet. */
-  title: string
-  /** The transcript file's own modification time. */
-  updatedAt: number
-}
-
 export type TerminalExit = {
   terminalId: string
   exitCode: number
@@ -1233,8 +1221,8 @@ export type DesktopApi = {
    * what the chat view draws while the session itself runs in its pty.
    *
    * Reading only: nothing here starts, stops or writes to a `claude`. Calling
-   * it again for the same `mirrorId` re-points it, which is how the sessions
-   * drawer switches the pane to a different conversation.
+   * it again for the same `mirrorId` re-points it, which is what a tab does
+   * when its pty is started over under a conversation id it did not have.
    */
   transcriptWatch: (
     mirrorId: string,
@@ -1242,11 +1230,6 @@ export type DesktopApi = {
     claudeSessionId: string
   ) => Promise<void>
   transcriptUnwatch: (mirrorId: string) => Promise<void>
-
-  /** Conversations the CLI has on disk for this folder, most recent first —
-   * not sessions this app started, necessarily; any `claude` run from that
-   * directory writes to the same place. */
-  claudeListSessions: (folderId: string) => Promise<TranscriptSessionSummary[]>
 
   /** Subscribes to transcript events for every mirror. Returns an unsubscribe
    * function. */
@@ -1363,6 +1346,5 @@ export const IPC = {
   transcriptWatch: "transcript:watch",
   transcriptUnwatch: "transcript:unwatch",
   transcriptEvent: "transcript:event",
-  claudeListSessions: "claude:list-sessions",
   systemUsage: "system:usage",
 } as const

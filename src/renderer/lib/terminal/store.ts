@@ -25,6 +25,18 @@ export type TerminalSession = {
    */
   view: SessionView
   /**
+   * Whether the composer under the terminal is showing.
+   *
+   * Per session rather than a setting, and deliberately not remembered: it is
+   * the answer to "I want the whole pane for this output right now", which is
+   * about the run in front of you and not about how the app should open. Every
+   * session starts with it, the way every session starts on the terminal view.
+   *
+   * The chat view collapses the composer whatever this says — see the effect in
+   * `terminal-session-view.tsx`.
+   */
+  composerOpen: boolean
+  /**
    * The CLI session id this tab's `claude` runs under, passed to it as
    * `--session-id` and so also the name of the transcript the chat view
    * tails. Null until the pty has been started, and for every other kind.
@@ -56,9 +68,8 @@ export type TerminalSession = {
    * `claude` tab that was the wrong thing to imply: the conversation is not
    * the studio's to delete — the CLI wrote it to
    * `~/.claude/projects/…/<session-id>.jsonl` and it is still there — so what
-   * closing actually did was hide the only handle onto it behind four steps
-   * through a running session's Past sessions drawer. A closed row is that
-   * handle, and `forget` is how it goes for good.
+   * closing actually did was drop the only handle onto it. A closed row is
+   * that handle, and `forget` is how it goes for good.
    */
   closed: boolean
   /** Set once the user renames the session; null shows the generated label. */
@@ -117,6 +128,9 @@ type TerminalState = {
   select: (id: string) => void
   /** Switches how a session is drawn. Touches no process. */
   setView: (id: string, view: SessionView) => void
+  /** Shows or hides that session's composer. Touches no process, and keeps
+   * whatever is half-written in it — the panel collapses rather than unmounts. */
+  toggleComposer: (id: string) => void
   rename: (id: string, name: string) => void
   /** Records the real id behind a tab once its pty has started, along with
    * the conversation that pty is running — a fresh one, or the remembered one
@@ -143,19 +157,6 @@ type TerminalState = {
    * the same act: a pty cannot be resumed, only run again, and for `claude`
    * "again" means `--resume` onto the conversation it was having. */
   restart: (id: string) => void
-  /**
-   * Puts a tab onto a conversation it is not currently running, and starts its
-   * pty over on that one.
-   *
-   * "Chat with this session" cannot be a view: a pty runs exactly one
-   * conversation, so continuing an older one means replacing the tab's own id
-   * and letting the restart resume it (`--resume`, via `hasTranscript` in
-   * `electron/ipc.ts`). Nothing is lost by switching — the conversation being
-   * left is on disk, and picking it from the drawer brings it back the same
-   * way. What it does cost is the process: a turn in flight is interrupted,
-   * the same as any other restart.
-   */
-  resumeSession: (id: string, claudeSessionId: string) => void
   setExited: (id: string, exited: boolean) => void
   refreshTools: () => Promise<void>
   /** Reopens whatever sessions were open the last time the app quit — fresh
@@ -277,6 +278,7 @@ function makeSession(
     // only view with the composer, and the only one that can answer a
     // permission prompt — so it opens there, with the chat one click away.
     view: options?.view ?? "terminal",
+    composerOpen: true,
     // Only ever the remembered one here — a new session's is minted when its
     // pty is actually started, since an id the CLI never ran under would
     // name a transcript that does not exist.
@@ -397,6 +399,16 @@ export const useTerminal = create<TerminalState>((set, get) => {
       }))
     },
 
+    toggleComposer(id) {
+      set((state) => ({
+        sessions: state.sessions.map((session) =>
+          session.id === id
+            ? { ...session, composerOpen: !session.composerOpen }
+            : session
+        ),
+      }))
+    },
+
     rename(id, name) {
       const trimmed = name.trim()
       set((state) => ({
@@ -461,26 +473,6 @@ export const useTerminal = create<TerminalState>((set, get) => {
                 attempt: session.attempt + 1,
                 exited: false,
                 closed: false,
-              }
-            : session
-        ),
-        activeId: id,
-      }))
-      persistSessions(get().sessions, get().activeId)
-    },
-
-    resumeSession(id, claudeSessionId) {
-      useStudio.getState().showPane("terminal")
-      set((state) => ({
-        sessions: state.sessions.map((session) =>
-          session.id === id
-            ? {
-                ...session,
-                claudeSessionId,
-                // The same remount `restart` relies on — the pane's key carries
-                // the attempt, so this is what starts the pty over.
-                attempt: session.attempt + 1,
-                exited: false,
               }
             : session
         ),

@@ -1,41 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@/components/ui/drawer"
-import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
-import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
-import {
-  Ban,
-  Check,
-  History,
-  MessageCircleQuestion,
-  Radio,
-  Settings2,
-  Wrench,
-} from "lucide-react"
+import { Ban, Check, MessageCircleQuestion, Wrench } from "lucide-react"
 
-import type {
-  TranscriptBlock,
-  TranscriptEntry,
-  TranscriptSessionSummary,
-} from "@shared/api"
-import { relativeTime } from "@/lib/relative-time"
+import type { TranscriptBlock, TranscriptEntry } from "@shared/api"
 import { useSettings } from "@/lib/settings"
-import { useTerminal } from "@/lib/terminal/store"
 import { writtenPaths } from "@/lib/terminal/touched"
 import {
   ASK_USER_QUESTION,
@@ -156,12 +125,9 @@ export function useTranscript(session: {
   const { id, folderId, claudeSessionId } = session
 
   /**
-   * The conversation being followed.
-   *
-   * For a session tab this is always the one its own pty is running: picking
-   * another from the drawer restarts the pty onto it (`resumeSession` in
-   * `lib/terminal/store.ts`), so what is read and what is written to are the
-   * same conversation and the composer is never pointed elsewhere.
+   * The conversation being followed: always the one this tab's own pty is
+   * running, so what is read and what is written to are the same conversation
+   * and the composer is never pointed elsewhere.
    */
   const target = claudeSessionId
 
@@ -339,56 +305,32 @@ export type Transcript = ReturnType<typeof useTranscript>
  * the CLI's own prompt — in the terminal view — rather than in a dialog here.
  */
 /**
- * How much of a turn is drawn — tool calls and thinking.
+ * This session's conversation, and nothing around it.
  *
- * A hook over the settings store rather than state of its own: the read-only
- * conversation view draws the same transcript with the same two switches, the
- * Settings dialog lists them a third time, and someone who turned tool calls
- * off did not mean "off in this pane only". Each of those used to read the
- * stored value once at mount, so the switch nobody had touched went on showing
- * what it started with while the transcript beside it had already changed.
+ * Deliberately without a header of its own. There was one — a "Following this
+ * session" line, the conversation's id, a Display settings dialog and a Past
+ * sessions drawer — and every part of it was either saying what the tab strip
+ * and the view switch already say, or offering a second home for something that
+ * has a first one. The two switches are rows in Settings › Chat, which is where
+ * a preference that outlives the pane belongs; the drawer let this tab follow
+ * *another* conversation, which is the one thing this view is not for. What is
+ * left is the transcript, given the whole pane.
  */
-export function useTranscriptDisplay() {
-  return {
-    showToolCalls: useSettings((state) => state.showToolCalls),
-    setShowToolCalls: useSettings((state) => state.setShowToolCalls),
-    showThinking: useSettings((state) => state.showThinking),
-    setShowThinking: useSettings((state) => state.setShowThinking),
-  }
-}
-
 export function ChatView({
-  folderId,
   transcript,
   visible,
-  onResume,
 }: {
-  folderId: string
   transcript: Transcript
   /** Whether the chat is the view on screen, for the pane that has to follow
    * the conversation only while someone is reading it. */
   visible: boolean
-  /** Puts the tab on another of the folder's conversations, restarting its
-   * pty onto it — which is what makes the drawer's pick something you can
-   * then talk to rather than only read. */
-  onResume: (claudeSessionId: string) => void
 }) {
-  const { entries, pending, working, target } = transcript
-  const { showToolCalls, setShowToolCalls, showThinking, setShowThinking } =
-    useTranscriptDisplay()
+  const { entries, pending, target } = transcript
+  const showToolCalls = useSettings((state) => state.showToolCalls)
+  const showThinking = useSettings((state) => state.showThinking)
 
   return (
     <div className="flex h-full flex-col">
-      <Header
-        working={working}
-        claudeSessionId={target}
-        folderId={folderId}
-        onResume={onResume}
-        showToolCalls={showToolCalls}
-        onShowToolCallsChange={setShowToolCalls}
-        showThinking={showThinking}
-        onShowThinkingChange={setShowThinking}
-      />
       <TranscriptFeed
         entries={entries}
         pending={pending}
@@ -396,7 +338,7 @@ export function ChatView({
         emptyNotice={
           target !== null
             ? "Ask for something below. Anything the agent needs permission for is asked in the Terminal view."
-            : "This session has no transcript to follow. Continue one from Past sessions, or start a new Claude Code session."
+            : "This session has no transcript to follow. Start a new Claude Code session."
         }
         visible={visible}
         showToolCalls={showToolCalls}
@@ -411,245 +353,8 @@ export function ChatView({
   )
 }
 
-function Header({
-  working,
-  claudeSessionId,
-  folderId,
-  onResume,
-  showToolCalls,
-  onShowToolCallsChange,
-  showThinking,
-  onShowThinkingChange,
-}: {
-  working: boolean
-  claudeSessionId: string | null
-  folderId: string
-  onResume: (claudeSessionId: string) => void
-  showToolCalls: boolean
-  onShowToolCallsChange: (next: boolean) => void
-  showThinking: boolean
-  onShowThinkingChange: (next: boolean) => void
-}) {
-  return (
-    <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-3 py-1.5">
-      {/* No spinner here, and none at the tail of the transcript either. A
-          turn can run for minutes, and this view is the one you switch to in
-          order to read: something spinning the whole time is motion at the
-          edge of the eye that says nothing the word below does not. The
-          composer, in the terminal view, still has its own busy state and
-          its Stop. */}
-      <Radio className="size-3.5 shrink-0 text-muted-foreground" />
-
-      <span className="min-w-0 truncate text-xs text-muted-foreground">
-        {working
-          ? "Following this session — working"
-          : "Following this session"}
-      </span>
-
-      {/* The CLI's own session id, so the conversation on screen can also be
-          found with `claude --resume` from a terminal of the user's own. */}
-      {claudeSessionId && (
-        <span
-          className="hidden shrink-0 font-mono text-[10px] text-muted-foreground/70 sm:inline"
-          title={`claude --resume ${claudeSessionId}`}
-        >
-          {claudeSessionId.slice(0, 8)}
-        </span>
-      )}
-
-      <div className="ml-auto flex items-center gap-1">
-        <SessionsButton
-          folderId={folderId}
-          currentSessionId={claudeSessionId}
-          onResume={onResume}
-        />
-
-        <Dialog>
-          <DialogTrigger
-            render={
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                title="Display settings"
-                aria-label="Display settings"
-                className="size-6"
-              >
-                <Settings2 className="size-3" />
-              </Button>
-            }
-          />
-          <DialogContent className="min-h-48 min-w-80 sm:max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Display settings</DialogTitle>
-            </DialogHeader>
-
-            <div className="flex items-center justify-between gap-4">
-              <Label htmlFor="show-tool-calls">Show tool calls</Label>
-              <Switch
-                id="show-tool-calls"
-                checked={showToolCalls}
-                onCheckedChange={onShowToolCallsChange}
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-4">
-              <Label htmlFor="show-thinking">Show thinking</Label>
-              <Switch
-                id="show-thinking"
-                checked={showThinking}
-                onCheckedChange={onShowThinkingChange}
-              />
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
-    </div>
-  )
-}
-
-/**
- * The drawer of past sessions: every conversation the CLI has on disk for
- * this folder, not just the one this tab is running.
- *
- * Picking one puts the tab on it — the pty restarts and resumes it, so the
- * conversation read is the conversation talked to. It is also the way back
- * from `/clear`, which starts a new conversation under a new id that this pane
- * has no way to be told about: the new session is simply the top of this list.
- *
- * Reading the list is deferred to the drawer opening rather than done on
- * mount — a repository can have years of these, and most sessions never look at
- * them.
- */
-function SessionsButton({
-  folderId,
-  currentSessionId,
-  onResume,
-}: {
-  folderId: string
-  /** What this tab is already running, which there is nothing to restart onto. */
-  currentSessionId: string | null
-  onResume: (claudeSessionId: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [sessions, setSessions] = useState<TranscriptSessionSummary[] | null>(
-    null
-  )
-
-  /**
-   * Conversations another tab of this folder already has open.
-   *
-   * Two `claude` processes resumed onto one conversation would both append to
-   * the same transcript, and neither would be reading the other's lines. Those
-   * are listed but not offered — the tab already holding one is where it can
-   * be continued.
-   */
-  const openSessions = useTerminal((state) => state.sessions)
-  const taken = useMemo(() => {
-    const ids = new Set<string>()
-    for (const session of openSessions) {
-      // A closed row holds nothing: its pty is gone, so the conversation it
-      // was having is free to be picked up here.
-      if (session.closed) continue
-      if (session.folderId !== folderId) continue
-      if (
-        session.claudeSessionId &&
-        session.claudeSessionId !== currentSessionId
-      )
-        ids.add(session.claudeSessionId)
-    }
-    return ids
-  }, [openSessions, folderId, currentSessionId])
-
-  function onOpenChange(next: boolean) {
-    setOpen(next)
-    if (!next) return
-    setSessions(null)
-    void window.desktop.claudeListSessions(folderId).then(setSessions)
-  }
-
-  return (
-    <Drawer open={open} onOpenChange={onOpenChange} swipeDirection="right">
-      <DrawerTrigger
-        render={
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            title="Past sessions"
-            aria-label="Past sessions"
-            className="size-6"
-          >
-            <History className="size-3" />
-          </Button>
-        }
-      />
-      <DrawerContent className="flex flex-col">
-        <DrawerHeader>
-          <DrawerTitle>Past sessions</DrawerTitle>
-        </DrawerHeader>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-          {sessions === null ? (
-            <div className="flex justify-center py-6">
-              <Spinner className="size-4 text-muted-foreground" />
-            </div>
-          ) : sessions.length === 0 ? (
-            <p className="px-2 py-4 text-xs text-muted-foreground">
-              No past sessions found for this folder.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-0.5">
-              {sessions.map((entry) => {
-                const current = entry.id === currentSessionId
-                const elsewhere = taken.has(entry.id)
-                return (
-                  <li key={entry.id}>
-                    <button
-                      type="button"
-                      disabled={current || elsewhere}
-                      onClick={() => {
-                        setOpen(false)
-                        onResume(entry.id)
-                      }}
-                      className={cn(
-                        "flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left",
-                        current || elsewhere
-                          ? "cursor-default opacity-50"
-                          : "hover:bg-muted"
-                      )}
-                    >
-                      <span className="line-clamp-2 text-xs">
-                        {entry.title}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {relativeTime(entry.updatedAt)}
-                        {current
-                          ? " — this tab"
-                          : elsewhere
-                            ? " — open in another tab"
-                            : ""}
-                      </span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </div>
-      </DrawerContent>
-    </Drawer>
-  )
-}
-
-/**
- * The turns themselves, scrolled.
- *
- * Exported because the read-only conversation view draws the same list from the
- * same events — what differs between the two is the strip above it and whether
- * there is a composer, not how a turn is drawn.
- */
-export function TranscriptFeed({
+/** The turns themselves, scrolled. */
+function TranscriptFeed({
   entries,
   pending,
   conversation,

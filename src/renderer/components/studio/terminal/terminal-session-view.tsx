@@ -7,7 +7,13 @@ import {
   usePanelRef,
 } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
-import { MessagesSquare, RotateCw, SquareTerminal } from "lucide-react"
+import {
+  MessagesSquare,
+  PanelBottomClose,
+  PanelBottomOpen,
+  RotateCw,
+  SquareTerminal,
+} from "lucide-react"
 
 import type { AgentKind } from "@shared/api"
 import { useFiles } from "@/lib/files/store"
@@ -17,6 +23,7 @@ import {
   type TerminalSession,
   type SessionView,
 } from "@/lib/terminal/store"
+import { IconButton } from "../icon-button"
 import { ChatComposer } from "./chat-composer"
 import { ChatView, useTranscript } from "./chat-view"
 import { TerminalView, type TerminalHandle } from "../terminal-view"
@@ -92,10 +99,10 @@ export function TerminalSessionView({
   const setExited = useTerminal((state) => state.setExited)
   const setTerminalId = useTerminal((state) => state.setTerminalId)
   const restart = useTerminal((state) => state.restart)
-  const resumeSession = useTerminal((state) => state.resumeSession)
   const refreshTools = useTerminal((state) => state.refreshTools)
 
   const setView = useTerminal((state) => state.setView)
+  const toggleComposer = useTerminal((state) => state.toggleComposer)
 
   const { id, folderId, kind, installing, claudeSessionId } = session
 
@@ -105,13 +112,16 @@ export function TerminalSessionView({
   const claudeSession = kind === "claude" && !installing
   const chat = claudeSession && session.view === "chat"
 
-  /** The composer's panel, collapsed to nothing while the chat is showing —
-   * the only way to take its space back without unmounting it. */
+  /** The composer's panel, collapsed to nothing while the chat is showing or
+   * the user has hidden it — the only way to take its space back without
+   * unmounting it. `expand()` restores whatever height the handle was dragged
+   * to, so hiding and showing again is not a reset. */
   const composerPanel = usePanelRef()
+  const composerShowing = !chat && session.composerOpen
   useEffect(() => {
-    if (chat) composerPanel.current?.collapse()
-    else composerPanel.current?.expand()
-  }, [chat, composerPanel])
+    if (composerShowing) composerPanel.current?.expand()
+    else composerPanel.current?.collapse()
+  }, [composerShowing, composerPanel])
 
   // Followed whichever view is on screen: the composer needs to know whether a
   // turn is in flight even while the terminal is what is being shown.
@@ -280,14 +290,7 @@ export function TerminalSessionView({
         {terminalView}
       </div>
       <div className={cn("absolute inset-0", !chat && "invisible")}>
-        <ChatView
-          folderId={folderId}
-          transcript={transcript}
-          visible={visible && chat}
-          // Restarts this tab's pty onto the picked conversation, which is
-          // what makes it one the composer below can talk to.
-          onResume={(picked) => resumeSession(id, picked)}
-        />
+        <ChatView transcript={transcript} visible={visible && chat} />
       </div>
     </div>
   ) : (
@@ -305,6 +308,11 @@ export function TerminalSessionView({
         <ViewSwitch
           view={session.view}
           onChange={(next) => setView(id, next)}
+          // Only offered on the terminal, which is the view that has one: the
+          // chat reads the transcript and gives the whole pane to it, so a
+          // toggle there would be a control that changes nothing.
+          composerOpen={chat ? null : session.composerOpen}
+          onToggleComposer={() => toggleComposer(id)}
         />
       )}
 
@@ -333,7 +341,7 @@ export function TerminalSessionView({
               `expand()`. */}
           {kind !== "terminal" && (
             <>
-              <ResizableHandle className={cn(chat && "hidden")} />
+              <ResizableHandle className={cn(!composerShowing && "hidden")} />
               {/* Defaults small, like an actual chat input — Crepe's own
                   placeholder/toolbar/block-menu chrome reads as an oversized,
                   mostly-empty box at the 30% this used to default to. Still
@@ -395,9 +403,14 @@ export function TerminalSessionView({
 function ViewSwitch({
   view,
   onChange,
+  composerOpen,
+  onToggleComposer,
 }: {
   view: SessionView
   onChange: (view: SessionView) => void
+  /** Null where there is no composer to toggle, which is the chat view. */
+  composerOpen: boolean | null
+  onToggleComposer: () => void
 }) {
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b bg-muted/40 px-2 py-1">
@@ -420,6 +433,17 @@ function ViewSwitch({
           {label}
         </Button>
       ))}
+
+      {composerOpen !== null && (
+        <IconButton
+          label={composerOpen ? "Hide composer" : "Show composer"}
+          pressed={composerOpen}
+          onClick={onToggleComposer}
+          className="ml-auto"
+        >
+          {composerOpen ? <PanelBottomClose /> : <PanelBottomOpen />}
+        </IconButton>
+      )}
     </div>
   )
 }

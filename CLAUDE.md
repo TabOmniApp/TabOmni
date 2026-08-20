@@ -289,14 +289,17 @@ watchers because it names a file as the tool call is recorded, without their
 debounce, and works where `fs.watch` does not. Both are in the Terminal sessions part of
 `docs/design.md`.
 
-There was a **Conversations** section under the tree — every `claude` transcript
-the workspace's folders had on disk, read-only in a tab of the Explorer pane with
-a `Resume` that handed one to a real session. It is gone, deleted rather than
-hidden: no list, no read-only view, no store, and the Explorer pane's tabs are
-files again. `listSessions` in `src/main/transcript.ts` stays, because the chat
-view's **Past sessions** drawer reads the same directory `--resume` reads — that
-drawer, inside a running session, is now the only way to a conversation this app
-did not start. See the Conversations, removed section of `docs/design.md`.
+**Nothing lists the CLI's transcripts any more.** There was a **Conversations**
+section under the tree, and a **Past sessions** drawer in the chat view's header;
+both are gone, deleted rather than hidden, and so are the header itself,
+`resumeSession`, `claudeListSessions`, `TranscriptSessionSummary` and
+`listSessions` in `src/main/transcript.ts`. What is left of
+`~/.claude/projects/<encoded-cwd>/` is `hasTranscript`, one yes/no about one id,
+which is what lets a closed session's row reopen with `--resume`. So a session's
+chat is the conversation its own tab was started under and only that — a
+`/clear` at the prompt is not followed, and a conversation this app never
+started is reachable with `claude --resume` and not from here. See the
+Conversations, removed and The chat view sections of `docs/design.md`.
 
 **The workspace's folders belong to Explorer**, and are added, renamed and
 removed there and nowhere else (`components/studio/files/file-tree.tsx`) — the

@@ -4,7 +4,6 @@ import {
   mkdtemp,
   rm,
   truncate,
-  utimes,
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -27,8 +26,7 @@ import { check, finish, section } from "./harness"
 const root = await mkdtemp(path.join(tmpdir(), "tabomni-transcript-"))
 process.env.CLAUDE_CONFIG_DIR = path.join(root, "config")
 
-const { TranscriptMirrors, listSessions } =
-  await import("../src/main/transcript")
+const { TranscriptMirrors } = await import("../src/main/transcript")
 
 /** A project directory whose encoded name the transcript folder is derived
  * from — the same mapping `projectSessionsDir` does. */
@@ -181,51 +179,6 @@ try {
 
   mirrors.unwatch("tab-0")
   events.length = 0
-
-  // ---------------------------------------------------------------------
-  section("listSessions")
-
-  const titledFile = path.join(sessionsDir, "titled-session.jsonl")
-  await writeFile(
-    titledFile,
-    [
-      userLine("the first thing asked"),
-      JSON.stringify({ type: "ai-title", aiTitle: "A generated title" }),
-      "",
-    ].join("\n"),
-    "utf8"
-  )
-
-  // Ordering is by mtime, so it has to be set rather than assumed from the
-  // order the files happened to be written in.
-  await utimes(historyFile, new Date(1000), new Date(1000))
-  await utimes(titledFile, new Date(2000), new Date(2000))
-
-  const sessions = await listSessions(cwd)
-  check("lists every transcript", sessions.length === 2, sessions)
-  check(
-    "most recently written first",
-    sessions[0]?.id === "titled-session",
-    sessions.map((entry) => entry.id)
-  )
-  check(
-    "prefers the CLI's own generated title",
-    sessions[0]?.title === "A generated title",
-    sessions[0]
-  )
-  check(
-    "falls back to the first message",
-    sessions[1]?.title === "hello",
-    sessions[1]
-  )
-  check(
-    "a directory that does not exist lists nothing",
-    (await listSessions(path.join(root, "never-used"))).length === 0
-  )
-  check(
-    "a session with no file lists nothing rather than failing",
-    (await listSessions(path.join(root, "gone"))).length === 0
-  )
 
   // ---------------------------------------------------------------------
   section("tailing a live transcript")

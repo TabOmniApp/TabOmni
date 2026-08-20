@@ -11,9 +11,8 @@ const RELATIVE_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
  * How long ago something was last written to, coarsened to whichever unit reads
  * naturally — a list of conversations has no use for "3600 seconds ago".
  *
- * In `lib/` rather than beside either caller because both the chat view's Past
- * sessions drawer and the assistant's list of chats draw the same figure from
- * the same kind of timestamp.
+ * In `lib/` rather than beside its caller: it is about a timestamp, not about
+ * the assistant, and the next list of dated rows should not write it again.
  */
 export function relativeTime(updatedAt: number): string {
   const delta = updatedAt - Date.now()

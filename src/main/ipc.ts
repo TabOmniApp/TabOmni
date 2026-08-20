@@ -47,7 +47,7 @@ import { McpServers } from "./mcp"
 import { NotePreview } from "./preview"
 import { ProcessManager } from "./process"
 import { systemUsage } from "./system-usage"
-import { hasTranscript, listSessions, TranscriptMirrors } from "./transcript"
+import { hasTranscript, TranscriptMirrors } from "./transcript"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
 import { TerminalManager } from "./terminal"
 import { TsServers } from "./tsserver"
@@ -851,10 +851,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.transcriptUnwatch, (_event, mirrorId: string) =>
     transcripts.unwatch(mirrorId)
-  )
-
-  ipcMain.handle(IPC.claudeListSessions, async (_event, folderId: string) =>
-    listSessions(await store.resolveFolderDir(folderId))
   )
 
   ipcMain.handle(IPC.systemUsage, () => systemUsage())

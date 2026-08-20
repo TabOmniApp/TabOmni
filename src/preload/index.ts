@@ -189,8 +189,6 @@ const api: DesktopApi = {
     ),
   transcriptUnwatch: (mirrorId) =>
     ipcRenderer.invoke(IPC.transcriptUnwatch, mirrorId),
-  claudeListSessions: (folderId) =>
-    ipcRenderer.invoke(IPC.claudeListSessions, folderId),
 
   onTranscriptEvent: (listener) =>
     subscribe<TranscriptEvent>(IPC.transcriptEvent, listener),

@@ -1,16 +1,13 @@
-import { createReadStream } from "node:fs"
-import { open, readdir, stat } from "node:fs/promises"
+import { open, stat } from "node:fs/promises"
 import { watch, type FSWatcher } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
-import { createInterface } from "node:readline"
 import { StringDecoder } from "node:string_decoder"
 
 import type {
   TranscriptBlock,
   TranscriptEntry,
   TranscriptEvent,
-  TranscriptSessionSummary,
 } from "../shared/api"
 
 /**
@@ -52,9 +49,9 @@ import type {
  * whichever file was touched last.
  *
  * One thing this cannot follow: `/clear` at the TUI's prompt starts a new
- * session id, so the pinned file simply stops growing. The sessions drawer is
- * the way back — it lists every conversation in the directory, and picking
- * one re-points the mirror.
+ * session id, so the pinned file simply stops growing while the terminal view
+ * carries on as normal. Nothing in the app re-points a mirror at the new id —
+ * the chat draws the conversation its tab was started under and only that.
  */
 
 /** How often the file is checked regardless of what the watcher reported.
@@ -126,7 +123,7 @@ export class TranscriptMirrors {
     this.mirrors.set(mirrorId, mirror)
 
     // Whatever is already there, as one replacement rather than a stream of
-    // appends — this is also what a re-point from the sessions drawer sends.
+    // appends — this is also what a re-point of an existing mirror sends.
     this.emit({
       mirrorId,
       type: "reset",
@@ -278,47 +275,6 @@ export async function hasTranscript(
   } catch {
     return false
   }
-}
-
-/**
- * Past conversations the CLI has on disk for `cwd`, most recent first.
- *
- * Not sessions this app started, necessarily — any `claude` run from that
- * directory, this app or a terminal, writes to the same place. There is no
- * CLI command that lists them, so this reads the directory `--resume` itself
- * reads from.
- */
-export async function listSessions(
-  cwd: string
-): Promise<TranscriptSessionSummary[]> {
-  const dir = projectSessionsDir(cwd)
-  let names: string[]
-  try {
-    names = await readdir(dir)
-  } catch {
-    // No directory yet: nothing has ever been run here.
-    return []
-  }
-
-  const summaries: TranscriptSessionSummary[] = []
-  for (const name of names) {
-    if (!name.endsWith(".jsonl")) continue
-    const file = path.join(dir, name)
-    let updatedAt: number
-    try {
-      updatedAt = (await stat(file)).mtimeMs
-    } catch {
-      continue
-    }
-    summaries.push({
-      id: name.slice(0, -".jsonl".length),
-      title: await sessionTitle(file),
-      updatedAt,
-    })
-  }
-
-  summaries.sort((a, b) => b.updatedAt - a.updatedAt)
-  return summaries
 }
 
 /**
@@ -503,60 +459,4 @@ function userText(content: RawBlock[] | string | undefined): string {
     .filter((block) => block.type === "text")
     .map((block) => block.text ?? "")
     .join("")
-}
-
-/**
- * A slash command as the line it was invoked as.
- *
- * The CLI stores one as pseudo-tags rather than as the person typed it (the
- * renderer's `lib/terminal/slash-command.ts` unwraps the same thing for the
- * transcript, at more length). Only the title needs it here — a session whose
- * first message was a command would otherwise be listed in the drawer as
- * `<command-name>/model</command-name> <command-message>…`.
- */
-function unwrapCommand(text: string): string {
-  const name = /<command-name>([^<]*)<\/command-name>/.exec(text)
-  if (!name) return text
-  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)
-  return `${name[1]?.trim() ?? ""} ${args?.[1]?.trim() ?? ""}`
-}
-
-function clampTitle(text: string): string {
-  const oneLine = unwrapCommand(text).replace(/\s+/g, " ").trim()
-  return oneLine.length > 80 ? `${oneLine.slice(0, 79)}…` : oneLine
-}
-
-/**
- * A human title for one session, read only as far as it has to be.
- *
- * The CLI writes its own generated title as an `ai-title` line once the
- * conversation has enough in it — that wins when present. Until then, or if
- * it never does for a short session, the first real message stands in.
- */
-async function sessionTitle(file: string): Promise<string> {
-  const rl = createInterface({
-    input: createReadStream(file, { encoding: "utf8" }),
-    crlfDelay: Infinity,
-  })
-
-  let fallback: string | null = null
-  try {
-    for await (const line of rl) {
-      if (line.includes('"type":"ai-title"')) {
-        const record = JSON.parse(line) as { aiTitle?: string }
-        if (record.aiTitle) return record.aiTitle
-        continue
-      }
-
-      if (fallback !== null || !line.includes('"type":"user"')) continue
-      const record = JSON.parse(line) as TranscriptLine
-      if (record.isMeta || record.isSidechain) continue
-      const text = userText(record.message?.content)
-      if (text) fallback = text
-    }
-  } finally {
-    rl.close()
-  }
-
-  return fallback ? clampTitle(fallback) : "Untitled session"
 }
