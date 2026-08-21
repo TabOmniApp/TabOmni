@@ -22,6 +22,7 @@ import { blocksOf } from "@/lib/note/from-markdown"
 import { DrawingEditor } from "./drawing-editor"
 import { NoteFilePanel } from "./file-panel"
 import { DRAWING_BLOCK, drawingBlockSpec } from "./drawing-block"
+import { RAW_HTML_BLOCK, rawHtmlBlockSpec } from "./raw-html-block"
 import "@blocknote/core/fonts/inter.css"
 import "@blocknote/shadcn/style.css"
 import "./note-editor.css"
@@ -44,6 +45,10 @@ const schema = BlockNoteSchema.create({
   blockSpecs: {
     ...defaultBlockSpecs,
     [DRAWING_BLOCK]: drawingBlockSpec(),
+    // In the schema for every document, and only ever put in one by the
+    // Explorer reading a `.md` — nothing inserts it and it is not in the slash
+    // menu. A note has no markdown behind it to have had HTML in.
+    [RAW_HTML_BLOCK]: rawHtmlBlockSpec(),
   },
 })
 

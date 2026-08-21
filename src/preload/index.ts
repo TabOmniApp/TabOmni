@@ -51,6 +51,8 @@ const api: DesktopApi = {
   onMenuCommand: (listener) =>
     subscribe<MenuCommand>(IPC.menuCommand, listener),
   onNotesChanged: (listener) => subscribe<null>(IPC.notesChanged, listener),
+  onRequestsChanged: (listener) =>
+    subscribe<null>(IPC.requestsChanged, listener),
 
   assistantSend: (prompt) => ipcRenderer.invoke(IPC.assistantSend, prompt),
   assistantStop: () => ipcRenderer.invoke(IPC.assistantStop),

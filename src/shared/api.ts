@@ -855,6 +855,19 @@ export type DesktopApi = {
   onNotesChanged: (listener: () => void) => () => void
 
   /**
+   * The same, for the saved requests and the folders they are filed under: an
+   * agent can write, move or delete one through the MCP server, and the API
+   * panel is holding the collection it read at launch.
+   *
+   * It matters more here than for the notes, because the panel saves the whole
+   * collection at once: a panel that never re-read would write its stale list
+   * back over the agent's request the next time anything in it was edited. A
+   * deletion is the other half — a tab onto a record that is gone can draw
+   * nothing.
+   */
+  onRequestsChanged: (listener: () => void) => () => void
+
+  /**
    * Sends one message to the chat the assistant is on and resolves when it has
    * been started — the answer arrives on `onAssistantEvent`.
    *
@@ -1269,6 +1282,7 @@ export const IPC = {
   clipboardImagePath: "files:clipboard-image-path",
   menuCommand: "menu:command",
   notesChanged: "notes:changed",
+  requestsChanged: "http:changed",
   assistantSend: "assistant:send",
   assistantStop: "assistant:stop",
   assistantChats: "assistant:chats",

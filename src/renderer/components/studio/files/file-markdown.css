@@ -103,3 +103,57 @@
   height: auto;
   border-radius: 0.375rem;
 }
+
+/*
+ * The file's frontmatter, above the document.
+ *
+ * Drawn like the tables in the document below it — same border, same padding —
+ * so it reads as part of the file rather than as a panel the studio put there.
+ * What sets it apart is the keys: a header *column* rather than a header row,
+ * which is the shape of a key/value block and is what GitHub draws for the same
+ * bytes.
+ */
+.markdown-frontmatter {
+  width: 100%;
+  margin: 0 0 1.5rem;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  table-layout: fixed;
+}
+
+.markdown-frontmatter th,
+.markdown-frontmatter td {
+  border: 1px solid var(--border);
+  padding: 0.375rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  /* A description runs to a paragraph and a URL has no break in it; both have
+   * to stay inside the column rather than widening the table past the measure. */
+  overflow-wrap: break-word;
+}
+
+.markdown-frontmatter th {
+  width: 11rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+/* A block with shape to it — nested keys, a list over several lines — shown as
+ * the YAML it is, because there is no honest way to put it in two columns. */
+.markdown-frontmatter-source {
+  margin: 0 0 1.5rem;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  overflow-x: auto;
+}

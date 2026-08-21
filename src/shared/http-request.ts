@@ -19,6 +19,25 @@ import type { HttpEnvironment, HttpFolder, HttpRequestRecord } from "./api"
  */
 
 /**
+ * The methods this app deals in: what the panel's picker offers, and what a
+ * request written through the MCP server is allowed to be saved as.
+ *
+ * Here rather than beside the picker for the second reason — the panel can only
+ * draw a method that is on this list, so a request saved with any other one is
+ * a row the user cannot read or correct. Ordered by how often they are reached
+ * for rather than alphabetically.
+ */
+export const METHODS = [
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
+  "OPTIONS",
+] as const
+
+/**
  * The query string of a request URL, as a list.
  *
  * A parameter that is going to be sent lives in the URL and nowhere else: two

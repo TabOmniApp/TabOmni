@@ -203,18 +203,43 @@ only when there are none — and a chat is deleted from its row. It is the way t
 use the MCP servers below without being inside a folder's session: the turn runs
 in an empty `~/.tabomni/assistant` with every folder reached by `--add-dir`, so
 no folder is current, and an `--append-system-prompt` says so.
+`@` works in its composer too, and means something else there than in the chat
+composer: the panel already has the panels' MCP tools and every one of them takes
+a thing by name, so a pick inserts the **name** — the same one the chip shows,
+`mydatabase.mytable`, with the connection on the row's second line rather than
+spliced into it — and nothing is pasted in. It also lists the databases
+themselves, which a chip cannot: a chip would have to expand into a schema, and
+that means connecting. The tint comes from a mirror of the
+textarea's own value behind it — `assistant-composer.tsx`, with the rules and the
+test in `lib/assistant/mention-text.ts` and the catalogue reusing
+`lib/terminal/mentions.ts` rather than reading the three stores twice.
 
 **MCP: the workspace as tools.** `src/main/mcp.ts` serves the Database, API and
 Notes panels to an agent session as three MCP servers — one streamable-HTTP
 server on loopback with a per-run secret, bound the way `preview.ts` binds its
-own, three tools apiece. Each is **off** until switched on in Settings › MCP
+own, three tools apiece — nine for the API panel, which also **writes**:
+`create_request` / `update_request` / `delete_request` and the same three for
+the folders they are filed under, saving the collection the agent has been
+reading, as typed (`{{baseUrl}}/users` keeps its variables) and never sent,
+since `send_request` is still the only tool that makes a request. Deleting a
+folder cascades to its subfolders and their requests, from the
+`descendantFolderIds` the sidebar uses, which moved to `@shared/tree` for it;
+the two `delete_*` tools are the only MCP tools the assistant panel refuses
+(there is no trash and a print turn has nobody to ask). Each is
+**off** until switched on in Settings › MCP
 (`mcp.database` / `mcp.api` / `mcp.notes`; the keys are in `@shared/api` because
 main answers with them too), and a `claude` session is started with
 `--mcp-config ~/.tabomni/mcp.json` naming whichever are on. Every call rechecks
 the setting, so turning one off stops a running session using it. A request an
 agent sends is resolved by `@shared/http-request` — the same substitution and
-folder cascade the API panel uses, moved there so there is one of it. `test/mcp.ts`
-drives it over a real socket. See the MCP section of `docs/design.md`.
+folder cascade the API panel uses, moved there so there is one of it, and
+`METHODS` moved there too once main could save a request the picker has to draw.
+A request or folder written is announced (`http:changed` → `reread` on the API
+store, which also closes a tab whose record has gone), which matters because
+that panel saves the whole collection at once — a window holding a stale list
+would write it back over the agent's request.
+`test/mcp.ts` drives it over a real socket. See the MCP section of
+`docs/design.md`.
 
 The activity rail is Explorer, Database, API and Notes — four sections,
 `SECTION_IDS` in `lib/rail.ts` is the list and `components/studio/activity-bar.tsx`
@@ -318,7 +343,11 @@ back to.
 Notes is a workspace-wide scratchpad — folders and markdown files, filed and
 right-clicked the way the API panel's requests are. `lib/tree.ts` is the tree
 both sidebars are built from (nesting, the drag-reparent cycle guard, the
-delete count, the ancestor chain a selection is revealed through); `lib/http/folders.ts` delegates to it and keeps only the
+delete count, the ancestor chain a selection is revealed through) — its two
+functions about the shape of the tree rather than the drawing of it,
+`descendantFolderIds` and `isDescendant`, are in `@shared/tree` and re-exported
+from there, since main deletes a request folder too (`main/mcp.ts`);
+`lib/http/folders.ts` delegates to it and keeps only the
 cascading headers and params that are the API panel's own. A note's listing is
 `notes.json` and its text is `notes/<id>.md` beside it, so typing rewrites one
 note rather than all of them and what is left on disk is readable without this

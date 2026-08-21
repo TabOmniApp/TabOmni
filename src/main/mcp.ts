@@ -13,6 +13,7 @@ import {
   type DatabaseRecord,
   type HttpEnvironment,
   type HttpFolder,
+  type HttpHeader,
   type HttpRequestRecord,
   type HttpResponseResult,
   type HttpSendInput,
@@ -22,11 +23,13 @@ import {
   type NoteRecord,
 } from "../shared/api"
 import {
+  METHODS,
   resolveHeaders,
   substitute,
   variablesFrom,
   withFolderParams,
 } from "../shared/http-request"
+import { isDescendant } from "../shared/tree"
 import { dataDir } from "./data-dir"
 import { noteMarkdown, parseNote } from "./note-blocks"
 
@@ -99,6 +102,23 @@ export type McpSource = {
   /** The environment the panel has selected, or null. */
   activeEnvironmentId: () => Promise<string | null>
   send: (input: HttpSendInput) => Promise<HttpResponseResult>
+  createRequest: (input: RequestFields) => Promise<HttpRequestRecord>
+  /** Only the fields given are touched. Rejects an id the collection no longer
+   * has, since the panel may have deleted it since the agent listed it. */
+  updateRequest: (
+    id: string,
+    patch: Partial<RequestFields>
+  ) => Promise<HttpRequestRecord>
+  /** Gone for good: the panel has no trash and no undo. */
+  deleteRequest: (id: string) => Promise<void>
+  createFolder: (input: FolderFields) => Promise<HttpFolder>
+  updateFolder: (
+    id: string,
+    patch: Partial<FolderFields>
+  ) => Promise<HttpFolder>
+  /** The folder, the folders under it and their requests, the same cascade the
+   * panel's own delete makes — the counts are what the agent reports back. */
+  deleteFolder: (id: string) => Promise<{ folders: number; requests: number }>
 
   notes: () => Promise<NoteRecord[]>
   noteFolders: () => Promise<NoteFolder[]>
@@ -108,6 +128,28 @@ export type McpSource = {
     folderId: string | null
     markdown: string
   }) => Promise<NoteRecord>
+}
+
+/** What an agent may set on a saved request. Not the whole record: an id and
+ * the timestamps are the store's, and the post-response script runs in the
+ * renderer's sandbox and is not something a tool call gets to write. */
+export type RequestFields = {
+  name: string
+  method: string
+  url: string
+  headers: HttpHeader[]
+  body: string
+  folderId: string | null
+}
+
+/** What an agent may set on a request folder. The headers and params are the
+ * cascade every request under it inherits, which is the only reason a folder is
+ * more than a name. */
+export type FolderFields = {
+  name: string
+  parentId: string | null
+  headers: HttpHeader[]
+  params: HttpHeader[]
 }
 
 type Json = Record<string, unknown>
@@ -445,6 +487,32 @@ export class McpServers {
         (record) => record.name
       )
 
+    const findFolder = async (asked: unknown): Promise<HttpFolder> =>
+      pick(
+        await this.source.requestFolders(),
+        asked,
+        "request folder",
+        (record) => record.name
+      )
+
+    /** The folder an argument names, or the top level. `null` is given
+     * explicitly by `update_request` to move a request out of its folder, so it
+     * is a value here rather than a missing one. */
+    const folderId = async (
+      asked: unknown,
+      field = "folder"
+    ): Promise<string | null> => {
+      if (asked === undefined || asked === null) return null
+      const wanted = text(asked, field).trim()
+      if (!wanted) return null
+      return pick(
+        await this.source.requestFolders(),
+        wanted,
+        "request folder",
+        (record) => record.name
+      ).id
+    }
+
     /** A request as it would actually go out: variables substituted, folders'
      * headers and params inherited. The panel's own resolution, from
      * `shared/http-request.ts`. */
@@ -471,7 +539,7 @@ export class McpServers {
       {
         name: "list_requests",
         description:
-          "The HTTP requests saved in this workspace: id, name, method and the URL as saved, with its {{variables}} unresolved.",
+          "The HTTP requests saved in this workspace: id, name, method and the URL as saved, with its {{variables}} unresolved. Also the folders they are filed under, with the headers and params each one lends to every request inside it.",
         inputSchema: { type: "object", properties: {} },
         run: async () => {
           const [requests, folders] = await Promise.all([
@@ -481,13 +549,26 @@ export class McpServers {
           const byId = new Map(
             folders.map((folder) => [folder.id, folder.name])
           )
-          return requests.map((request) => ({
-            id: request.id,
-            name: request.name,
-            method: request.method,
-            url: request.url,
-            folder: request.folderId ? byId.get(request.folderId) : null,
-          }))
+          return {
+            // Listed here rather than by a tool of their own, and listed at all
+            // because a folder can now be written: an empty one is invisible in
+            // the requests alone, and naming a parent needs the folder to have
+            // been seen.
+            folders: folders.map((folder) => ({
+              id: folder.id,
+              name: folder.name,
+              parent: folder.parentId ? byId.get(folder.parentId) : null,
+              headers: folder.headers,
+              params: folder.params,
+            })),
+            requests: requests.map((request) => ({
+              id: request.id,
+              name: request.name,
+              method: request.method,
+              url: request.url,
+              folder: request.folderId ? byId.get(request.folderId) : null,
+            })),
+          }
         },
       },
       {
@@ -545,6 +626,239 @@ export class McpServers {
             size: response.size,
             body: response.body.slice(0, MAX_RESPONSE_CHARS),
             truncated: response.body.length > MAX_RESPONSE_CHARS,
+          }
+        },
+      },
+      {
+        name: "create_request",
+        description:
+          "Saves a new request in the API panel. Nothing is sent: this writes the request down, and send_request is what runs it. Write `{{variables}}` as they are — a URL of {{baseUrl}}/users is the right thing to save, since substitution happens when the request is sent.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "What the panel will call it.",
+            },
+            method: {
+              type: "string",
+              description: `One of ${METHODS.join(", ")}. Left out, GET.`,
+            },
+            url: {
+              type: "string",
+              description:
+                "The URL as saved, query string and {{variables}} included.",
+            },
+            headers: HEADERS_SCHEMA,
+            body: { type: "string" },
+            folder: {
+              type: "string",
+              description:
+                "The name or id of a request folder to file it under, from list_requests. Left out, it goes at the top level. The folder's own headers and params are inherited when the request is sent.",
+            },
+          },
+          required: ["name", "url"],
+        },
+        run: async (args) => {
+          const request = await this.source.createRequest({
+            name: text(args.name, "name").trim() || "New request",
+            method: methodOf(args.method, "GET"),
+            url: text(args.url, "url"),
+            headers: headerList(args.headers),
+            body: optionalText(args.body, "body") ?? "",
+            folderId: await folderId(args.folder),
+          })
+          return { id: request.id, name: request.name }
+        },
+      },
+      {
+        name: "update_request",
+        description:
+          "Changes a saved request. Only the fields given are touched and the rest are left alone — but `headers` replaces the whole list rather than merging into it, so read the request first with get_request and send back the list you want.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            request: {
+              type: "string",
+              description: "The request's id or name, from list_requests.",
+            },
+            name: { type: "string" },
+            method: {
+              type: "string",
+              description: `One of ${METHODS.join(", ")}.`,
+            },
+            url: { type: "string" },
+            headers: HEADERS_SCHEMA,
+            body: { type: "string" },
+            folder: {
+              type: ["string", "null"],
+              description:
+                "The name or id of a request folder to move it to. `null` moves it to the top level.",
+            },
+          },
+          required: ["request"],
+        },
+        run: async (args) => {
+          const existing = await find(args.request)
+
+          const patch: Partial<RequestFields> = {}
+          if (args.name !== undefined)
+            patch.name = text(args.name, "name").trim()
+          if (args.method !== undefined)
+            patch.method = methodOf(args.method, existing.method)
+          if (args.url !== undefined) patch.url = text(args.url, "url")
+          if (args.headers !== undefined)
+            patch.headers = headerList(args.headers)
+          if (args.body !== undefined) patch.body = text(args.body, "body")
+          // `in` rather than `!== undefined`: `null` is the way to move a
+          // request out of its folder, and is a field that was given.
+          if ("folder" in args) patch.folderId = await folderId(args.folder)
+
+          if (Object.keys(patch).length === 0) {
+            throw new Error(
+              "Nothing to change. Give at least one of name, method, url, headers, body or folder."
+            )
+          }
+
+          const request = await this.source.updateRequest(existing.id, patch)
+          return { saved: request }
+        },
+      },
+      {
+        name: "delete_request",
+        description:
+          "Deletes a saved request. Permanent: the API panel has no trash and no undo, so the request and its headers, body and script are gone. Delete one because the user asked for that request to go, not to tidy up after yourself.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            request: {
+              type: "string",
+              description: "The request's id or name, from list_requests.",
+            },
+          },
+          required: ["request"],
+        },
+        run: async (args) => {
+          const request = await find(args.request)
+          await this.source.deleteRequest(request.id)
+          return { deleted: { id: request.id, name: request.name } }
+        },
+      },
+      {
+        name: "create_folder",
+        description:
+          "Makes a folder in the API panel to file requests under. Its headers and params are lent to every request inside it, at any depth — which is what a folder is for beyond grouping: the collection's `Authorization` belongs on the folder rather than copied into each request.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            parent: {
+              type: "string",
+              description:
+                "The name or id of a folder to nest this one in, from list_requests. Left out, it goes at the top level.",
+            },
+            headers: FOLDER_HEADERS_SCHEMA,
+            params: FOLDER_PARAMS_SCHEMA,
+          },
+          required: ["name"],
+        },
+        run: async (args) => {
+          const folder = await this.source.createFolder({
+            name: text(args.name, "name").trim() || "New folder",
+            parentId: await folderId(args.parent, "parent"),
+            headers: headerList(args.headers),
+            params: headerList(args.params, "params"),
+          })
+          return { id: folder.id, name: folder.name }
+        },
+      },
+      {
+        name: "update_folder",
+        description:
+          "Changes a folder. Only the fields given are touched, and `headers` and `params` each replace the whole list rather than merging into it — read them from list_requests first.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            folder: {
+              type: "string",
+              description: "The folder's id or name, from list_requests.",
+            },
+            name: { type: "string" },
+            parent: {
+              type: ["string", "null"],
+              description:
+                "The name or id of a folder to move this one into. `null` moves it to the top level.",
+            },
+            headers: FOLDER_HEADERS_SCHEMA,
+            params: FOLDER_PARAMS_SCHEMA,
+          },
+          required: ["folder"],
+        },
+        run: async (args) => {
+          const existing = await findFolder(args.folder)
+
+          const patch: Partial<FolderFields> = {}
+          if (args.name !== undefined)
+            patch.name = text(args.name, "name").trim()
+          if (args.headers !== undefined)
+            patch.headers = headerList(args.headers)
+          if (args.params !== undefined)
+            patch.params = headerList(args.params, "params")
+          if ("parent" in args) {
+            const parentId = await folderId(args.parent, "parent")
+            // Refused with an answer rather than ignored: the panel's own drag
+            // guard can be a silent no-op because the folder visibly stays
+            // where it was, and a tool call has nothing to look at.
+            if (
+              parentId &&
+              isDescendant(
+                parentId,
+                existing.id,
+                await this.source.requestFolders()
+              )
+            ) {
+              throw new Error(
+                "A folder cannot be moved into itself or into one of its own subfolders."
+              )
+            }
+            patch.parentId = parentId
+          }
+
+          if (Object.keys(patch).length === 0) {
+            throw new Error(
+              "Nothing to change. Give at least one of name, parent, headers or params."
+            )
+          }
+
+          const folder = await this.source.updateFolder(existing.id, patch)
+          return { saved: folder }
+        },
+      },
+      {
+        name: "delete_folder",
+        description:
+          "Deletes a folder, the folders inside it and every request they hold. Permanent, and it takes more than what was named: the counts come back so you can say what went. There is no trash and no undo, so delete a folder because the user asked for that folder to go.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            folder: {
+              type: "string",
+              description: "The folder's id or name, from list_requests.",
+            },
+          },
+          required: ["folder"],
+        },
+        run: async (args) => {
+          const folder = await findFolder(args.folder)
+          const gone = await this.source.deleteFolder(folder.id)
+          return {
+            deleted: { id: folder.id, name: folder.name },
+            // Without the folder named — that is `deleted` above — so this is
+            // exactly what a sentence back to the user has to own up to.
+            alsoDeleted: {
+              folders: gone.folders - 1,
+              requests: gone.requests,
+            },
           }
         },
       },
@@ -642,6 +956,70 @@ export class McpServers {
       },
     ]
   }
+}
+
+/** The shape a request's headers and a folder's own rows all take: the
+ * record's own, which is what `list_requests` and `get_request` hand back — a
+ * model that read a list can write the same one back without reshaping it. */
+function rowsSchema(what: string): Json {
+  return {
+    type: "array",
+    description: `Replaces ${what}. \`enabled: false\` keeps a row without sending it, the way an unticked row in the panel does.`,
+    items: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        value: { type: "string" },
+        enabled: { type: "boolean" },
+      },
+      required: ["name", "value"],
+    },
+  }
+}
+
+const HEADERS_SCHEMA = rowsSchema("the request's headers")
+const FOLDER_HEADERS_SCHEMA = rowsSchema(
+  "the headers this folder lends to every request inside it"
+)
+const FOLDER_PARAMS_SCHEMA = rowsSchema(
+  "the query parameters this folder adds to every request inside it"
+)
+
+function headerList(value: unknown, field = "headers"): HttpHeader[] {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) {
+    throw new Error(`"${field}" must be a list of { name, value } objects.`)
+  }
+  return value.map((entry, index) => {
+    const row = asJson(entry)
+    const name = text(row.name, `${field}[${index}].name`).trim()
+    if (!name) throw new Error(`"${field}[${index}].name" is empty.`)
+    return {
+      name,
+      value: optionalText(row.value, `${field}[${index}].value`) ?? "",
+      // A row an agent wrote is one it meant to send, unless it said so.
+      enabled: row.enabled !== false,
+    }
+  })
+}
+
+/** A method the panel can actually draw. Anything else is refused rather than
+ * saved: the picker only holds `METHODS`, so a request saved with some other
+ * method would be a row the user can neither read nor correct. */
+function methodOf(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback
+  const wanted = text(value, "method").trim().toUpperCase()
+  if (!(METHODS as readonly string[]).includes(wanted)) {
+    throw new Error(
+      `"${wanted}" is not a method this workspace saves. Use one of: ${METHODS.join(", ")}.`
+    )
+  }
+  return wanted
+}
+
+function optionalText(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined
+  return text(value, field)
 }
 
 /** The one record an argument names, by id or by name. A name nothing matches

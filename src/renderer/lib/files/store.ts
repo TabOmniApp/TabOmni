@@ -217,6 +217,11 @@ export const useFiles = create<FilesState>((set, get) => {
   let restorePromise: Promise<void> | null = null
   /** The walk in flight, so two panels asking at once share one. */
   let indexPromise: Promise<void> | null = null
+  /**
+   * The folder list that walk was over, so a folder added or removed is told
+   * apart from any other change to the studio.
+   */
+  let indexedRoots: string | null = null
 
   function rememberTabs() {
     const { openIds, selectedId } = get()
@@ -346,7 +351,20 @@ export const useFiles = create<FilesState>((set, get) => {
     // and pruning against an empty list there would close every tab this
     // store had just restored.
     if (!studio.loaded) return
-    prune(studio.folders.map((folder) => folder.path))
+    const roots = studio.folders.map((folder) => folder.path)
+    prune(roots)
+
+    // The index is a walk of the folder list, so adding a folder does not make
+    // it stale, it makes it wrong: `loadIndex` hands back the walk it already
+    // has, and the palette would go on missing the new folder's files until the
+    // app was restarted. Dropped here, and re-walked straight away only if
+    // somebody has opened the palette already — the same rule `refresh` keeps.
+    const key = roots.join("\n")
+    if (indexedRoots !== null && indexedRoots !== key) {
+      indexPromise = null
+      indexedRoots = null
+      if (get().index.length > 0) void get().loadIndex(true)
+    }
   })
 
   return {
@@ -375,6 +393,10 @@ export const useFiles = create<FilesState>((set, get) => {
       if (force) indexPromise = null
       indexPromise ??= (async () => {
         set({ indexing: true })
+        indexedRoots = useStudio
+          .getState()
+          .folders.map((folder) => folder.path)
+          .join("\n")
         try {
           set({ index: await window.desktop.listWorkspaceFiles() })
         } catch (error) {

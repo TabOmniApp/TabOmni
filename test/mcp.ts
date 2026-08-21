@@ -2,7 +2,11 @@ import { mkdtemp, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
-import type { McpServerName } from "../src/shared/api"
+import type {
+  HttpFolder,
+  HttpRequestRecord,
+  McpServerName,
+} from "../src/shared/api"
 import { McpServers, type McpSource } from "../src/main/mcp"
 import { check, finish, section } from "./harness"
 
@@ -27,6 +31,38 @@ const on = new Set<McpServerName>(["database", "api", "notes"])
 
 let sent = 0
 
+/** The folders, mutable for the same reason as the requests below. */
+const folders: HttpFolder[] = [
+  {
+    id: "folder-1",
+    name: "API",
+    parentId: null,
+    headers: [
+      { name: "Authorization", value: "Bearer {{token}}", enabled: true },
+    ],
+    params: [{ name: "trace", value: "1", enabled: true }],
+    createdAt: "",
+    updatedAt: "",
+  },
+]
+
+/** The collection the writing tools work on, mutable the way the store is:
+ * `create_request` has to be readable by `list_requests` afterwards, which is
+ * the whole point of it. */
+const requests: HttpRequestRecord[] = [
+  {
+    id: "req-1",
+    name: "Users",
+    method: "GET",
+    url: "{{baseUrl}}/users",
+    headers: [{ name: "X-Own", value: "own", enabled: true }],
+    body: "",
+    folderId: "folder-1",
+    createdAt: "",
+    updatedAt: "",
+  },
+]
+
 const source: McpSource = {
   enabled: (server) => Promise.resolve(on.has(server)),
 
@@ -48,34 +84,8 @@ const source: McpSource = {
   query: (databaseId, sql) =>
     Promise.resolve([{ databaseId, sql, id: 1 }, { id: 2 }]),
 
-  requests: () =>
-    Promise.resolve([
-      {
-        id: "req-1",
-        name: "Users",
-        method: "GET",
-        url: "{{baseUrl}}/users",
-        headers: [{ name: "X-Own", value: "own", enabled: true }],
-        body: "",
-        folderId: "folder-1",
-        createdAt: "",
-        updatedAt: "",
-      },
-    ]),
-  requestFolders: () =>
-    Promise.resolve([
-      {
-        id: "folder-1",
-        name: "API",
-        parentId: null,
-        headers: [
-          { name: "Authorization", value: "Bearer {{token}}", enabled: true },
-        ],
-        params: [{ name: "trace", value: "1", enabled: true }],
-        createdAt: "",
-        updatedAt: "",
-      },
-    ]),
+  requests: () => Promise.resolve(requests),
+  requestFolders: () => Promise.resolve(folders),
   environments: () =>
     Promise.resolve([
       {
@@ -100,6 +110,69 @@ const source: McpSource = {
       timeMs: 1,
       setCookies: [],
     })
+  },
+
+  createRequest: (fields) => {
+    const request: HttpRequestRecord = {
+      id: `req-${requests.length + 1}`,
+      ...fields,
+      createdAt: "",
+      updatedAt: "",
+    }
+    requests.push(request)
+    return Promise.resolve(request)
+  },
+  updateRequest: (id, patch) => {
+    const index = requests.findIndex((record) => record.id === id)
+    if (index < 0) throw new Error("gone")
+    const updated = { ...requests[index]!, ...patch }
+    requests[index] = updated
+    return Promise.resolve(updated)
+  },
+  deleteRequest: (id) => {
+    requests.splice(
+      requests.findIndex((record) => record.id === id),
+      1
+    )
+    return Promise.resolve()
+  },
+  createFolder: (fields) => {
+    const folder: HttpFolder = {
+      id: `folder-${folders.length + 1}`,
+      ...fields,
+      createdAt: "",
+      updatedAt: "",
+    }
+    folders.push(folder)
+    return Promise.resolve(folder)
+  },
+  updateFolder: (id, patch) => {
+    const index = folders.findIndex((record) => record.id === id)
+    if (index < 0) throw new Error("gone")
+    const updated = { ...folders[index]!, ...patch }
+    folders[index] = updated
+    return Promise.resolve(updated)
+  },
+  // The cascade itself is `descendantFolderIds` in `@shared/tree`, which
+  // `test/tree.ts` covers; this stands in for the store doing it.
+  deleteFolder: (id) => {
+    const gone = new Set(
+      folders
+        .filter((record) => record.id === id || record.parentId === id)
+        .map((record) => record.id)
+    )
+    const taken = requests.filter((request) =>
+      gone.has(request.folderId ?? "")
+    ).length
+    for (const request of [...requests]) {
+      if (gone.has(request.folderId ?? "")) {
+        requests.splice(requests.indexOf(request), 1)
+      }
+    }
+    for (const folder of [...folders]) {
+      if (gone.has(folder.id)) folders.splice(folders.indexOf(folder), 1)
+    }
+    return Promise.resolve({ folders: gone.size, requests: taken })
   },
 
   notes: () =>
@@ -273,10 +346,13 @@ check(
 
 const apiTools = await rpc(urls.api, "tools/list")
 check(
-  "the API panel's three",
+  "the API panel's nine — three that read, six that write",
   (apiTools.body.result?.tools ?? [])
     .map((tool: { name: string }) => tool.name)
-    .join() === "list_requests,get_request,send_request"
+    .join() ===
+    "list_requests,get_request,send_request,create_request,update_request," +
+      "delete_request,create_folder,update_folder,delete_folder",
+  apiTools.body.result?.tools ?? []
 )
 
 const noteTools = await rpc(urls.notes, "tools/list")
@@ -347,6 +423,159 @@ check(
 check("reading a request sends nothing", sent === 0)
 await call(urls.api, "send_request", { request: "req-1" })
 check("sending one sends exactly one", sent === 1)
+
+section("a request an agent writes")
+
+const created = await call(urls.api, "create_request", {
+  name: "Create user",
+  method: "post",
+  url: "{{baseUrl}}/users?trace=1",
+  headers: [
+    { name: "Content-Type", value: "application/json" },
+    { name: "X-Off", value: "off", enabled: false },
+  ],
+  body: '{"name":"a"}',
+  folder: "API",
+})
+const createdId = (JSON.parse(created.text) as { id: string }).id
+const saved = requests.find((record) => record.id === createdId)
+
+check("is saved, not sent", sent === 1 && saved !== undefined, created.text)
+check(
+  "keeps its {{variables}} as typed",
+  saved?.url.includes("{{baseUrl}}") === true,
+  saved?.url
+)
+check("takes the method in any case", saved?.method === "POST", saved?.method)
+check(
+  "is filed under the folder it named",
+  saved?.folderId === "folder-1",
+  saved?.folderId
+)
+check(
+  "carries an unticked header as unticked",
+  saved?.headers.length === 2 &&
+    saved.headers[0]!.enabled === true &&
+    saved.headers[1]!.enabled === false,
+  saved?.headers
+)
+check(
+  "and is listed like any other afterwards",
+  (await call(urls.api, "list_requests")).text.includes("Create user")
+)
+
+const refusedMethod = await call(urls.api, "create_request", {
+  name: "Purge",
+  url: "/purge",
+  method: "PURGE",
+})
+check(
+  "a method the panel cannot draw is refused rather than saved",
+  refusedMethod.isError && refusedMethod.text.includes("PURGE"),
+  refusedMethod
+)
+
+const updated = await call(urls.api, "update_request", {
+  request: "Create user",
+  url: "{{baseUrl}}/people",
+  folder: null,
+})
+// Re-found rather than re-read from `saved`: an update replaces the record, the
+// way the store's own whole-collection save does.
+const moved = requests.find((record) => record.id === createdId)
+check(
+  "an update touches only the fields it was given",
+  moved?.url === "{{baseUrl}}/people" &&
+    moved?.method === "POST" &&
+    moved?.body === '{"name":"a"}',
+  updated.text
+)
+check("and `null` moves it to the top level", moved?.folderId === null)
+
+const nothing = await call(urls.api, "update_request", { request: "req-1" })
+check(
+  "an update with nothing to change says so",
+  nothing.isError && nothing.text.includes("Nothing to change"),
+  nothing
+)
+check("none of it sent anything", sent === 1)
+
+const deleted = await call(urls.api, "delete_request", {
+  request: "Create user",
+})
+check(
+  "and one deleted is gone from the collection",
+  !deleted.isError &&
+    requests.every((record) => record.name !== "Create user") &&
+    requests.length === 1,
+  deleted.text
+)
+
+const ghost = await call(urls.api, "delete_request", { request: "Ghost" })
+check(
+  "a request that is not there is a mistake to correct, not a crash",
+  ghost.isError && ghost.text.includes("No request called"),
+  ghost
+)
+
+section("the folders requests are filed under")
+
+const folder = await call(urls.api, "create_folder", {
+  name: "Admin",
+  parent: "API",
+  headers: [{ name: "X-Admin", value: "1" }],
+})
+const nested = folders.find((record) => record.name === "Admin")
+check(
+  "one is made under the folder it named",
+  nested?.parentId === "folder-1",
+  folder.text
+)
+check(
+  "with the headers it lends to everything inside it",
+  nested?.headers[0]?.name === "X-Admin" && nested.params.length === 0,
+  nested
+)
+check(
+  "and is listed beside the requests, so an empty one is still visible",
+  (await call(urls.api, "list_requests")).text.includes("Admin")
+)
+
+const cycle = await call(urls.api, "update_folder", {
+  folder: "API",
+  parent: "Admin",
+})
+check(
+  "a folder cannot be moved into its own subfolder",
+  cycle.isError && cycle.text.includes("cannot be moved into itself"),
+  cycle
+)
+
+const reparented = await call(urls.api, "update_folder", {
+  folder: "Admin",
+  parent: null,
+  name: "Admin API",
+})
+const after = folders.find((record) => record.id === nested?.id)
+check(
+  "moving one to the top level leaves its rows alone",
+  after?.parentId === null &&
+    after.name === "Admin API" &&
+    after.headers.length === 1,
+  reparented.text
+)
+
+const cascade = await call(urls.api, "delete_folder", { folder: "API" })
+check(
+  "deleting one says what went with it",
+  JSON.parse(cascade.text).alsoDeleted.requests === 1,
+  cascade.text
+)
+check(
+  "and takes the requests it held",
+  requests.length === 0 && folders.every((record) => record.id !== "folder-1"),
+  { requests: requests.length, folders }
+)
 
 section("a note is read as markdown")
 

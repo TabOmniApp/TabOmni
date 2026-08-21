@@ -88,6 +88,11 @@ const ALLOWED_TOOLS = [
  * what the Terminal panel is for, where the session is interactive and can be
  * watched and answered.
  *
+ * The workspace's own panels are the exception, and always were — a note
+ * written or a request saved through the MCP servers lands in a panel the user
+ * is looking at, which is the point of the thing. The two deletions are back on
+ * the list, though; see the note beside them.
+ *
  * What is left over is reading — `Read`, `Glob`, `Grep`, `LSP` — plus the
  * workspace's own MCP tools. Being a deny list, it is worth re-reading against
  * `claude --help` when the CLI gains tools: the way to see what a turn actually
@@ -123,6 +128,15 @@ const DISALLOWED_TOOLS = [
   "RemoteTrigger",
   "SendMessage",
   "ListAgents",
+  // Deleting somebody's saved requests. The rest of the workspace's own MCP
+  // tools are allowed above and stay allowed — writing a note or saving a
+  // request is what this panel is for, and the panel it lands in is right
+  // there. These two are the ones with nothing to undo them: the API panel has
+  // no trash, `delete_folder` takes the requests inside with it, and a print
+  // turn has nobody to ask. Ask for a request to be deleted in a Terminal
+  // session, where the CLI prompts and the answer is yours.
+  "mcp__tabomni-api__delete_request",
+  "mcp__tabomni-api__delete_folder",
 ]
 
 /**

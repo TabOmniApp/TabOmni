@@ -12,8 +12,19 @@
  * ask about it without a renderer.
  */
 
-/** A node that nests: it names the folder it sits in, or null at the top. */
-export type TreeFolder = { id: string; parentId: string | null }
+import { descendantFolderIds, type TreeFolder } from "@shared/tree"
+
+/*
+ * The two that are about the shape of the tree rather than about drawing it
+ * moved to `@shared/tree`, because the main process needs the same cascade when
+ * an agent deletes a folder through the MCP server. Re-exported so this file is
+ * still the one place a panel asks about its tree.
+ */
+export {
+  descendantFolderIds,
+  isDescendant,
+  type TreeFolder,
+} from "@shared/tree"
 
 /** A leaf filed under one of those folders, or null at the top. */
 export type TreeItem = { id: string; folderId: string | null }
@@ -67,40 +78,6 @@ export function flattenFolders<F extends TreeFolder>(
   }
   walk(null, 0)
   return out
-}
-
-/** `id` itself, plus every folder nested under it at any depth. */
-export function descendantFolderIds(
-  id: string,
-  folders: TreeFolder[]
-): Set<string> {
-  const result = new Set<string>([id])
-  let added = true
-  while (added) {
-    added = false
-    for (const folder of folders) {
-      if (
-        folder.parentId &&
-        result.has(folder.parentId) &&
-        !result.has(folder.id)
-      ) {
-        result.add(folder.id)
-        added = true
-      }
-    }
-  }
-  return result
-}
-
-/** Whether `nodeId` is `ancestorId` itself, or nested anywhere under it — the
- * cycle guard for a drag-and-drop reparent: a folder can't be dropped into
- * its own subtree. */
-export function isDescendant(
-  nodeId: string,
-  ancestorId: string,
-  folders: TreeFolder[]
-): boolean {
-  return descendantFolderIds(ancestorId, folders).has(nodeId)
 }
 
 /**

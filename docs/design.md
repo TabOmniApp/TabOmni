@@ -280,6 +280,14 @@ in a run where `⌘P` is not pressed — and held for the rest of it. The
 Explorer's Refresh re-walks it, which is also the answer to "I made this file
 in a terminal a minute ago and the palette cannot see it".
 
+Adding or removing a folder is the one thing that drops the index by itself: a
+walk that never saw that folder is not stale, it is wrong, and the alternative
+was a palette that could not find anything in a folder just added until the app
+was restarted. The files store watches the studio's folder list for that —
+beside the pruning it already does there — and re-walks straight away only if
+the index has been built, so a run where `⌘P` was never pressed still never
+walks. Everything else that changes under a folder is Refresh's job, as before.
+
 The walk skips what a package manager or a build left behind
 (`IGNORED_DIRECTORIES` in `main/files.ts` — `node_modules`, `.git`, `dist`,
 `target`, `.venv`, …) and stops at 20,000 files. Both are ceilings rather than
@@ -440,19 +448,76 @@ the workspace's own settings under `mcp.database` / `mcp.api` / `mcp.notes` —
 keys in `@shared/api` because both sides read them, the dialog to draw the
 switch and the main process to answer with.
 
-What each server offers, three tools apiece:
+What each server offers — three tools apiece, except the API panel, which has
+two more that write:
 
 - **database** — `list_databases`, `list_tables`, `query`. Introspection beyond
   the table list is a query against `information_schema`, which is a thing models
   are good at and would otherwise be a per-engine adapter's worth of code
   duplicated out of the renderer. Rows are capped at 200: a tool result is read
   by a model with a context window.
-- **api** — `list_requests`, `get_request`, `send_request`. A request goes out
-  exactly as the panel would send it, which is why the resolution moved to
-  `@shared/http-request`: the `{{variables}}` of the active environment, the
-  ancestor folders' headers and params, one implementation for both readers. What
-  it does _not_ carry is the panel's cookie jar or a request's post-response
-  script — both live in the renderer, one of them in a worker sandbox.
+- **api** — `list_requests`, `get_request`, `send_request`, plus
+  `create_request`, `update_request`, `delete_request` and the same three for
+  the folders they are filed under. A request goes out exactly as the panel
+  would send it, which is why the resolution moved to `@shared/http-request`: the
+  `{{variables}}` of the active environment, the ancestor folders' headers and
+  params, one implementation for both readers. What it does _not_ carry is the
+  panel's cookie jar or a request's post-response script — both live in the
+  renderer, one of them in a worker sandbox.
+
+  The writing tools save the collection an agent has just been reading:
+  somebody who asked for an endpoint to be tried generally wants it kept, and
+  dictating a URL, six headers and a JSON body back for the user to retype is
+  the opposite of the premise. A request is written **as typed** —
+  `{{baseUrl}}/users` is stored with its variables intact, since substitution
+  belongs to the moment it is sent — and a method is refused unless it is one of
+  `METHODS`, which moved to `@shared/http-request` for this: the panel's picker
+  can only draw those, so a request saved as `PURGE` would be a row the user can
+  neither read nor correct. `update_request` touches only the fields it was
+  given, `headers` replaces the list rather than merging into it (a merge would
+  need a rule for a header sent twice, which the panel allows), and a `folder` of
+  `null` moves a request to the top level. `postResponseScript` is not writable
+  at all: it runs in the renderer's sandbox, and a script is not what "save this
+  request" means. Nothing is sent — `send_request` is still the only tool that
+  makes a request, which is what keeps "write it down" and "run it" two separate
+  agreements. It is the same switch, though: `mcp.api` on now means an agent may
+  write as well as read, which is one more reason it starts off. The assistant
+  panel gets them too — it is named the whole `mcp__tabomni-api` server — and
+  that is consistent rather than a hole in its denylist: it could always write a
+  note through `create_note` and send a saved request, because what that list
+  refuses is reaching the user's files and machine, not the app's own panels —
+  except the two deletions, which are back on that list: the panel has no trash,
+  `delete_folder` takes the requests inside with it, and a print-mode turn has
+  nobody to ask. A request is deleted from a Terminal session, where the CLI
+  prompts, or by hand in the panel.
+
+  **The folders are writable too**, by `create_folder`, `update_folder` and
+  `delete_folder`, because a folder is where the collection's `Authorization`
+  and its `?trace=1` live — an agent that can save requests but not the folder
+  they inherit from would copy that header into every one of them. A reparent is
+  **refused** rather than ignored when it would make a folder its own
+  descendant: the sidebar's drag guard can be a silent no-op because the folder
+  visibly stays where it was, and a tool call has nothing to look at. Deleting
+  cascades the way the panel's own delete does — the folder, the folders under
+  it and their requests — from the same `descendantFolderIds`, which moved to
+  `@shared/tree` for this: two implementations of a cascade is two answers to
+  "what did I just delete". The counts come back so the agent can say. And
+  `list_requests` lists the folders beside the requests, since an empty folder
+  is invisible in the requests alone and naming a parent means having seen it.
+
+  What is written is announced to the renderer (`http:changed` → `reread` on the
+  API store, which also closes a tab whose request or folder has gone — the
+  strip draws nothing for an id that resolves to neither, so leaving it there is
+  a tab-shaped hole), and that is not only about a panel looking out of date: the
+  panel saves the **whole collection** at once, so a window still holding the
+  list it read at launch would put it back over the agent's request the next
+  time anything in it was edited. A panel that has never read the collection
+  does nothing — it has nothing stale to write back, and refreshing would
+  restore its tabs into the shared strip before anybody opened it. What is left
+  is a genuinely concurrent write: an edit already inside the panel's save
+  debounce when the agent writes still wins. The alternative was per-record
+  files, which is a change to how the panel saves rather than to this.
+
 - **notes** — `list_notes`, `read_note`, `create_note`. A note is read as
   markdown (`noteMarkdown` in `main/note-blocks.ts`) rather than as BlockNote's
   JSON, and a written one is stored _as_ markdown: converting markdown into
@@ -489,8 +554,10 @@ config was written when the session began. That is what the line under the
 switches says.
 
 `test/mcp.ts` speaks the protocol over a real socket — the handshake, the tool
-lists, a request resolved through its folders, a note read as markdown, and every
-way in that should be refused: a wrong secret, a longer path, a `GET`, an
+lists, a request resolved through its folders, a request written, changed and
+deleted, a folder made, refused a move into its own subtree and then deleted
+with what it held, a note read as markdown, and every way in that should be
+refused: a wrong secret, a longer path, a `GET`, an
 `Origin`, half a JSON body. Calling into the class would have proved none of
 those, and each one is a place where a server that "works" is one the CLI
 silently declines to use.
@@ -568,6 +635,60 @@ re-reading when the CLI gains tools.
 Editing files and running commands is deliberately not here. That is what the
 Terminal panel is for, where the session is interactive, permission prompts can
 be answered, and what the agent did is on screen.
+
+**`@` in its composer is a name, not a paste.** The chat composer's `@` puts a
+chip in the message and swaps it for a line of context on the way out, because
+the CLI in a pty can see nothing but the prompt — a table it has never been told
+about is a table it cannot ask about. This panel is the other case: it is started
+with whichever of the Database, API and Notes servers are switched on, and every
+one of those tools takes a thing by _name_ (`list_tables`, `get_request`,
+`read_note` all say "id or name"). So picking a row inserts the name and stops
+there. Pasting the schema in beside it would be handing the agent a second,
+staler copy of something it can read for itself, and the reply would have to be
+read wondering which of the two it went by.
+
+**The databases themselves are listed, which the chip could not be.** A chip has
+to expand into something, and what a database would expand into is its schema —
+which means connecting, and a menu opening is not consent to connect. A name
+needs no connection: the list is the manifest's, read at launch, and
+`list_databases` and `list_tables` both take one. So every database is offered
+whether or not the Database panel has opened it, and the open one's tables are
+offered on top of that — which is the difference between `@` answering "what is
+in this workspace?" and only answering "what is in the database I happen to be
+browsing?".
+
+A row is the same name the chip shows — `mydatabase.mytable` — rather than that
+name with its connection spliced on. Two menus on one keyboard naming the same
+table two ways is the confusing part, on the engines where a schema _is_ a
+database the name already says it, and a connection called `Shop (staging)` does
+not belong in the middle of an identifier. Which connection a table is in is the
+row's second line instead, and the agent's own `list_databases` — which answers
+with each record's name _and_ its database — is what pins a bare `public.users`
+down when there is more than one Postgres connection.
+
+That is also the reason the tint refuses a dot with a name hanging off it: with
+the database `shop` known and its tables unread, `shop.public.orders` is tinted
+nowhere rather than tinted at the front, which would have claimed the workspace
+had read a table it has not.
+
+The tint is drawn behind the text rather than in it. The composer is a plain
+textarea over a mirror of its own value — one class list, `FIELD` in
+`assistant-composer.tsx`, shared by the two so a character lands in the same
+place in both — and the mirror renders the tint with transparent glyphs, so the
+text on screen is the textarea's own and selection, IME and undo are the
+platform's. A rich-text editor would have been a document model to keep in step
+for a decoration, in a panel this narrow, over a message that is plain text on
+the wire and in the transcript.
+
+What is tinted is read from the catalogue rather than remembered from the menu,
+which is `markMentions` in `lib/assistant/mention-text.ts`: a name typed by hand
+lights up like one that was picked, half a name deleted stops being tinted, and a
+note that has since been deleted is plain text — the tint means "the workspace
+still holds this", which is the thing worth knowing before sending. Names are
+matched whole and case-sensitively, longest first, and a one-character name is
+not matched at all, because it would tint every letter it appeared in. The same
+marks are drawn on the message once it is sent, so a line still reads as pointing
+at a table rather than mentioning one in passing.
 
 ## Explorer
 

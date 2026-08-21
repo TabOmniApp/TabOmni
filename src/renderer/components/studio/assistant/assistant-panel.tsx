@@ -1,13 +1,10 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef } from "react"
 import { Spinner } from "@/components/ui/spinner"
-import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
-  ArrowUp,
   ChevronLeft,
   MessageSquarePlus,
   MessagesSquare,
-  Square,
   Trash2,
   TriangleAlert,
   Wrench,
@@ -24,6 +21,7 @@ import { useSettings } from "@/lib/settings"
 import { IconButton } from "../icon-button"
 import { MarkdownView } from "../markdown-view"
 import { PanelHeader } from "../panel-header"
+import { AssistantComposer, MentionText } from "./assistant-composer"
 
 /**
  * The chat beside the workbench.
@@ -39,6 +37,11 @@ import { PanelHeader } from "../panel-header"
  * `main/assistant.ts` for why that allowlist is the whole of it in print mode.
  * When every switch is off, the notice below says so rather than letting
  * somebody ask three questions before working out that nothing is connected.
+ *
+ * Which is also what `@` in its composer means here: the panels are reachable
+ * through those tools, so a mention is the thing's *name*, tinted, rather than
+ * the line of context the chat composer's `@` pastes in. See
+ * `assistant-composer.tsx`.
  */
 export function AssistantPanel() {
   const view = useAssistant((state) => state.view)
@@ -55,7 +58,6 @@ export function AssistantPanel() {
   const mcp = useSettings((state) => state.mcp)
   const connected = Object.values(mcp).filter(Boolean).length
 
-  const [draft, setDraft] = useState("")
   const tail = useRef<HTMLDivElement>(null)
 
   // The newest message, whether it is a reply or the user's own line. `end` so
@@ -64,12 +66,6 @@ export function AssistantPanel() {
   useEffect(() => {
     tail.current?.scrollIntoView({ block: "end" })
   }, [messages, view])
-
-  function submit() {
-    if (!draft.trim() || sending) return
-    void send(draft)
-    setDraft("")
-  }
 
   const title =
     view === "list"
@@ -124,46 +120,11 @@ export function AssistantPanel() {
       {/* The composer is the chat's, not the list's: a message typed with a
           list on screen has no conversation to belong to. */}
       <div className={cn("shrink-0 border-t p-2", view === "list" && "hidden")}>
-        <div className="relative">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              // Enter sends and ⇧Enter breaks the line, the way every chat box
-              // does. `isComposing` is the guard that matters on a Japanese or
-              // Vietnamese keyboard: the Enter that accepts a candidate would
-              // otherwise send half a word.
-              if (event.key !== "Enter" || event.shiftKey) return
-              if (event.nativeEvent.isComposing) return
-              event.preventDefault()
-              submit()
-            }}
-            rows={3}
-            spellCheck={false}
-            placeholder="Ask about this workspace…"
-            className="max-h-48 resize-none pr-10 text-xs"
-          />
-          <div className="absolute right-1.5 bottom-1.5">
-            {sending ? (
-              <IconButton
-                label="Stop"
-                variant="outline"
-                onClick={() => void stop()}
-              >
-                <Square />
-              </IconButton>
-            ) : (
-              <IconButton
-                label="Send"
-                variant="outline"
-                disabled={!draft.trim()}
-                onClick={submit}
-              >
-                <ArrowUp />
-              </IconButton>
-            )}
-          </div>
-        </div>
+        <AssistantComposer
+          sending={sending}
+          onSend={(text) => void send(text)}
+          onStop={() => void stop()}
+        />
       </div>
     </div>
   )
@@ -268,8 +229,8 @@ function Message({ of }: { of: AssistantMessage }) {
     // The one thing given a bubble: in a column this narrow, whose line it is
     // has to be readable without reading it.
     return (
-      <div className="ml-4 rounded-lg rounded-br-sm bg-accent/60 px-2.5 py-1.5 text-xs whitespace-pre-wrap">
-        {of.text}
+      <div className="ml-4 rounded-lg rounded-br-sm bg-accent/60 px-2.5 py-1.5 text-xs">
+        <MentionText text={of.text} />
       </div>
     )
   }

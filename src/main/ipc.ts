@@ -30,6 +30,7 @@ import {
   type NoteFolder,
   type NoteRecord,
 } from "../shared/api"
+import { descendantFolderIds } from "../shared/tree"
 import {
   agentCommandWith,
   agentInstallCommand,
@@ -211,6 +212,110 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     activeEnvironmentId: async () =>
       (await store.getSetting(HTTP_ENVIRONMENT_KEY)) || null,
     send: (input) => sendHttp(input),
+    // Written here rather than in `mcp.ts` for the same reason `createNote` is:
+    // the id and the timestamps are the store's to mint, and this is the file
+    // that already knows the panel has to be told (`http:changed`). The panel
+    // saves the whole collection at once, so a window that never re-read would
+    // write its stale list back over this the next time anything was edited.
+    createRequest: async (fields) => {
+      const now = new Date().toISOString()
+      const request: HttpRequestRecord = {
+        id: randomUUID(),
+        ...fields,
+        createdAt: now,
+        updatedAt: now,
+      }
+      await store.saveRequests([...(await store.listRequests()), request])
+      send(IPC.requestsChanged, null)
+      return request
+    },
+    updateRequest: async (id, patch) => {
+      // Read again rather than patching what the tool call had: the panel may
+      // have saved over the collection since the agent listed it.
+      const requests = await store.listRequests()
+      const existing = requests.find((record) => record.id === id)
+      if (!existing) {
+        throw new Error("That request is not in this workspace any more.")
+      }
+      const updated: HttpRequestRecord = {
+        ...existing,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      }
+      await store.saveRequests(
+        requests.map((record) => (record.id === id ? updated : record))
+      )
+      send(IPC.requestsChanged, null)
+      return updated
+    },
+    deleteRequest: async (id) => {
+      const requests = await store.listRequests()
+      if (!requests.some((record) => record.id === id)) {
+        throw new Error("That request is not in this workspace any more.")
+      }
+      await store.saveRequests(requests.filter((record) => record.id !== id))
+      // The panel has to hear about this one even more than about a write: a
+      // tab onto a request that is gone is a tab that can draw nothing.
+      send(IPC.requestsChanged, null)
+    },
+    createFolder: async (fields) => {
+      const now = new Date().toISOString()
+      const folder: HttpFolder = {
+        id: randomUUID(),
+        ...fields,
+        createdAt: now,
+        updatedAt: now,
+      }
+      await store.saveRequestFolders([
+        ...(await store.listRequestFolders()),
+        folder,
+      ])
+      send(IPC.requestsChanged, null)
+      return folder
+    },
+    updateFolder: async (id, patch) => {
+      const folders = await store.listRequestFolders()
+      const existing = folders.find((record) => record.id === id)
+      if (!existing) {
+        throw new Error("That folder is not in this workspace any more.")
+      }
+      const updated: HttpFolder = {
+        ...existing,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      }
+      await store.saveRequestFolders(
+        folders.map((record) => (record.id === id ? updated : record))
+      )
+      send(IPC.requestsChanged, null)
+      return updated
+    },
+    // The same cascade the panel's own delete makes, from the same function
+    // (`@shared/tree`): a folder takes its subfolders and their requests with
+    // it, and what the panel counts up in its confirmation dialog is what an
+    // agent deleting one has to report.
+    deleteFolder: async (id) => {
+      const folders = await store.listRequestFolders()
+      if (!folders.some((record) => record.id === id)) {
+        throw new Error("That folder is not in this workspace any more.")
+      }
+      const gone = descendantFolderIds(id, folders)
+      const requests = await store.listRequests()
+      const orphaned = requests.filter((request) =>
+        gone.has(request.folderId ?? "")
+      )
+
+      await store.saveRequestFolders(
+        folders.filter((record) => !gone.has(record.id))
+      )
+      if (orphaned.length > 0) {
+        await store.saveRequests(
+          requests.filter((request) => !gone.has(request.folderId ?? ""))
+        )
+      }
+      send(IPC.requestsChanged, null)
+      return { folders: gone.size, requests: orphaned.length }
+    },
 
     notes: () => store.listNotes(),
     noteFolders: () => store.listNoteFolders(),
