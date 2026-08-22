@@ -3,7 +3,7 @@ import { markdownToHTML } from "@blocknote/core"
 
 import { cn } from "@/lib/utils"
 import { sanitizeHtml } from "@/lib/markdown/sanitize"
-import { markdownRenderer } from "@/lib/terminal/markdown"
+import { markdownRenderer } from "@/lib/markdown/renderer"
 import "./markdown-view.css"
 
 /**

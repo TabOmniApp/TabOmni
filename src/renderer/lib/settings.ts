@@ -12,12 +12,14 @@ import { getSetting, setSetting } from "./workspace"
 const SETTINGS_KEY = "workbench.settings"
 
 /**
- * The chat view's two switches, under the keys the chat view itself wrote them
- * to before they were listed in the dialog — the choice somebody already made
- * is theirs, and renaming a key would quietly hand it back to the default.
+ * Under the key a chat view that no longer exists wrote it to — the choice
+ * somebody already made is theirs, and renaming a key would quietly hand it
+ * back to the default. There was a second, `claudeGui.showThinking`, for the
+ * model's reasoning blocks: nothing draws those any more (a `claude -p` turn
+ * reports messages and tool calls and nothing else), so the switch went and the
+ * key is left where it lies.
  */
 const SHOW_TOOL_CALLS_KEY = "claudeGui.showToolCalls"
-const SHOW_THINKING_KEY = "claudeGui.showThinking"
 
 /**
  * Where the workbench's one tab strip sits.
@@ -33,11 +35,33 @@ export type TabsPlacement = "top" | "right"
 
 type Stored = {
   tabsPlacement: TabsPlacement
+  groupTabs: boolean
+  /**
+   * The diff view's two: the committed side beside the working one or the two
+   * interleaved, and whether whitespace is drawn.
+   *
+   * Here rather than per file, because it is how somebody reads a diff rather
+   * than something about a particular one — and here rather than in the Settings
+   * dialog, because the control is the toolbar over the diff itself, where the
+   * effect of the click is the thing being looked at.
+   */
+  diffSideBySide: boolean
+  diffWhitespace: boolean
 }
 
 function isStored(value: unknown): value is Stored {
   const record = value as Partial<Stored> | null
-  return record?.tabsPlacement === "top" || record?.tabsPlacement === "right"
+  return (
+    (record?.tabsPlacement === "top" || record?.tabsPlacement === "right") &&
+    // Absent from anything written before grouping existed, which is read as
+    // off — the arrangement somebody already has is the one they chose. The two
+    // diff flags are the same story, one feature later.
+    (record.groupTabs === undefined || typeof record.groupTabs === "boolean") &&
+    (record.diffSideBySide === undefined ||
+      typeof record.diffSideBySide === "boolean") &&
+    (record.diffWhitespace === undefined ||
+      typeof record.diffWhitespace === "boolean")
+  )
 }
 
 /** Every MCP server's switch, by name. */
@@ -48,10 +72,9 @@ type SettingsState = Stored & {
    * default for a frame and correcting itself. */
   loaded: boolean
 
-  /** Whether a turn's tool calls are drawn in the chat view. */
+  /** Whether a turn's tool calls are drawn in a worktree's chat
+   * (`ChatMessage`). */
   showToolCalls: boolean
-  /** The same, for the model's thinking blocks. */
-  showThinking: boolean
 
   /**
    * Which of the workspace's panels an agent session may reach as MCP tools.
@@ -64,9 +87,11 @@ type SettingsState = Stored & {
   mcp: McpEnabled
 
   setTabsPlacement: (placement: TabsPlacement) => void
+  setGroupTabs: (group: boolean) => void
+  setDiffSideBySide: (sideBySide: boolean) => void
+  setDiffWhitespace: (show: boolean) => void
   setMcpEnabled: (server: McpServerName, enabled: boolean) => void
   setShowToolCalls: (show: boolean) => void
-  setShowThinking: (show: boolean) => void
   /** Reads the stored preferences. Called once, at launch. */
   restore: () => Promise<void>
 }
@@ -90,20 +115,57 @@ function storedFlag(raw: string | null, fallback: boolean): boolean {
  * per component read the file once at mount, so one of the two would have gone
  * on drawing the value it started with.
  */
-export const useSettings = create<SettingsState>((set) => {
+export const useSettings = create<SettingsState>((set, get) => {
   /** Strict Mode mounts effects twice, so restoring has to be idempotent. */
   let restorePromise: Promise<void> | null = null
 
+  /**
+   * Writes the whole bag, from whatever the store now holds.
+   *
+   * One writer rather than each setter naming its neighbours: they shared a key,
+   * so a setter that listed two of what are now four fields would have written
+   * the other two back as absent — and absent reads as the default, which is a
+   * preference silently undone by changing an unrelated one.
+   */
+  const save = () => {
+    const { tabsPlacement, groupTabs, diffSideBySide, diffWhitespace } = get()
+    remember(SETTINGS_KEY, {
+      tabsPlacement,
+      groupTabs,
+      diffSideBySide,
+      diffWhitespace,
+    })
+  }
+
   return {
     tabsPlacement: "top",
+    groupTabs: false,
+    // Side by side is what a diff is for — two columns to compare — and the
+    // toolbar is one click away for a pane too narrow to hold them.
+    diffSideBySide: true,
+    diffWhitespace: false,
     showToolCalls: true,
-    showThinking: true,
     mcp: { database: false, api: false, notes: false },
     loaded: false,
 
     setTabsPlacement(tabsPlacement) {
       set({ tabsPlacement })
-      remember(SETTINGS_KEY, { tabsPlacement })
+      save()
+    },
+
+    setGroupTabs(groupTabs) {
+      set({ groupTabs })
+      save()
+    },
+
+    setDiffSideBySide(diffSideBySide) {
+      set({ diffSideBySide })
+      save()
+    },
+
+    setDiffWhitespace(diffWhitespace) {
+      set({ diffWhitespace })
+      save()
     },
 
     setMcpEnabled(server, enabled) {
@@ -116,17 +178,11 @@ export const useSettings = create<SettingsState>((set) => {
       void setSetting(SHOW_TOOL_CALLS_KEY, String(showToolCalls))
     },
 
-    setShowThinking(showThinking) {
-      set({ showThinking })
-      void setSetting(SHOW_THINKING_KEY, String(showThinking))
-    },
-
     restore() {
       restorePromise ??= (async () => {
-        const [stored, toolCalls, thinking, ...servers] = await Promise.all([
+        const [stored, toolCalls, ...servers] = await Promise.all([
           recall(SETTINGS_KEY, isStored),
           getSetting(SHOW_TOOL_CALLS_KEY).catch(() => null),
-          getSetting(SHOW_THINKING_KEY).catch(() => null),
           ...MCP_SERVER_NAMES.map((server) =>
             getSetting(MCP_SETTING_KEYS[server]).catch(() => null)
           ),
@@ -137,7 +193,6 @@ export const useSettings = create<SettingsState>((set) => {
           // leaves the initial state as it stands.
           ...stored,
           showToolCalls: storedFlag(toolCalls, true),
-          showThinking: storedFlag(thinking, true),
           // Off unless it says otherwise — the one default here that is a
           // decision rather than an obvious value: what an agent can reach is
           // something somebody has to have said yes to.

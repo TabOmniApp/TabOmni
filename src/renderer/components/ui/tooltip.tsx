@@ -56,8 +56,8 @@ function TooltipContent({
          * tooltip, and the tooltip closes because the trigger is no longer
          * hovered, which opens it again. What that looks like is a button whose
          * highlight flickers and which "works sometimes"; it is what the
-         * assistant button in the title bar did, its top edge being the top of
-         * the window.
+         * button at the right of the title bar did, its top edge being the top
+         * of the window.
          *
          * Nothing in a tooltip here is interactive — they hold a label and the
          * odd `kbd` chip — so there is nothing to lose by making the whole

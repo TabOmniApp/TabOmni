@@ -51,7 +51,7 @@ import { useExplorer } from "@/lib/db/explorer-store"
 import { CLOSED, useDbTree } from "@/lib/db/tree-store"
 import { getAdapter, type Relation, type RelationKind } from "@/lib/db/engines"
 import { IconButton } from "../icon-button"
-import { PanelHeader } from "../panel-header"
+import { PanelHeader, type Fold } from "../panel-header"
 import { SideRow } from "../side-row"
 import { EditConnectionDialog } from "./edit-connection-dialog"
 import { NewDatabaseDialog } from "./new-database-dialog"
@@ -90,7 +90,7 @@ type MenuTarget =
  * to that table's database, which is why the tree marks whichever one that
  * currently is.
  */
-export function DatabaseTree() {
+export function DatabaseTree({ fold }: { fold?: Fold }) {
   const databases = useDatabases((state) => state.databases)
   const openDatabaseId = useDatabases((state) => state.selectedId)
   const removeDatabase = useDatabases((state) => state.remove)
@@ -219,7 +219,7 @@ export function DatabaseTree() {
   return (
     <ContextMenu>
       <div className="flex h-full flex-col">
-        <PanelHeader title="Database">
+        <PanelHeader title="Database" {...fold}>
           <IconButton
             label="Add a database"
             onClick={() => setAddingDatabase(true)}

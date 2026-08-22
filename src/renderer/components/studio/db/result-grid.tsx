@@ -47,7 +47,6 @@ import {
   Binary,
   Braces,
   CalendarClock,
-  Check,
   Copy,
   EyeOff,
   Hash,
@@ -83,6 +82,12 @@ import {
   type NewColumnDraft,
   type SortOrder,
 } from "@/lib/db/engines"
+import {
+  dateInputKind,
+  fromDateInput,
+  toDateInput,
+  type DateInputKind,
+} from "@/lib/db/date-input"
 import { columnSlots } from "@/lib/db/grid-columns"
 import type { SqlField, SqlResult } from "@/lib/db/runner"
 import { ColumnMenu } from "./column-menu"
@@ -131,16 +136,11 @@ export type CellEdit = {
    */
   onSaveCells: (writes: CellWrite[]) => Promise<string | null>
   onRequestDelete: (row: unknown[]) => void
-  /** Opens an unsaved draft row at the foot of the grid — the trailing
-   * "New row" line. */
+  /** Opens the New row dialog. The grid has no insert UI of its own — a
+   * draft line at the foot of the rows was the whole of it, and the dialog
+   * that replaced it belongs to the pane — so this is only the row context
+   * menu's own way of reaching it. */
   onRequestInsert?: () => void
-  /** Whether that draft row is currently open. */
-  inserting?: boolean
-  /** Discards the draft without writing anything. */
-  onCancelInsert?: () => void
-  /** Writes the draft row. Blank fields are omitted from `values` — the
-   * column's default or NULL applies instead of an explicit empty string. */
-  onInsertRow?: (values: Record<string, string>) => Promise<string | null>
   /** Lets the trailing column's own header open a small popover to add one —
    * rather than a hover button repeated down every row. Only the Data tab
    * wires this; a query tab's result has nowhere obvious for a new column to
@@ -251,8 +251,6 @@ export const ResultGrid = memo(function ResultGrid({
   /** A failure from an action taken through the context menu, which has no
    * cell of its own to report into. */
   const [actionError, setActionError] = useState<string | null>(null)
-  const [insertDraft, setInsertDraft] = useState<Record<string, string>>({})
-  const [insertBusy, setInsertBusy] = useState(false)
   /** Cells changed but not yet written, keyed by `row index:column name` — the
    * row's own index because that is what identifies it until it is saved, and
    * a page is re-read (and these cleared) whenever the rows themselves move. */
@@ -272,34 +270,6 @@ export const ResultGrid = memo(function ResultGrid({
     // it — the pane must not be left holding a count for a grid that is gone.
     return () => onUnsavedChange?.(0)
   }, [onUnsavedChange])
-
-  // A fresh draft every time the row is (re)opened, rather than whatever was
-  // left over from the last one that was saved or cancelled. Adjusted during
-  // the render that first sees the change, the same way `shownSignature`
-  // resets selection below.
-  const inserting = edit?.inserting ?? false
-  const [shownInserting, setShownInserting] = useState(inserting)
-  if (shownInserting !== inserting) {
-    setShownInserting(inserting)
-    if (inserting) {
-      setInsertDraft({})
-      setActionError(null)
-    }
-  }
-
-  async function saveInsertDraft() {
-    if (!edit?.onInsertRow || insertBusy) return
-    setInsertBusy(true)
-    setActionError(null)
-    // A field left blank is treated as "not set" — the default or NULL
-    // applies — rather than an explicit empty string.
-    const values = Object.fromEntries(
-      Object.entries(insertDraft).filter(([, value]) => value.length > 0)
-    )
-    const failure = await edit.onInsertRow(values)
-    setInsertBusy(false)
-    if (failure) setActionError(failure)
-  }
 
   const prefs = control?.prefs ?? localPrefs
   const setPref = (column: string, pref: Partial<ColumnPref>) => {
@@ -928,113 +898,6 @@ export const ResultGrid = memo(function ResultGrid({
                     <td colSpan={columnCount} />
                   </tr>
                 )}
-
-                {edit?.onRequestInsert &&
-                  canMutateRows &&
-                  (edit.inserting ? (
-                    <tr className={cn(ROW_HEIGHT, "bg-muted/20")}>
-                      {slots.map((slot, slotIndex) => {
-                        if (slot.kind === "spacer") {
-                          return (
-                            <td key={`gap-${slotIndex}`} className="border-b" />
-                          )
-                        }
-
-                        const { field, column, dataIndex } = slot.info
-                        const index = slot.index
-                        const generated = column?.generatedExpression != null
-                        const editableType = column
-                          ? edit.isEditableType(column.type)
-                          : true
-                        return (
-                          <td
-                            key={`draft-${field.name}-${dataIndex}`}
-                            style={index === 0 ? { left: 0 } : undefined}
-                            className={cn(
-                              "relative border-r border-b px-1 align-middle",
-                              index === 0 && "sticky z-20 bg-background"
-                            )}
-                          >
-                            <Input
-                              autoFocus={index === 0}
-                              value={insertDraft[field.name] ?? ""}
-                              disabled={
-                                insertBusy || generated || !editableType
-                              }
-                              onChange={(event) =>
-                                setInsertDraft((current) => ({
-                                  ...current,
-                                  [field.name]: event.target.value,
-                                }))
-                              }
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.preventDefault()
-                                  void saveInsertDraft()
-                                }
-                                if (event.key === "Escape")
-                                  edit.onCancelInsert?.()
-                              }}
-                              placeholder={
-                                generated
-                                  ? "generated"
-                                  : column?.default
-                                    ? "default"
-                                    : column?.nullable
-                                      ? "NULL"
-                                      : ""
-                              }
-                              spellCheck={false}
-                              className="h-6 px-1.5 font-mono text-xs md:text-xs"
-                            />
-                          </td>
-                        )
-                      })}
-                      <td className="border-b" />
-                      <td
-                        style={{ right: 0 }}
-                        className={cn(
-                          STICKY_CELL,
-                          "relative border-b text-center align-middle"
-                        )}
-                      >
-                        <span className="flex items-center justify-center gap-1">
-                          <IconButton
-                            label="Save row"
-                            onClick={() => void saveInsertDraft()}
-                          >
-                            <Check />
-                          </IconButton>
-                          <IconButton
-                            label="Discard row"
-                            onClick={() => edit.onCancelInsert?.()}
-                          >
-                            <X />
-                          </IconButton>
-                        </span>
-                      </td>
-                    </tr>
-                  ) : (
-                    <tr
-                      className={cn("group", ROW_HEIGHT, "hover:bg-muted/40")}
-                    >
-                      <td colSpan={columnCount} className="border-b p-0">
-                        {/* Sticky inside the cell, not the cell itself: the row spans
-                    the whole table, so only the button needs to stay put while
-                    the columns scroll past it. */}
-                        <div className="sticky left-0 inline-flex">
-                          <button
-                            type="button"
-                            onClick={edit.onRequestInsert}
-                            className="flex h-8 items-center gap-1.5 px-3 text-xs text-muted-foreground hover:text-foreground"
-                          >
-                            <Plus className="size-3.5" />
-                            New row
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
               </tbody>
             </table>
 
@@ -1447,6 +1310,7 @@ function ColumnIcon({ kind, column }: { kind: FieldKind; column?: Column }) {
     if (kind === "boolean") return SquareCheck
     if (kind === "select") return List
     if (kind === "foreign-key") return Link2
+    if (kind === "date") return CalendarClock
     const type = column?.type.toLowerCase() ?? ""
     if (/int|numeric|decimal|float|double|real|serial|money/.test(type))
       return Hash
@@ -1625,6 +1489,10 @@ function GridCell({
       shell={shell}
       value={value}
       pref={pref}
+      // A temporal column reads the same as any other — it is only the editor
+      // that differs, so this stays a `TextCell` with a picker in it rather
+      // than a component of its own.
+      dateKind={kind === "date" && column ? dateInputKind(column.type) : null}
       editable={editable}
       editing={editing}
       onEdit={onEdit}
@@ -1983,6 +1851,7 @@ function TextCell({
   shell,
   value,
   pref,
+  dateKind,
   editable,
   editing,
   onEdit,
@@ -1993,6 +1862,9 @@ function TextCell({
   shell: CellShell
   value: unknown
   pref: ColumnPref
+  /** The native picker this column's values are edited through, or null for
+   * everything that is edited as text. */
+  dateKind?: DateInputKind | null
   editable: boolean
   editing: boolean
   onEdit: () => void
@@ -2013,12 +1885,21 @@ function TextCell({
       <td {...shellProps(shell, "px-1")} onPointerDown={undefined}>
         {/* Mounted fresh for each edit, so the draft always starts from the
             value currently in the database rather than from a stale one. */}
-        <TextEditor
-          initial={formatCell(value).text}
-          initiallyNull={value === null || value === undefined}
-          onCommit={onCommit}
-          onCancel={onEditEnd}
-        />
+        {dateKind ? (
+          <DateEditor
+            value={value}
+            kind={dateKind}
+            onCommit={onCommit}
+            onCancel={onEditEnd}
+          />
+        ) : (
+          <TextEditor
+            initial={formatCell(value).text}
+            initiallyNull={value === null || value === undefined}
+            onCommit={onCommit}
+            onCancel={onEditEnd}
+          />
+        )}
       </td>
     )
   }
@@ -2090,6 +1971,78 @@ function TextEditor({
       }}
       onBlur={commit}
       className="h-6 min-w-16 px-1.5 font-mono text-xs md:text-xs"
+    />
+  )
+}
+
+/**
+ * The native picker a temporal cell is edited through — Chromium's own, so a
+ * date is picked from a calendar and a time from a spinner instead of being
+ * retyped in whatever literal format the engine prints.
+ *
+ * Staged the same way `TextEditor` stages its text: nothing is written until
+ * the bar at the foot of the grid is used, and a value the picker gives back
+ * unchanged stages nothing at all — which matters more here than it does for
+ * text, since a `timestamptz` is shown in the reader's own zone and rewriting
+ * it for no reason is how a row drifts by an offset.
+ */
+function DateEditor({
+  value,
+  kind,
+  onCommit,
+  onCancel,
+}: {
+  value: unknown
+  kind: DateInputKind
+  onCommit: (value: string | null) => void
+  onCancel: () => void
+}) {
+  // Read once: the editor is mounted fresh for each edit, so this is the
+  // stored value as it stood when the cell was opened — and what a draft is
+  // compared against to tell an actual change from a reformat.
+  const [original] = useState(() => toDateInput(value, kind))
+  const [draft, setDraft] = useState(original.text)
+  // Enter and the blur it causes would otherwise stage the same value twice.
+  const settled = useRef(false)
+
+  function commit() {
+    if (settled.current) return
+    settled.current = true
+    if (draft !== original.text) {
+      // Cleared means NULL, the same as emptying a text cell does.
+      onCommit(draft === "" ? null : fromDateInput(draft, kind, original.zoned))
+    }
+    onCancel()
+  }
+
+  function cancel() {
+    settled.current = true
+    onCancel()
+  }
+
+  return (
+    <Input
+      autoFocus
+      type={kind}
+      // Seconds, rather than the minutes the inputs step in by default: a
+      // timestamp column keeps them, and a picker that silently zeroed them
+      // would lose a second of precision on every edit.
+      step={kind === "date" ? undefined : 1}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault()
+          commit()
+        }
+        if (event.key === "Escape") cancel()
+      }}
+      onBlur={commit}
+      // `color-scheme` is what tells Chromium to draw its own calendar icon
+      // and picker dark — the app sets none globally, so the native widgets
+      // are told here rather than every scrollbar in the studio being
+      // repainted for the sake of one input.
+      className="h-6 min-w-32 px-1.5 font-mono text-xs md:text-xs dark:[color-scheme:dark]"
     />
   )
 }

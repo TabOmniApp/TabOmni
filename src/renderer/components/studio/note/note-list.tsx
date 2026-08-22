@@ -55,7 +55,7 @@ import {
   type TreeNode,
 } from "@/lib/tree"
 import { IconButton } from "../icon-button"
-import { PanelHeader } from "../panel-header"
+import { PanelHeader, type Fold } from "../panel-header"
 import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
 
@@ -111,7 +111,7 @@ type DragItem = { kind: "note" | "folder"; id: string }
  * gesture in two panels, and a studio where each sidebar files things its own
  * way is four things to learn instead of one.
  */
-export function NoteList() {
+export function NoteList({ fold }: { fold?: Fold }) {
   const notes = useNotes((state) => state.notes)
   const folders = useNotes((state) => state.folders)
   const collapsed = useNotes((state) => state.collapsed)
@@ -376,7 +376,7 @@ export function NoteList() {
   return (
     <ContextMenu>
       <div className="flex h-full flex-col">
-        <PanelHeader title="Notes">
+        <PanelHeader title="Notes" {...fold}>
           <IconButton label="New note" onClick={() => void create()}>
             <Plus />
           </IconButton>

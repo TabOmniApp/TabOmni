@@ -187,11 +187,18 @@ async function main() {
   )
   check(
     "and has the text editor as its second way",
-    viewersFor("/w/icon.svg").join() === "image,text",
+    viewersFor("/w/icon.svg").join() === "image,text,diff",
     "which is what puts the menu on it — see viewersFor"
   )
-  check("a PNG has only the one", viewersFor("/w/logo.png").join() === "image")
-  check("a text file has only the one", viewersFor("/w/a.ts").join() === "text")
+  check(
+    "a PNG has only the one",
+    viewersFor("/w/logo.png").join() === "image",
+    "no diff either: two versions of a picture as text is nothing to read"
+  )
+  check(
+    "a text file has the editor and its diff",
+    viewersFor("/w/a.ts").join() === "text,diff"
+  )
 
   check(
     "a markdown file opens in the editor",
@@ -200,16 +207,24 @@ async function main() {
   )
   check(
     "and has the preview and the block editor after it",
-    viewersFor("/w/README.md").join() === "text,markdown,blocks"
+    viewersFor("/w/README.md").join() === "text,markdown,blocks,diff"
   )
   check(
     "`.markdown` is the same file",
-    viewersFor("/w/notes.MARKDOWN").join() === "text,markdown,blocks"
+    viewersFor("/w/notes.MARKDOWN").join() === "text,markdown,blocks,diff"
   )
   check(
     "an MDX is not offered either",
-    viewersFor("/w/page.mdx").join() === "text",
+    viewersFor("/w/page.mdx").join() === "text,diff",
     "a commonmark parser drops its component tags — see MARKDOWN_EXTENSIONS"
+  )
+
+  check(
+    "a diff is never what a file opens as",
+    ["/w/a.ts", "/w/README.md", "/w/spec.note", "/w/icon.svg"].every(
+      (file) => defaultViewer(file) !== "diff"
+    ),
+    "a diff is asked for — see the Viewer comment"
   )
 
   check(
@@ -219,7 +234,7 @@ async function main() {
   )
   check(
     "and keeps the text editor behind it",
-    viewersFor("/w/spec.note").join() === "blocks,text"
+    viewersFor("/w/spec.note").join() === "blocks,text,diff"
   )
   check(
     "the block editor is named for the file it is opening",

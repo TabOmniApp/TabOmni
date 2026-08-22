@@ -3,7 +3,7 @@ import {
   mentionHref,
   mentionIdOf,
   type Mention,
-} from "../src/renderer/lib/terminal/mention-text"
+} from "../src/renderer/lib/mention-text"
 import { check, finish, section } from "./harness"
 
 /**

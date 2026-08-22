@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { defaultFilter } from "cmdk"
-import { File, FileText } from "lucide-react"
+import { File, FileText, MessageSquare } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import {
@@ -20,11 +20,12 @@ import { shortlist } from "@/lib/files/search"
 import { useApi } from "@/lib/http/store"
 import { nameOf } from "@/lib/files/paths"
 import { useNotes } from "@/lib/note/store"
+import { usePalette } from "@/lib/palette"
 import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio } from "@/lib/store"
 import { PREFIX } from "@/lib/tabs"
-import { SESSION_TYPES, sessionTitle } from "@/lib/terminal/catalog"
-import { liveSessions, useTerminal } from "@/lib/terminal/store"
+import { useWorktreeChats } from "@/lib/worktree-chat/store"
+import { useWorktrees } from "@/lib/worktree/store"
 import { METHOD_TONES } from "./api/request-list"
 import { KIND_ICONS } from "./db/database-tree"
 
@@ -68,7 +69,10 @@ type Notice = { tone: "muted" | "destructive"; text: string }
  * panel they belong to, where the thing they act on is on screen.
  */
 export function CommandPalette() {
-  const [open, setOpen] = useState(false)
+  // On a store, so the left column's Search row opens the same dialog this
+  // key does rather than faking the key — see `lib/palette.ts`.
+  const open = usePalette((state) => state.open)
+  const setOpen = usePalette((state) => state.setOpen)
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -81,7 +85,7 @@ export function CommandPalette() {
        * nobody pressed twice.
        */
       event.preventDefault()
-      setOpen((current) => !current)
+      usePalette.getState().toggle()
     }
 
     window.addEventListener("keydown", onKeyDown, { capture: true })
@@ -221,7 +225,7 @@ function score(_value: string, search: string, keywords?: string[]): number {
 }
 
 /**
- * Everything openable in the workspace, grouped the way the activity rail is
+ * Everything openable in the workspace, grouped the way the sections are
  * ordered.
  *
  * Read from the panels' own stores rather than from anything kept for this:
@@ -267,7 +271,8 @@ function useEntries(query: string): Group[] {
   const requests = useApi((state) => state.requests)
   const apiFolders = useApi((state) => state.folders)
 
-  const sessions = useTerminal((state) => state.sessions)
+  const chats = useWorktreeChats((state) => state.chats)
+  const worktrees = useWorktrees((state) => state.worktrees)
   const folders = useStudio((state) => state.folders)
 
   const notes = useNotes((state) => state.notes)
@@ -278,12 +283,20 @@ function useEntries(query: string): Group[] {
       const folder = folders.find(
         (candidate) => candidate.id === entry.folderId
       )
+      // The branch as well as the project when the hit is in a checkout: two
+      // worktrees of one repository hold the same `src/index.ts`, so the
+      // folder's name alone would draw the same hint on both rows.
+      const worktree = worktrees.find(
+        (candidate) => candidate.id === entry.worktreeId
+      )
       return {
         value: PREFIX.files + entry.path,
         label: entry.relative,
         // Which repository it is in, since two of them in one workspace both
         // have a `src/index.ts`.
-        hint: folder?.name,
+        hint: worktree
+          ? `${folder?.name ?? "Worktree"} · ${worktree.branch}`
+          : folder?.name,
         // The path without its slashes as well as with them: the shortlist
         // that chose this row ignores separators — "libfiles" finds
         // `lib/files` — and cmdk, which scores it afterwards, does not. Without
@@ -353,23 +366,24 @@ function useEntries(query: string): Group[] {
       }
     })
 
-    // The running sessions, which is what the strip holds too: a closed one has
-    // no pty, so there is no pane for the palette to send anyone to.
-    const live = liveSessions(sessions)
-    const terminals: Entry[] = live.map((session, index) => {
-      const { icon: Icon, label: kind } = SESSION_TYPES[session.kind]
-      const label = sessionTitle(live, index)
-      const folder = folders.find(
-        (candidate) => candidate.id === session.folderId
+    // Every chat, not only the ones with a tab open: the palette is how a
+    // conversation nobody has on screen is found again, and selecting one is
+    // what opens its tab.
+    const chatEntries: Entry[] = chats.map((chat) => {
+      const worktree = worktrees.find(
+        (candidate) => candidate.id === chat.worktreeId
       )
+      const branch = worktree?.branch
       return {
-        value: PREFIX.terminal + session.id,
-        label,
-        hint: folder?.name,
-        keywords: [label, kind, ...(folder ? [folder.name] : [])],
-        icon: <Icon className="size-3.5 shrink-0" />,
+        value: PREFIX.worktree + chat.id,
+        label: chat.title,
+        // The branch rather than the project: two checkouts of one repository
+        // are what a chat has to be told apart by.
+        hint: branch,
+        keywords: [chat.title, ...(branch ? [branch] : [])],
+        icon: <MessageSquare className="size-3.5 shrink-0" />,
         open: async () => {
-          useTerminal.getState().select(session.id)
+          useWorktreeChats.getState().select(chat.id)
           return null
         },
       }
@@ -398,7 +412,7 @@ function useEntries(query: string): Group[] {
       { heading: "Files", entries: fileEntries },
       { heading: "Database", entries: tables },
       { heading: "API", entries: apiEntries },
-      { heading: "Terminal", entries: terminals },
+      { heading: "Chats", entries: chatEntries },
       { heading: "Notes", entries: noteEntries },
       // A heading with nothing under it reads as something having failed to
       // load; cmdk hides a group whose rows are all filtered out, but not one
@@ -411,7 +425,8 @@ function useEntries(query: string): Group[] {
     branches,
     requests,
     apiFolders,
-    sessions,
+    chats,
+    worktrees,
     folders,
     notes,
     noteFolders,

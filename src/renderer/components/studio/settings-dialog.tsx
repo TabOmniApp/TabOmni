@@ -131,7 +131,7 @@ const SECTIONS: {
   {
     id: "tabs",
     label: "Tabs",
-    blurb: "Where the workbench's one tab strip sits.",
+    blurb: "Where the workbench's tab strip sits, and how much it gathers.",
     icon: Columns2,
   },
   {
@@ -177,9 +177,26 @@ function AppearanceSection() {
 function TabsSection() {
   const tabsPlacement = useSettings((state) => state.tabsPlacement)
   const setTabsPlacement = useSettings((state) => state.setTabsPlacement)
+  const groupTabs = useSettings((state) => state.groupTabs)
+  const setGroupTabs = useSettings((state) => state.setGroupTabs)
 
   return (
     <Card>
+      {/*
+        Off by default: the strip somebody already has is the one they chose,
+        and a preference that rearranges every open tab the first time the app
+        launches is not a default, it is a surprise.
+
+        The sessions are not mentioned because they are not affected — they have
+        always been gathered this way, for a reason that is theirs alone: a tab
+        there stands for a process rather than for something the user opened.
+      */}
+      <Row
+        title="Group tabs by folder"
+        description="One tab per folder in the strip, with that folder's own files, requests or notes in a second strip inside it. Off, every file and request is a tab of its own."
+      >
+        <Switch checked={groupTabs} onCheckedChange={setGroupTabs} />
+      </Row>
       <Row
         stacked
         title="Tab strip"
@@ -209,8 +226,6 @@ function TabsSection() {
 function ChatSection() {
   const showToolCalls = useSettings((state) => state.showToolCalls)
   const setShowToolCalls = useSettings((state) => state.setShowToolCalls)
-  const showThinking = useSettings((state) => state.showThinking)
-  const setShowThinking = useSettings((state) => state.setShowThinking)
 
   return (
     <Card>
@@ -219,12 +234,6 @@ function ChatSection() {
         description="Every file read, command run and edit made, in the order the agent made them."
       >
         <Switch checked={showToolCalls} onCheckedChange={setShowToolCalls} />
-      </Row>
-      <Row
-        title="Thinking"
-        description="The model's reasoning blocks, where a turn has them."
-      >
-        <Switch checked={showThinking} onCheckedChange={setShowThinking} />
       </Row>
     </Card>
   )

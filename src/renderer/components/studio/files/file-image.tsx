@@ -9,7 +9,7 @@ import {
 import { ImageOff } from "lucide-react"
 
 import type { ImageDoc } from "@/lib/files/store"
-import { SECTION_ACCENT } from "../activity-bar"
+import { SECTION_ACCENT } from "../section-marks"
 
 /**
  * A file shown as a picture.

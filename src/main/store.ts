@@ -11,7 +11,6 @@ import {
 import path from "node:path"
 
 import type {
-  AssistantChat,
   AssistantMessage,
   DatabaseRecord,
   DbEngine,
@@ -23,11 +22,14 @@ import type {
   NoteBody,
   NoteFolder,
   NoteRecord,
+  WorktreeChat,
+  WorktreeRecord,
   UpdateDatabaseInput,
   WorkspaceFolder,
   WorkspaceRecord,
 } from "../shared/api"
 import { dataDir } from "./data-dir"
+import { worktreeSlug } from "./git"
 import { decrypt, encrypt } from "./encryption"
 
 /** A `DatabaseRecord`'s own credential, held only in the manifest file. */
@@ -104,18 +106,38 @@ export const ENVIRONMENTS_FILE = "environments.json"
 /** The groups those requests are filed under. */
 export const FOLDERS_FILE = "folders.json"
 
-/** The workspace's notes — their listing; each body is a file of its own. */
-export const NOTES_FILE = "notes.json"
+/**
+ * The chats held in worktrees — their listing; each chat's lines are a file of
+ * its own, the split the notes have and for the same reason: a turn rewrites one
+ * chat rather than all of them.
+ */
+export const WORKTREE_CHATS_FILE = "worktree-chats.json"
+
+/** Where each of those chats' lines live, one `<id>.json` per chat. */
+export const WORKTREE_CHATS_DIR = "worktree-chats"
 
 /**
- * The assistant's chats — their listing; each chat's lines are a file of its
- * own, the same split the notes have and for the same reason: sending a message
- * rewrites one chat rather than all of them.
+ * The worktrees this app has made — the record, not git's own list.
+ *
+ * `git worktree list` is the truth about what exists; this is what lets the
+ * renderer name one by id so main can resolve the cwd itself.
  */
-export const CHATS_FILE = "chats.json"
+export const WORKTREES_FILE = "worktrees.json"
 
-/** Where each chat's lines are kept, one `<id>.json` per chat. */
-export const CHATS_DIR = "chats"
+/**
+ * Where the checkouts themselves live: one subdirectory per folder, one per
+ * branch under it.
+ *
+ * **Not** beside the repository. A project's directory is somebody else's and
+ * the studio writes nothing into it that was not asked for; putting checkouts
+ * here means removing every worktree leaves that directory exactly as it was.
+ * The cost is that a worktree is not obvious from the repo — which is what
+ * `git worktree list` is for.
+ */
+export const WORKTREES_DIR = "worktrees"
+
+/** The workspace's notes — their listing; each body is a file of its own. */
+export const NOTES_FILE = "notes.json"
 
 /** The groups those notes are filed under. */
 export const NOTE_FOLDERS_FILE = "note-folders.json"
@@ -573,34 +595,74 @@ export class Store {
     return this.writeList(COOKIES_FILE, cookies)
   }
 
-  listChats(): Promise<AssistantChat[]> {
-    return this.readList(CHATS_FILE)
+  listWorktreeChats(): Promise<WorktreeChat[]> {
+    return this.readList(WORKTREE_CHATS_FILE)
   }
 
-  saveChats(chats: AssistantChat[]): Promise<void> {
-    return this.writeList(CHATS_FILE, chats)
+  saveWorktreeChats(chats: WorktreeChat[]): Promise<void> {
+    return this.writeList(WORKTREE_CHATS_FILE, chats)
   }
 
-  /** What was said in a chat, or none for one nothing has been written for. */
-  async readChat(id: string): Promise<AssistantMessage[]> {
-    const raw = await this.readOwnFile(this.chatPath(id))
+  /** Empty for a chat with nothing said in it, and for a half-written file: a
+   * chat is a log, not a document, so a broken one is worth an empty pane
+   * rather than an error in front of every other chat. */
+  async readWorktreeChat(id: string): Promise<AssistantMessage[]> {
+    const raw = await this.readOwnFile(this.worktreeChatPath(id))
     if (!raw.trim()) return []
     try {
       const parsed: unknown = JSON.parse(raw)
       return Array.isArray(parsed) ? (parsed as AssistantMessage[]) : []
     } catch {
-      // A chat is a log, not a document: a half-written file is worth an empty
-      // panel rather than an error in front of every other chat.
       return []
     }
   }
 
-  writeChat(id: string, messages: AssistantMessage[]): Promise<void> {
-    return this.writeOwnFile(this.chatPath(id), JSON.stringify(messages))
+  writeWorktreeChat(id: string, messages: AssistantMessage[]): Promise<void> {
+    return this.writeOwnFile(
+      this.worktreeChatPath(id),
+      JSON.stringify(messages)
+    )
   }
 
-  deleteChats(ids: string[]): Promise<void> {
-    return this.deleteOwnFiles(ids.map((id) => this.chatPath(id)))
+  deleteWorktreeChat(id: string): Promise<void> {
+    return this.deleteOwnFiles([this.worktreeChatPath(id)])
+  }
+
+  private worktreeChatPath(id: string): string {
+    return path.join(this.workspaceDir, WORKTREE_CHATS_DIR, `${ownId(id)}.json`)
+  }
+
+  listWorktrees(): Promise<WorktreeRecord[]> {
+    return this.readList(WORKTREES_FILE)
+  }
+
+  saveWorktrees(worktrees: WorktreeRecord[]): Promise<void> {
+    return this.writeList(WORKTREES_FILE, worktrees)
+  }
+
+  /**
+   * Where a new worktree of `folderId` on `branch` should go.
+   *
+   * The branch name is slugged because it is a path segment here and branches
+   * hold slashes: `feature/orders` would otherwise be two directories deep, and
+   * a branch called `..` would be somewhere else entirely. The folder id is a
+   * uuid and needs none of that.
+   */
+  worktreePath(folderId: string, branch: string): string {
+    return path.join(
+      this.workspaceDir,
+      WORKTREES_DIR,
+      folderId,
+      worktreeSlug(branch)
+    )
+  }
+
+  /** The directory a worktree id names, or null when no such record exists.
+   * Null rather than a throw: the caller falls back to the folder itself, which
+   * is the right answer for a session whose worktree has been removed. */
+  async resolveWorktreeDir(id: string): Promise<string | null> {
+    const worktrees = await this.listWorktrees()
+    return worktrees.find((entry) => entry.id === id)?.path ?? null
   }
 
   listNotes(): Promise<NoteRecord[]> {
@@ -775,10 +837,6 @@ export class Store {
   }
 
   /** One note's blocks. */
-  private chatPath(id: string): string {
-    return path.join(this.workspaceDir, CHATS_DIR, `${ownId(id)}.json`)
-  }
-
   private noteBodyPath(id: string): string {
     return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.json`)
   }

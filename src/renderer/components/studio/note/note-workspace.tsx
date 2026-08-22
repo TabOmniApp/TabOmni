@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils"
 
 import type { NoteRecord } from "@shared/api"
 import { useNotes } from "@/lib/note/store"
-import { SECTION_ACCENT } from "../activity-bar"
+import { SECTION_ACCENT } from "../section-marks"
 import { LoadedBlockEditor } from "./block-editor"
 
 /**

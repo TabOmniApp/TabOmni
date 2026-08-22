@@ -25,7 +25,7 @@ const t2 = `${PREFIX.database}public.orders`
 const t3 = `${PREFIX.database}public.items`
 const a1 = `${PREFIX.api}req-1`
 const a2 = `${PREFIX.api}req-2`
-const x1 = `${PREFIX.terminal}sess-1`
+const x1 = `${PREFIX.worktree}chat-1`
 
 const tab = (id: string) => ({ id })
 const ids = (items: { id: string }[]) => items.map((item) => item.id)
@@ -129,7 +129,7 @@ section("ids carry their panel")
 
 check("a table id names the database panel", kindOf(t1) === "database")
 check("a request id names the api panel", kindOf(a1) === "api")
-check("a session id names the terminal panel", kindOf(x1) === "terminal")
+check("a chat id names the worktree panel", kindOf(x1) === "worktree")
 check("an unprefixed id names none", kindOf("public.users") === null)
 
 check("the prefix comes back off", bare(t1, "database") === "public.users")

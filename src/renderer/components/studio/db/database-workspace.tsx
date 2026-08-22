@@ -75,6 +75,7 @@ import {
 } from "./result-grid"
 import { FilterBar } from "./filter-bar"
 import { GridSkeleton } from "./grid-skeleton"
+import { InsertRowDialog } from "./insert-row-dialog"
 import { RenameDialog } from "./rename-dialog"
 import { SqlEditor } from "./sql-editor"
 
@@ -305,13 +306,6 @@ function DataBrowser({
               setDeleteError(null)
             },
             onRequestInsert: () => setInserting(true),
-            inserting,
-            onCancelInsert: () => setInserting(false),
-            onInsertRow: async (values) => {
-              const failure = await insertRowAction(values)
-              if (!failure) setInserting(false)
-              return failure
-            },
             onAddColumn: {
               columnTypes: getAdapter(engine!).columnTypes,
               onSubmit: addColumnAction,
@@ -324,10 +318,8 @@ function DataBrowser({
       foreignKeys,
       engine,
       fkLabels,
-      inserting,
       searchForeignKeyRowsAction,
       updateCellsAction,
-      insertRowAction,
       addColumnAction,
     ]
   )
@@ -369,7 +361,7 @@ function DataBrowser({
           <Button
             size="xs"
             variant="outline"
-            onClick={() => setInserting((current) => !current)}
+            onClick={() => setInserting(true)}
           >
             <Plus data-icon="inline-start" />
             Row
@@ -487,6 +479,15 @@ function DataBrowser({
         <p className="shrink-0 border-t bg-destructive/10 px-3 py-1.5 font-mono text-[0.65rem] whitespace-pre-wrap text-destructive">
           {saveError}
         </p>
+      )}
+
+      {inserting && canEdit && (
+        <InsertRowDialog
+          columns={columns}
+          isEditableType={getAdapter(engine!).isEditableType}
+          onSubmit={insertRowAction}
+          onClose={() => setInserting(false)}
+        />
       )}
 
       <AlertDialog
@@ -1112,23 +1113,14 @@ function QueryConsole({ tabId, query }: { tabId: string; query: QueryTab }) {
               setDeleteError(null)
             },
             onRequestInsert: () => setQueryInserting(tabId, true),
-            inserting: query.inserting,
-            onCancelInsert: () => setQueryInserting(tabId, false),
-            onInsertRow: async (values) => {
-              const failure = await insertQueryRow(tabId, values)
-              if (!failure) setQueryInserting(tabId, false)
-              return failure
-            },
           }
         : undefined,
     [
       resultEdit,
       engine,
       tabId,
-      query.inserting,
       searchForeignKeyRowsAction,
       updateQueryCells,
-      insertQueryRow,
       setQueryInserting,
     ]
   )
@@ -1248,6 +1240,17 @@ function QueryConsole({ tabId, query }: { tabId: string; query: QueryTab }) {
             <span className="text-[0.65rem] text-muted-foreground tabular-nums">
               {filteredResult.rows.length}/{singleResult.rows.length}
             </span>
+          )}
+
+          {edit && (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setQueryInserting(tabId, true)}
+            >
+              <Plus data-icon="inline-start" />
+              Row
+            </Button>
           )}
 
           <DropdownMenu>
@@ -1389,6 +1392,15 @@ function QueryConsole({ tabId, query }: { tabId: string; query: QueryTab }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {query.inserting && resultEdit && (
+        <InsertRowDialog
+          columns={resultEdit.columns}
+          isEditableType={getAdapter(engine!).isEditableType}
+          onSubmit={(values) => insertQueryRow(tabId, values)}
+          onClose={() => setQueryInserting(tabId, false)}
+        />
+      )}
 
       <AlertDialog
         open={pendingDelete !== null}

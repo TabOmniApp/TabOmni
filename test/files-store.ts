@@ -42,7 +42,9 @@ const remembered = {
   },
 }
 
-const { useFiles, viewOf } = await import("../src/renderer/lib/files/store")
+const { isDeleted, useFiles, viewOf } =
+  await import("../src/renderer/lib/files/store")
+const { keepSelected } = await import("../src/renderer/lib/files/changes")
 
 async function main() {
   section("restore")
@@ -122,6 +124,99 @@ async function main() {
     "switching back reads nothing at all",
     calls.image.length === images,
     calls.image
+  )
+
+  section("the All changes tab's selection")
+
+  /*
+   * The case worth a test: a commit made in the dock's shell empties the list
+   * under a tab that is showing one of its files, and a selection left pointing
+   * into it is a diff of a file with nothing left to diff.
+   */
+  const change = (path: string) => ({
+    path,
+    state: "modified" as const,
+    added: 1,
+    removed: 0,
+  })
+
+  check(
+    "a file still in the list stays selected",
+    keepSelected({ r1: "/w/a.ts" }, "r1", [change("/w/a.ts")]).r1 === "/w/a.ts"
+  )
+
+  check(
+    "a file that has stopped being a change is dropped",
+    keepSelected({ r1: "/w/a.ts" }, "r1", [change("/w/b.ts")]).r1 === null
+  )
+
+  check(
+    "an emptied list drops it too",
+    keepSelected({ r1: "/w/a.ts" }, "r1", []).r1 === null
+  )
+
+  check(
+    "another root's selection is left alone",
+    keepSelected({ r1: "/w/a.ts", r2: "/w/c.ts" }, "r1", []).r2 === "/w/c.ts",
+    "one tab per checkout, and they are read one at a time"
+  )
+
+  check(
+    "nothing selected is nothing to drop, and the record comes back as it was",
+    (() => {
+      const before = { r1: null }
+      return keepSelected(before, "r1", []) === before
+    })(),
+    "the same object, so a re-read cannot look like a change to React"
+  )
+
+  section("what makes a tab say deleted")
+
+  /*
+   * The bug this is written for: a file an agent had just created was opened
+   * from the Changes list, git had it as `U`, and the tab said `deleted` —
+   * because the listing the tree held had been read before the file existed.
+   */
+  const listing = {
+    entries: {
+      "/w": [
+        { name: "kept.ts", path: "/w/kept.ts", kind: "file" as const },
+        { name: "edited.ts", path: "/w/edited.ts", kind: "file" as const },
+      ],
+    },
+  }
+
+  check(
+    "git saying deleted is enough on its own",
+    isDeleted("deleted", listing, "/w/kept.ts")
+  )
+
+  check(
+    "a file git currently calls untracked exists, whatever a stale listing says",
+    !isDeleted("untracked", listing, "/w/fresh.ts"),
+    "the listing was read before the file was written"
+  )
+
+  check(
+    "and so does one it calls added",
+    !isDeleted("added", listing, "/w/fresh.ts")
+  )
+
+  check(
+    "a listing that has stopped mentioning a file git says nothing about",
+    isDeleted(null, listing, "/w/gone.ts"),
+    "an untracked file deleted: git stops reporting it, so only the tree knows"
+  )
+
+  check(
+    "a tracked file with no changes is neither",
+    !isDeleted(null, listing, "/w/kept.ts")
+  )
+
+  check(
+    "a directory nothing has read says nothing either way",
+    !isDeleted(null, { entries: {} }, "/elsewhere/unknown.ts"),
+    "a tab must not be labelled gone for never having been looked for"
   )
 
   finish()

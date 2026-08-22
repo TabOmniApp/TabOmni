@@ -131,20 +131,55 @@ export function languageIdFor(filePath: string): string {
 registerTypeScriptProviders()
 
 /**
- * A model per path, reused across mounts.
+ * How many editors are holding each path's model.
+ *
+ * There can be more than one: a file open in the text editor is the same buffer
+ * as the right-hand side of its diff, and the `Changes` tab can be showing
+ * that diff while the file has a tab of its own. Sharing the model is the point —
+ * one buffer, one undo history, ⌘S from either — but it means neither editor may
+ * dispose it on the way out, and the first one to try took the buffer out from
+ * under the other.
+ */
+const holders = new Map<string, number>()
+
+/**
+ * A model per path, reused across mounts and across editors.
  *
  * Keyed by the file's own URI, which is what makes the editor's "go to
  * definition"-shaped features address the file the tree is showing. Reused
  * because a tab hidden behind another one keeps its model alive, and creating a
  * second for the same URI is the one thing Monaco throws over.
+ *
+ * Every caller must `releaseModel` when it is done with it.
  */
 export function modelFor(
   filePath: string,
   text: string
 ): monaco.editor.ITextModel {
   const uri = monaco.Uri.file(filePath)
-  return (
+  const model =
     monaco.editor.getModel(uri) ??
     monaco.editor.createModel(text, languageIdFor(filePath), uri)
-  )
+
+  holders.set(filePath, (holders.get(filePath) ?? 0) + 1)
+  return model
+}
+
+/**
+ * Lets go of a path's model, disposing it once nothing holds it.
+ *
+ * The model goes with the last editor that was showing the file — kept alive
+ * across a hidden tab, since the pane stays mounted, and not across a closed
+ * one, where it would be a copy of a file nobody is looking at held for the rest
+ * of the run.
+ */
+export function releaseModel(filePath: string): void {
+  const held = (holders.get(filePath) ?? 0) - 1
+  if (held > 0) {
+    holders.set(filePath, held)
+    return
+  }
+
+  holders.delete(filePath)
+  monaco.editor.getModel(monaco.Uri.file(filePath))?.dispose()
 }

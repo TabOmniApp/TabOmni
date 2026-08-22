@@ -1,7 +1,10 @@
 import { create } from "zustand"
 
-import type { FileEntry, FileIndexEntry } from "@shared/api"
+import type { FileEntry, FileIndexEntry, GitFileState } from "@shared/api"
 import { useStudio } from "../store"
+import { useProjects } from "../projects"
+import { useWorktrees } from "../worktree/store"
+import { fileRoots, rootOf } from "./roots"
 import { isRememberedTabs, recall, remember } from "../tab-memory"
 import { isInside, movedPath, parentOf } from "./paths"
 import { defaultViewer, type Viewer } from "./viewers"
@@ -66,6 +69,34 @@ export function isMissing(
   return (
     listing !== undefined && !listing.some((entry) => entry.path === filePath)
   )
+}
+
+/**
+ * Whether a tab is all that is left of its file.
+ *
+ * Two sources, and deliberately **not** either-or. Git knows a tracked file was
+ * deleted. The tree's listing is the only thing that knows an *untracked* one
+ * was, since git stops mentioning it the moment it is gone. But a listing can be
+ * stale — it is re-read from a watcher, and Refresh exists precisely because
+ * `fs.watch` is quiet on some filesystems — so a file git is currently calling
+ * untracked, added or modified is a file that **exists**, whatever a listing read
+ * before it was written still says. Only where git has nothing to say at all does
+ * the listing get the last word.
+ *
+ * Written for a bug that shipped: a file an agent had just created was opened
+ * from the Changes list, where git had it as `U`, and its tab said `deleted`.
+ *
+ * A function of its own rather than two lines in `tab-items.tsx` because it is
+ * the whole of the reasoning and none of the drawing.
+ */
+export function isDeleted(
+  git: GitFileState | null,
+  state: { entries: Record<string, FileEntry[]> },
+  filePath: string
+): boolean {
+  if (git === "deleted") return true
+  if (git !== null) return false
+  return isMissing(state, filePath)
 }
 
 function messageOf(error: unknown): string {
@@ -342,30 +373,38 @@ export const useFiles = create<FilesState>((set, get) => {
     rememberTabs()
   }
 
-  // A folder dropped from the workspace takes its files' tabs with it, the way
-  // the Terminal store drops that folder's sessions: the panel is not allowed
-  // to read there any more, so a tab onto it could only fail.
-  useStudio.subscribe((studio) => {
-    // Not before the workspace has been read: there is a moment during
-    // `init` where the studio is `loaded` and its folders have not arrived,
-    // and pruning against an empty list there would close every tab this
-    // store had just restored.
-    if (!studio.loaded) return
-    const roots = studio.folders.map((folder) => folder.path)
+  // A folder dropped from the workspace takes its files' tabs with it, and a
+  // worktree removed takes its own: the panel is not allowed to read there any
+  // more, so a tab onto it could only fail. Both are roots of the tree — see
+  // `lib/files/roots.ts` — and a checkout is inside no folder, so leaving them
+  // out here would close a worktree's tabs on the next thing that touched the
+  // studio store.
+  function followRoots() {
+    // Not before both lists have been read: there is a moment during `init`
+    // where the studio is `loaded` and its folders have not arrived, and
+    // pruning against an empty list there would close every tab this store had
+    // just restored.
+    if (!useStudio.getState().loaded) return
+    if (!useWorktrees.getState().loaded) return
+
+    const roots = fileRoots().map((root) => root.path)
     prune(roots)
 
-    // The index is a walk of the folder list, so adding a folder does not make
-    // it stale, it makes it wrong: `loadIndex` hands back the walk it already
-    // has, and the palette would go on missing the new folder's files until the
-    // app was restarted. Dropped here, and re-walked straight away only if
-    // somebody has opened the palette already — the same rule `refresh` keeps.
+    // The index is a walk of that same list, so adding a root does not make it
+    // stale, it makes it wrong: `loadIndex` hands back the walk it already has,
+    // and the palette would go on missing the new root's files until the app
+    // was restarted. Dropped here, and re-walked straight away only if somebody
+    // has opened the palette already — the same rule `refresh` keeps.
     const key = roots.join("\n")
     if (indexedRoots !== null && indexedRoots !== key) {
       indexPromise = null
       indexedRoots = null
       if (get().index.length > 0) void get().loadIndex(true)
     }
-  })
+  }
+
+  useStudio.subscribe(followRoots)
+  useWorktrees.subscribe(followRoots)
 
   return {
     entries: {},
@@ -375,6 +414,7 @@ export const useFiles = create<FilesState>((set, get) => {
     docs: {},
     images: {},
     views: {},
+
     openIds: [],
     selectedId: null,
     renaming: null,
@@ -393,9 +433,8 @@ export const useFiles = create<FilesState>((set, get) => {
       if (force) indexPromise = null
       indexPromise ??= (async () => {
         set({ indexing: true })
-        indexedRoots = useStudio
-          .getState()
-          .folders.map((folder) => folder.path)
+        indexedRoots = fileRoots()
+          .map((root) => root.path)
           .join("\n")
         try {
           set({ index: await window.desktop.listWorkspaceFiles() })
@@ -413,14 +452,12 @@ export const useFiles = create<FilesState>((set, get) => {
     },
 
     async reveal(filePath) {
-      const root = useStudio
-        .getState()
-        .folders.map((folder) => folder.path)
-        .find((candidate) => isInside(candidate, filePath))
-      if (root === undefined) return
+      const owner = rootOf(filePath)
+      if (owner === null) return
+      const root = owner.path
 
-      // From the file up to the folder, then opened from the folder down, so
-      // each level is drawn under the one that holds it.
+      // From the file up to the root, then opened from the root down, so each
+      // level is drawn under the one that holds it.
       const chain: string[] = []
       let dir = parentOf(filePath)
       while (isInside(root, dir)) {
@@ -432,6 +469,12 @@ export const useFiles = create<FilesState>((set, get) => {
         if (above === dir) break
         dir = above
       }
+
+      // Explorer draws one project, in one checkout, so revealing a file from
+      // anywhere else has to move that selection first — otherwise the chain
+      // would be opened under a root the tree is not drawing. `⌘P` indexes
+      // every root, which is what makes this reachable at all.
+      useProjects.getState().setActive(owner.folderId, owner.worktreeId)
 
       // Only the folders that were shut, and only their listings: revealing
       // runs on every tab click, and re-reading a chain that is already open

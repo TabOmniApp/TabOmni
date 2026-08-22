@@ -1,5 +1,5 @@
 /*
- * Styles for markdown rendered to plain DOM by `lib/terminal/markdown.ts`.
+ * Styles for markdown rendered to plain DOM by `lib/markdown/renderer.ts`.
  *
  * Written by hand rather than taken from Crepe's stylesheet, which the
  * composer next door uses: Crepe's CSS targets `.milkdown` and the editor

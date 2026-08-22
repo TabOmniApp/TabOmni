@@ -1,11 +1,33 @@
 import { useExplorer, type OpenTab } from "./db/explorer-store"
 import type { Relation } from "./db/engines/types"
+import { useChanges } from "./files/changes"
 import { useFiles } from "./files/store"
-import { useApi } from "./http/store"
+import { fileRoots, rootOfPath, shownRootOf } from "./files/roots"
+import { SETTINGS_TAB_ID, useApi } from "./http/store"
 import { useNotes } from "./note/store"
+import { useProjects } from "./projects"
+import { useSettings } from "./settings"
 import { PANES, useStudio, type Pane } from "./store"
-import { arrange, bare, kindOf, neighbour, PREFIX } from "./tabs"
-import { activeSessionOf, liveSessions, useTerminal } from "./terminal/store"
+import {
+  groupIds,
+  membersOf,
+  orderGroups,
+  orderWhere,
+  orderWithin,
+} from "./tab-groups"
+import {
+  arrange,
+  bare,
+  bareGroup,
+  GROUP,
+  groupTabId,
+  isGroup,
+  kindOf,
+  neighbour,
+  PREFIX,
+} from "./tabs"
+import { useWorktrees } from "./worktree/store"
+import { useWorktreeChats } from "./worktree-chat/store"
 
 /**
  * The six panels' tabs, addressed alike.
@@ -16,11 +38,11 @@ import { activeSessionOf, liveSessions, useTerminal } from "./terminal/store"
  * picked, closed, or dragged somewhere else. Each panel used to answer those
  * for itself, and the answers only agreed by accident — closing the Database
  * panel's last tab left the pane on its own "pick a table" notice while the
- * strip still held two sessions, because nothing in that store had any way to
- * know they were there.
+ * strip still held two of another panel's, because nothing in that store had
+ * any way to know they were there.
  *
- * So the panels keep what is genuinely theirs — a table's rows, a session's
- * pty, a note's editor — and the tab logic lives here, once. A panel joins the
+ * So the panels keep what is genuinely theirs — a table's rows, a chat's turn,
+ * a note's editor — and the tab logic lives here, once. A panel joins the
  * strip by adding an entry to `PANELS`: six small functions, none of which
  * mention any other panel.
  *
@@ -39,7 +61,36 @@ type PanelTabs = {
   closeOthers: (id: string) => void
   closeAll: () => void
   reorder: (ids: string[]) => void
+  /**
+   * Which folder one of this panel's tabs gathers into when the strip is
+   * grouping them. A panel without one is never grouped; all five have one.
+   *
+   * What a folder *is* differs: the workspace folder a file sits in, the
+   * checkout a chat is having its conversation in, the folder in the panel's
+   * own tree a request or a note is filed under, the schema a table belongs to.
+   * `NO_GROUP` is the tab that is under none of them.
+   */
+  groupOf?: (id: string) => string
+  /**
+   * The **root** one of this panel's tabs belongs to — a workspace folder or one
+   * of its `git worktree` checkouts — or null when the tab is not in one.
+   *
+   * What makes the strip per checkout. A panel that leaves this off is a panel
+   * whose tabs belong to the *workspace*: a table, a saved request and a note
+   * are the workspace's by deliberate design, so they stay in the strip whatever
+   * branch is being worked in, and a half-written query does not vanish because
+   * somebody changed checkout. Only the two panels whose tabs are genuinely a
+   * checkout's have one — a file, and a chat that edits a branch.
+   *
+   * Null rather than absent for a tab whose root has *gone*: the frame between a
+   * checkout leaving the workspace and its tabs closing. Such a tab stays in the
+   * strip, because the alternative is a tab that exists and cannot be reached.
+   */
+  rootOf?: (id: string) => string | null
 }
+
+/** The group a tab under no folder at all falls into. */
+const NO_GROUP = ""
 
 /*
  * Each panel's two questions, as functions of its store's state rather than
@@ -51,7 +102,6 @@ type ExplorerState = ReturnType<typeof useExplorer.getState>
 type FilesState = ReturnType<typeof useFiles.getState>
 type ApiState = ReturnType<typeof useApi.getState>
 type NoteState = ReturnType<typeof useNotes.getState>
-type TerminalState = ReturnType<typeof useTerminal.getState>
 
 /** No database open means no tabs: they belong to the connection, not to the
  * panel, and the ones on screen went with it. */
@@ -79,12 +129,130 @@ const noteActive = (state: NoteState): string | null =>
     ? state.selectedId
     : null
 
-// Not `activeId` itself: with none set the panel falls back to the most recent
-// live session, and the strip has to mark the same one it draws.
-const terminalActive = (state: TerminalState): string | null =>
-  activeSessionOf(state.sessions, state.activeId)?.id ?? null
+/**
+ * The **root** a file is in: a workspace folder, or one of its `git worktree`
+ * checkouts (`lib/files/roots.ts`, which takes the longest match — a folder
+ * added inside another one is still a project of its own).
+ *
+ * A checkout groups on its own rather than under the project it was cut from,
+ * because that is what the group is for: the same `src/index.ts` open on two
+ * branches is two tabs, and gathering both under one folder tab would put two
+ * identical names in one strip.
+ *
+ * Every file the Explorer can open is inside a root (`fileRoots` in
+ * `main/ipc.ts` is what guarantees it), so `NO_GROUP` here is the frame between
+ * a root going and its tabs closing.
+ */
+const fileGroupOf = (filePath: string): string =>
+  rootOfPath(fileRoots(), filePath)?.id ?? NO_GROUP
+
+const apiGroupOf = (id: string): string => {
+  // The panel's own settings tab is filed under nothing, because it is not a
+  // request — it belongs to the panel rather than to any collection in it.
+  if (id === SETTINGS_TAB_ID) return NO_GROUP
+
+  const { requests, folders } = useApi.getState()
+  const request = requests.find((candidate) => candidate.id === id)
+  if (request) return request.folderId ?? NO_GROUP
+
+  // A folder open as a tab of its own gathers with its siblings, under its
+  // parent: grouping it under itself would make one tab both a group and one
+  // of that group's members.
+  return folders.find((candidate) => candidate.id === id)?.parentId ?? NO_GROUP
+}
+
+/**
+ * The schema a table, view or materialised view belongs to.
+ *
+ * The schema rather than the connection, which is the analogue of a project
+ * everywhere else: only one database's tabs are open at a time — they are
+ * remembered per database and swapped in when you switch — so grouping by
+ * connection would have produced exactly one tab, every time.
+ *
+ * A query tab belongs to no schema, and `NO_GROUP` is that: it gathers the
+ * console's tabs into one of their own, which is also what keeps a strip of
+ * eight tables from being a strip of eight tables and three queries. Safe as
+ * the sentinel because a schema always has a name — Postgres and MySQL both
+ * answer with one, and there is no engine here that does not.
+ */
+const dbGroupOf = (id: string): string => {
+  const { openTabs, selected } = useExplorer.getState()
+
+  const tab = openTabs.find((candidate) => dbTabId(candidate) === id)
+  if (tab) return tab.kind === "relation" ? tab.relation.schema : NO_GROUP
+
+  // The tree's selection, in the frame before its tab is in the list. Without
+  // this the strip marks nothing for it, since the group it named has no tab.
+  if (selected && relationId(selected) === id) return selected.schema
+  return NO_GROUP
+}
+
+const noteGroupOf = (id: string): string =>
+  useNotes.getState().notes.find((note) => note.id === id)?.folderId ?? NO_GROUP
+
+/**
+ * The chat the strip has selected.
+ *
+ * Its group is the checkout it is in rather than the project: a project can
+ * have several, and three chats in one of them gather into that one's tab.
+ * Prefixed so a worktree id can never collide with a folder id: both are
+ * uuids, and a group is only ever compared as a string.
+ */
+const worktreeChatActive = (
+  state: ReturnType<typeof useWorktreeChats.getState>
+): string | null =>
+  state.selectedId && state.openIds.includes(state.selectedId)
+    ? state.selectedId
+    : null
+
+const changesActive = (
+  state: ReturnType<typeof useChanges.getState>
+): string | null =>
+  state.selectedId && state.openIds.includes(state.selectedId)
+    ? state.selectedId
+    : null
+
+/**
+ * The root a file is in, for scoping — `fileGroupOf`'s answer, with the missing
+ * case spelled as null rather than as the group tabs under nothing.
+ */
+const fileRootOf = (filePath: string): string | null =>
+  rootOfPath(fileRoots(), filePath)?.id ?? null
+
+/** The checkout a chat is in. A worktree's id *is* a root's id — `FileRoot.id`
+ * is `worktreeId ?? folderId` — so no translation is needed. */
+const worktreeChatRootOf = (id: string): string | null =>
+  useWorktreeChats.getState().chats.find((chat) => chat.id === id)
+    ?.worktreeId ?? null
+
+/** The checkout a chat belongs to. */
+const worktreeChatGroupOf = (id: string): string => {
+  const chat = useWorktreeChats
+    .getState()
+    .chats.find((candidate) => candidate.id === id)
+  return chat ? `w:${chat.worktreeId}` : NO_GROUP
+}
+
+/** The worktree a group names, or null when it is not one of a checkout's —
+ * what the strip's label and the pane's welcome block ask. */
+export function groupWorktreeId(group: string): string | null {
+  return group.startsWith("w:") ? group.slice(2) : null
+}
 
 const PANELS: Record<Pane, PanelTabs> = {
+  changes: {
+    open: () => useChanges.getState().openIds,
+    active: () => changesActive(useChanges.getState()),
+    select: (id) => useChanges.getState().select(id),
+    close: (id) => useChanges.getState().close(id),
+    closeOthers: (id) => useChanges.getState().closeOthers(id),
+    closeAll: () => useChanges.getState().closeAll(),
+    reorder: (ids) => useChanges.getState().reorder(ids),
+    // The tab's id **is** the root's, so this is the identity — an
+    // `Changes` tab is about one checkout and belongs in the strip exactly
+    // while that checkout is the one being worked in.
+    rootOf: (id) => id,
+  },
   files: {
     open: () => useFiles.getState().openIds,
     // `open` rather than `select`: a tab restored from the last launch, or one
@@ -96,6 +264,8 @@ const PANELS: Record<Pane, PanelTabs> = {
     closeOthers: (id) => useFiles.getState().closeOthers(id),
     closeAll: () => useFiles.getState().closeAll(),
     reorder: (ids) => useFiles.getState().reorder(ids),
+    groupOf: fileGroupOf,
+    rootOf: fileRootOf,
   },
   database: {
     open: () => dbOpen(useExplorer.getState()),
@@ -111,6 +281,7 @@ const PANELS: Record<Pane, PanelTabs> = {
     closeOthers: (id) => useExplorer.getState().closeOtherTabs(id),
     closeAll: () => useExplorer.getState().closeAllTabs(),
     reorder: (ids) => useExplorer.getState().reorderTabs(ids),
+    groupOf: dbGroupOf,
   },
   api: {
     open: () => useApi.getState().openIds,
@@ -120,17 +291,28 @@ const PANELS: Record<Pane, PanelTabs> = {
     closeOthers: (id) => useApi.getState().closeOthers(id),
     closeAll: () => useApi.getState().closeAll(),
     reorder: (ids) => useApi.getState().reorder(ids),
+    groupOf: apiGroupOf,
   },
-  terminal: {
-    // A closed session is a row in Explorer's Sessions list and nothing else:
-    // it has no pty, so there is no pane for a tab here to switch to.
-    open: () => liveSessions(useTerminal.getState().sessions).map((s) => s.id),
-    active: () => terminalActive(useTerminal.getState()),
-    select: (id) => useTerminal.getState().select(id),
-    close: (id) => useTerminal.getState().close(id),
-    closeOthers: (id) => useTerminal.getState().closeOthers(id),
-    closeAll: () => useTerminal.getState().closeAll(),
-    reorder: (ids) => useTerminal.getState().reorder(ids),
+  /*
+   * A checkout's chats.
+   *
+   * The one panel that is grouped whatever the setting says: a chat stands for
+   * a conversation in a worktree rather than for something the user opened, and
+   * five of them across two checkouts must not be five of a strip five panels
+   * share. Grouped by **worktree**, so the outer tab is the branch and the strip
+   * inside it is that checkout's chats — which is the arrangement the whole
+   * feature is about.
+   */
+  worktree: {
+    open: () => useWorktreeChats.getState().openIds,
+    active: () => worktreeChatActive(useWorktreeChats.getState()),
+    select: (id) => useWorktreeChats.getState().select(id),
+    close: (id) => useWorktreeChats.getState().close(id),
+    closeOthers: (id) => useWorktreeChats.getState().closeOthers(id),
+    closeAll: () => useWorktreeChats.getState().closeAll(),
+    reorder: (ids) => useWorktreeChats.getState().reorder(ids),
+    groupOf: worktreeChatGroupOf,
+    rootOf: worktreeChatRootOf,
   },
   note: {
     open: () => useNotes.getState().openIds,
@@ -140,7 +322,136 @@ const PANELS: Record<Pane, PanelTabs> = {
     closeOthers: (id) => useNotes.getState().closeOthers(id),
     closeAll: () => useNotes.getState().closeAll(),
     reorder: (ids) => useNotes.getState().reorder(ids),
+    groupOf: noteGroupOf,
   },
+}
+
+/**
+ * Which store each panel's tabs live in — what the group memory below watches.
+ */
+const STORES = {
+  files: useFiles,
+  changes: useChanges,
+  database: useExplorer,
+  api: useApi,
+  note: useNotes,
+  worktree: useWorktreeChats,
+} as const
+
+/**
+ * How a panel is gathering its tabs right now, or null when it is not.
+ *
+ * The setting is read here rather than at each call site so there is one answer
+ * to "is this panel grouped", and so that turning it off is immediate
+ * everywhere: nothing about a group is stored, so the strip simply stops
+ * folding and every tab is its own again.
+ */
+/**
+ * The root the workbench is working in, or null before anything has been picked.
+ *
+ * `shownRootOf` and not a field of its own, because that is what the Explorer
+ * draws and what the crumb in the title bar names: the strip has to agree with
+ * both, including their fallbacks — the first project when nothing is picked, a
+ * project's own working tree for a checkout that has gone.
+ */
+function activeRootId(): string | null {
+  const { folders } = useStudio.getState()
+  const { checkout, activeFolderId } = useProjects.getState()
+  return (
+    shownRootOf(
+      folders,
+      useWorktrees.getState().worktrees,
+      checkout,
+      activeFolderId
+    )?.id ?? null
+  )
+}
+
+/**
+ * Whether one of a panel's tabs belongs in the strip right now.
+ *
+ * The strip is **per checkout** for the two panels whose tabs are a checkout's
+ * — see `rootOf` on `PanelTabs`. Everything else is the workspace's and is
+ * always in.
+ *
+ * "In the strip" is not "open": the tab stays open, its editor keeps its
+ * document and its unsaved edits, and coming back to that checkout shows it
+ * again. That distinction is the one `lib/files/roots.ts` was split for —
+ * `shownRootOf` is what is drawn, `fileRootsOf` is what may be read — and this
+ * is the same line drawn one level up.
+ */
+function inScope(pane: Pane, id: string): boolean {
+  const { rootOf } = PANELS[pane]
+  if (!rootOf) return true
+
+  const root = activeRootId()
+  // No project picked yet is no scope to enforce: hiding everything would be a
+  // strip that empties itself on an empty workspace.
+  if (root === null) return true
+
+  const own = rootOf(id)
+  return own === null || own === root
+}
+
+/** What a panel has in the strip: its own tabs, less the other checkouts'. */
+function openInScope(pane: Pane): string[] {
+  return PANELS[pane].open().filter((id) => inScope(pane, id))
+}
+
+function grouper(pane: Pane): ((id: string) => string) | null {
+  const { groupOf } = PANELS[pane]
+  if (!groupOf) return null
+  return useSettings.getState().groupTabs ? groupOf : null
+}
+
+/** The ids a panel puts in the strip: its own tabs, or one per folder. */
+function stripIds(pane: Pane): string[] {
+  const ids = openInScope(pane)
+  const of = grouper(pane)
+  return of ? groupIds(ids, of).map((group) => GROUP + group) : ids
+}
+
+/** One group's tabs, in the panel's own order. Empty for a panel that is not
+ * grouping, which has no groups to ask about. */
+export function groupMembers(pane: Pane, group: string): string[] {
+  const of = grouper(pane)
+  return of ? membersOf(openInScope(pane), of, group) : []
+}
+
+/**
+ * Which tab each group was last showing.
+ *
+ * Kept by watching the panels rather than written by `selectTab`, because a tab
+ * is just as often picked from a sidebar, from `⌘P`, or by jumping to a
+ * definition — none of which come through the strip. Each panel already knows
+ * what it is showing; this only remembers the last answer per group, so that
+ * coming back to a folder lands where it was left.
+ *
+ * A Map rather than anything on a store: it is a convenience that can be wrong
+ * without consequence — an entry naming a tab that has since closed falls back
+ * to the group's last — and nothing draws from it, so nothing has to re-render
+ * when it changes. It is not written to disk for the same reason.
+ */
+const groupActive = new Map<string, string>()
+
+for (const pane of PANES) {
+  STORES[pane].subscribe(() => {
+    const of = PANELS[pane].groupOf
+    if (!of) return
+    const active = PANELS[pane].active()
+    if (active !== null) groupActive.set(groupTabId(pane, of(active)), active)
+  })
+}
+
+/** The member a group's tab would show: the one it was left on, or its last. */
+function shownMember(pane: Pane, group: string): string | null {
+  const members = groupMembers(pane, group)
+  const remembered = groupActive.get(groupTabId(pane, group))
+  return (
+    (remembered !== undefined && members.includes(remembered)
+      ? remembered
+      : members.at(-1)) ?? null
+  )
 }
 
 /**
@@ -153,7 +464,7 @@ const PANELS: Record<Pane, PanelTabs> = {
  */
 export function tabIds(): string[] {
   const open = PANES.flatMap((pane) =>
-    PANELS[pane].open().map((id) => ({ id: PREFIX[pane] + id }))
+    stripIds(pane).map((id) => ({ id: PREFIX[pane] + id }))
   )
   return arrange(open, useStudio.getState().tabOrder).map((item) => item.id)
 }
@@ -167,7 +478,17 @@ export function tabIds(): string[] {
 export function selectTab(id: string) {
   const kind = kindOf(id)
   if (!kind) return
-  PANELS[kind].select(bare(id, kind))
+
+  const own = bare(id, kind)
+  if (!isGroup(own)) {
+    PANELS[kind].select(own)
+    return
+  }
+
+  // A group has no pane of its own: what it puts on screen is one of its
+  // members, and the second strip inside the tab is how the others are reached.
+  const member = shownMember(kind, bareGroup(own))
+  if (member !== null) PANELS[kind].select(member)
 }
 
 /**
@@ -187,9 +508,38 @@ export function closeTab(id: string) {
 
   // Read before the close, while the closed tab still has neighbours.
   const order = tabIds()
-  PANELS[kind].close(bare(id, kind))
+  const own = bare(id, kind)
+
+  // Closing a folder's tab closes everything filed under it — the tab is the
+  // folder, and there is nothing left of it once its members have gone.
+  if (isGroup(own)) {
+    for (const member of groupMembers(kind, bareGroup(own))) {
+      PANELS[kind].close(member)
+    }
+  } else {
+    PANELS[kind].close(own)
+  }
 
   fillPane(neighbour(order, id))
+}
+
+/**
+ * Closes one of a panel's own tabs, whether or not the strip is grouping them.
+ *
+ * The strip's `closeTab` takes a strip id, and while a panel is grouped that
+ * names a folder rather than a tab. What still closes one thing is everything
+ * outside the strip — the ✕ on a row in a sidebar, and the second strip inside
+ * a folder's tab — so this is their way in. The folder's tab only leaves the
+ * strip with its last member, and that is the one case where the pane has to
+ * move: the neighbour is read beforehand for it.
+ */
+export function closePanelTab(pane: Pane, id: string) {
+  const of = grouper(pane)
+  const order = tabIds()
+
+  PANELS[pane].close(id)
+
+  fillPane(neighbour(order, of ? groupTabId(pane, of(id)) : PREFIX[pane] + id))
 }
 
 /**
@@ -197,11 +547,11 @@ export function closeTab(id: string) {
  * leaves the pane alone otherwise.
  *
  * `prefer` is the tab that stood beside a closed one; without it the strip is
- * taken from the front. Exported for the panels' own lists, which close tabs
- * without going through the strip — the rows in Explorer's Sessions list are
- * the ones that can empty a pane this way.
+ * taken from the front. Not exported any more: Explorer's Sessions list was
+ * the one caller that closed a tab without going through the strip, and it went
+ * with the panel it listed.
  */
-export function fillPane(prefer: string | null = null) {
+function fillPane(prefer: string | null = null) {
   const { pane } = useStudio.getState()
   if (PANELS[pane].active() !== null) return
 
@@ -214,25 +564,86 @@ export function fillPane(prefer: string | null = null) {
 }
 
 /**
+ * What ⌘W closes: the tab on screen — and, in a folder's tab, the one of its
+ * members that is on screen rather than the whole folder.
+ *
+ * ⌘W has always closed one thing. A key that suddenly closed eight files, or
+ * ended three ptys, because they happen to share a project would be the same
+ * key doing something else. Closing the last member still takes the folder's
+ * tab with it, which is the only way that tab was ever going to go.
+ */
+export function closeShownTab(id: string) {
+  const kind = kindOf(id)
+  if (!kind) return
+
+  const own = bare(id, kind)
+  if (!isGroup(own)) {
+    closeTab(id)
+    return
+  }
+
+  const active = PANELS[kind].active()
+  if (active !== null) closePanelTab(kind, active)
+}
+
+/**
+ * Closes every tab a panel has **in the strip**, leaving another checkout's
+ * alone.
+ *
+ * One `close` per tab rather than the panel's own `closeAll`, which replaces the
+ * whole list: "all" here means all of what is on screen, and a checkout nobody
+ * is looking at is not on screen. The fast path is kept for the common case,
+ * where nothing is out of scope and the panel can drop its list in one write.
+ */
+function closeAllInScope(pane: Pane) {
+  const own = openInScope(pane)
+  if (own.length === PANELS[pane].open().length) {
+    PANELS[pane].closeAll()
+    return
+  }
+  for (const id of own) PANELS[pane].close(id)
+}
+
+/**
  * Keeps one tab and closes the rest — every panel's, not just this tab's.
  *
- * "Others" is the strip, so the other five panels lose all of theirs, and the
+ * "Others" is the strip, so the other four panels lose all of theirs, and the
  * kept tab is selected at the end: it may well belong to a panel that was not
- * the one on screen.
+ * the one on screen. The strip is what is *drawn*, so this stops at the
+ * checkout's edge too — a menu item cannot close tabs the menu was not opened
+ * over.
  */
 export function closeOtherTabs(id: string) {
   const kind = kindOf(id)
   if (!kind) return
 
   for (const pane of PANES) {
-    if (pane !== kind) PANELS[pane].closeAll()
+    if (pane !== kind) closeAllInScope(pane)
   }
-  PANELS[kind].closeOthers(bare(id, kind))
+
+  const own = bare(id, kind)
+  if (isGroup(own)) {
+    // Everything this panel holds outside the kept folder. The panel's own
+    // `closeOthers` cannot answer this: it keeps a single tab, and what is
+    // being kept here is a folder's worth of them.
+    const kept = new Set(groupMembers(kind, bareGroup(own)))
+    for (const member of openInScope(kind)) {
+      if (!kept.has(member)) PANELS[kind].close(member)
+    }
+  } else {
+    // Not the panel's own `closeOthers`, for the reason `closeAllInScope` is
+    // not `closeAll`: it keeps one tab and drops every other id it holds,
+    // including the ones this strip is not drawing.
+    for (const member of openInScope(kind)) {
+      if (member !== own) PANELS[kind].close(member)
+    }
+  }
+
   selectTab(id)
 }
 
 export function closeAllTabs() {
-  for (const pane of PANES) PANELS[pane].closeAll()
+  for (const pane of PANES) closeAllInScope(pane)
 }
 
 /**
@@ -248,10 +659,90 @@ export function reorderTabs(ids: string[]) {
   useStudio.getState().setTabOrder(ids)
 
   for (const pane of PANES) {
+    const own = ids
+      .filter((id) => kindOf(id) === pane)
+      .map((id) => bare(id, pane))
+
+    const of = grouper(pane)
+    // A grouped strip hands back folders, and what the panel underneath has to
+    // be told is where its own tabs went: its members, gathered folder by
+    // folder in the order the folders now appear.
     PANELS[pane].reorder(
-      ids.filter((id) => kindOf(id) === pane).map((id) => bare(id, pane))
+      of
+        ? orderGroups(PANELS[pane].open(), of, own.map(bareGroup))
+        : // `own` is only what the strip was drawing, so it cannot be handed
+          // straight to a `reorder` that replaces the panel's whole list — the
+          // other checkouts' tabs would close on a drag. Written back into the
+          // slots they already hold instead.
+          orderWhere(PANELS[pane].open(), (id) => inScope(pane, id), own)
     )
   }
+}
+
+/**
+ * The strip inside the tab on screen: which folder it is, its tabs in order,
+ * and which of them the pane is showing. Null when the panel on screen is not
+ * grouping, or has nothing open.
+ *
+ * `reorder` here is the drag in that inner strip, which must not move anything
+ * in the outer one — see `orderWithin`.
+ */
+export function shownGroupOf(pane: Pane): {
+  /** The group's strip id, so a caller can close it like any other tab. */
+  id: string
+  /** The folder itself, as the panel names it — what the group-level calls
+   * below want, and the one field here that is not a strip id. */
+  group: string
+  /**
+   * Its tabs, addressed the way the strip addresses everything: prefixed.
+   *
+   * Prefixed rather than as the panel knows them because that is what a strip
+   * is handed and hands back — `useTabItems` is keyed by it, `selectTab` takes
+   * it — and a component holding both shapes at once got them the wrong way
+   * round: the ids came out `term:term:<id>`, which names nothing, so no tab
+   * was marked and clicking one did nothing at all. `bare` is the way back for
+   * the two calls below that want a panel's own id.
+   */
+  members: string[]
+  active: string
+} | null {
+  const of = grouper(pane)
+  if (!of) return null
+
+  const active = PANELS[pane].active()
+  if (active === null) return null
+
+  const group = of(active)
+  return {
+    id: groupTabId(pane, group),
+    group,
+    members: groupMembers(pane, group).map((id) => PREFIX[pane] + id),
+    active: PREFIX[pane] + active,
+  }
+}
+
+/**
+ * Keeps one of a folder's tabs and closes the rest of *that folder's*.
+ *
+ * The "close others" of the strip inside a folder's tab, which means the strip
+ * it is on: the workbench's own is `closeOtherTabs`, and that one closes every
+ * panel's. The pane is settled once at the end rather than after each close —
+ * the kept tab is still open, so until the loop finishes there is nothing to
+ * settle.
+ */
+export function closeOthersInGroup(pane: Pane, group: string, keep: string) {
+  for (const member of groupMembers(pane, group)) {
+    if (member !== keep) PANELS[pane].close(member)
+  }
+  fillPane()
+}
+
+/** Reorders one folder's tabs, leaving every other folder's exactly where they
+ * are in the panel's own list. */
+export function reorderWithinGroup(pane: Pane, group: string, ids: string[]) {
+  const of = grouper(pane)
+  if (!of) return
+  PANELS[pane].reorder(orderWithin(PANELS[pane].open(), of, group, ids))
 }
 
 /**
@@ -264,31 +755,186 @@ export function reorderTabs(ids: string[]) {
  * whether to draw a panel at all.
  */
 export function useActiveTabId(pane: Pane): string | null {
-  const own = {
-    files: useFiles(fileActive),
-    database: useExplorer(dbActive),
-    api: useApi(apiActive),
-    terminal: useTerminal(terminalActive),
-    note: useNotes(noteActive),
-  }[pane]
+  useGrouping()
+  useScope()
 
-  return own === null ? null : PREFIX[pane] + own
+  const own = usePanelActive(pane)
+  if (own === null) return null
+
+  // A tab from another checkout is not in the strip, so it cannot be the tab
+  // the strip is marking. The pane draws `NothingOpen` for it until
+  // `reconcileScope` has picked something that is — or straight away, when this
+  // checkout has nothing open at all.
+  if (!inScope(pane, own)) return null
+
+  const of = grouper(pane)
+  return of ? groupTabId(pane, of(own)) : PREFIX[pane] + own
 }
 
-/** Whether anything at all is open in the strip. */
-export function useHasOpenTabs(): boolean {
-  // Booleans rather than the arrays themselves: a selector that returns a new
-  // array never returns the same reference twice, and would re-render on every
-  // write to the store it reads.
-  const files = useFiles((state) => state.openIds.length > 0)
-  const database = useExplorer((state) => dbOpen(state).length > 0)
-  const api = useApi((state) => state.openIds.length > 0)
-  const terminal = useTerminal(
-    (state) => liveSessions(state.sessions).length > 0
-  )
-  const note = useNotes((state) => state.openIds.length > 0)
+/** Which tab each panel is showing, subscribed to. Split out because two hooks
+ * want the same five selectors and the rules say they must all be called. */
+function usePanelActive(pane: Pane): string | null {
+  return {
+    files: useFiles(fileActive),
+    changes: useChanges(changesActive),
+    database: useExplorer(dbActive),
+    api: useApi(apiActive),
+    worktree: useWorktreeChats(worktreeChatActive),
+    note: useNotes(noteActive),
+  }[pane]
+}
 
-  return files || database || api || terminal || note
+/**
+ * What the strip's **scope** is a question about, subscribed to.
+ *
+ * Which checkout is being worked in, and what checkouts there are — the two
+ * things `activeRootId` reads that no panel's own store knows. Without this a
+ * strip would keep the tabs of the branch it was on until something else
+ * happened to redraw it.
+ *
+ * Called for the subscription alone; the value is read back through `getState`
+ * where it is used, which is what keeps the scoping rule in one place.
+ */
+function useScope() {
+  useProjects((state) => state.activeFolderId)
+  useProjects((state) => state.checkout)
+  useWorktrees((state) => state.worktrees)
+  useStudio((state) => state.folders)
+}
+
+/**
+ * Everything a grouped strip is a question about, subscribed to.
+ *
+ * `groupOf` reads more than the panel whose tab it is being asked about — which
+ * folder a request is filed under, which folders the workspace has, whether
+ * grouping is even on — so a component drawing the strip has to re-render when
+ * any of that changes and not only when its own panel's membership does.
+ * Called for the subscriptions alone; the values are read back through
+ * `getState` where they are actually used, which is what keeps the grouping
+ * rules in one place instead of half in each component.
+ *
+ * Deliberately not the whole of any store: `useFiles` is written on every
+ * keystroke in an editor, and a strip that redrew with the text would be a
+ * strip redrawn a hundred times a minute. Each of these changes only when a
+ * tab, a folder or a record does.
+ */
+function useGrouping() {
+  useScope()
+  useSettings((state) => state.groupTabs)
+  useStudio((state) => state.folders)
+  useFiles((state) => state.openIds)
+  useApi((state) => state.openIds)
+  useApi((state) => state.requests)
+  useApi((state) => state.folders)
+  useNotes((state) => state.openIds)
+  useNotes((state) => state.notes)
+  useWorktreeChats((state) => state.chats)
+  useWorktreeChats((state) => state.openIds)
+}
+
+/**
+ * Every folder tab the strip is drawing, with the tabs filed under each.
+ *
+ * What a folder's tab looks like is worked out from its members' — the icon of
+ * the one on screen, the dot if any of them is unsaved — so the component
+ * building tabs wants them together rather than one lookup at a time.
+ */
+export function useTabGroups(): {
+  pane: Pane
+  group: string
+  members: string[]
+  shown: string
+}[] {
+  useGrouping()
+
+  return PANES.flatMap((pane) => {
+    const of = grouper(pane)
+    if (!of) return []
+
+    return groupIds(openInScope(pane), of).flatMap((group) => {
+      const members = groupMembers(pane, group)
+      const shown = shownMember(pane, group)
+      return shown === null ? [] : [{ pane, group, members, shown }]
+    })
+  })
+}
+
+/**
+ * The strip inside the tab on screen, as a component can subscribe to it.
+ *
+ * The same answer as `shownGroupOf`, re-read whenever anything it depends on
+ * changes — a file opened, a request moved to another folder, the setting
+ * turned off.
+ */
+export function useShownGroup(pane: Pane) {
+  useGrouping()
+  usePanelActive(pane)
+  return shownGroupOf(pane)
+}
+
+/**
+ * Whether anything at all is in the strip.
+ *
+ * In the strip, not open: a checkout whose only tabs belong to another branch
+ * has an empty strip, and the pane says `Nothing open` rather than
+ * `No tab open` — which is the truthful pair of words for it, since there is
+ * nothing above to pick from.
+ *
+ * `openInScope` per pane rather than a boolean selector each, which is what this
+ * was: scope is not a fact any one panel's store holds, so the cheap version
+ * cannot answer it. The subscriptions are still the arrays rather than derived
+ * booleans — those references are stable, and a selector building a new array
+ * would re-render on every write to the store it reads.
+ */
+export function useHasOpenTabs(): boolean {
+  useScope()
+  useFiles((state) => state.openIds)
+  useExplorer((state) => state.openTabs)
+  useExplorer((state) => state.databaseId)
+  useApi((state) => state.openIds)
+  useWorktreeChats((state) => state.openIds)
+  useWorktreeChats((state) => state.chats)
+  useNotes((state) => state.openIds)
+
+  // Every pane in `PANES`, and the reason this is worth saying: a panel left out
+  // here can never be drawn. The workbench only shows a pane once the strip has
+  // a tab, so a missing one reads as a row that does nothing — a worktree's
+  // chat opened, selected and invisible until some *other* panel happened to
+  // have a tab of its own.
+  return PANES.some((pane) => openInScope(pane).length > 0)
+}
+
+/**
+ * Puts something from *this* checkout on screen, when what was showing is not.
+ *
+ * Called when the context moves. Most ways of moving it already land on a tab
+ * that is in scope — a worktree row opens a chat in that checkout, selecting a
+ * file tab or a chat tab moves the context to *its* root rather than the other
+ * way round — but picking a project row moves the context and selects nothing,
+ * which would otherwise leave the pane drawing a file from the branch just left
+ * while the strip no longer holds its tab.
+ *
+ * Prefers the pane already on screen, so switching checkout with a file open
+ * lands on this checkout's file rather than on whatever the strip happens to
+ * start with. Cannot loop: every id it selects is in scope, and the `setActive`
+ * that a panel's `select` performs is a no-op for the root already current.
+ */
+export function reconcileScope() {
+  const { pane } = useStudio.getState()
+
+  const own = PANELS[pane].active()
+  if (own !== null && inScope(pane, own)) return
+
+  const mine = openInScope(pane)[0]
+  if (mine !== undefined) {
+    PANELS[pane].select(mine)
+    return
+  }
+
+  // Nothing of this panel's in this checkout. Whatever the strip does hold,
+  // then — and nothing at all is a legitimate answer, which `NothingOpen` says.
+  const next = tabIds()[0]
+  if (next !== undefined) selectTab(next)
 }
 
 /** A relation tab is addressed by the relation it shows; a query tab by its

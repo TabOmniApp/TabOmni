@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -9,6 +9,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -35,15 +43,14 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
-  GitBranch,
   NotebookPen,
   Pencil,
   RotateCw,
-  SquareTerminal,
   Trash2,
 } from "lucide-react"
 
 import type { FileEntry, WorkspaceFolder } from "@shared/api"
+import { useChanges, useWatchChanges } from "@/lib/files/changes"
 import { isDirty, useFiles, viewOf } from "@/lib/files/store"
 import {
   gitStateOf,
@@ -61,21 +68,22 @@ import {
   viewersFor,
   type Viewer,
 } from "@/lib/files/viewers"
-import { parentOf } from "@/lib/files/paths"
-import { useStudio } from "@/lib/store"
-import { useTerminal } from "@/lib/terminal/store"
+import { useProjects } from "@/lib/projects"
+import { shownRootOf } from "@/lib/files/roots"
+import { useStudio, type ExplorerTab } from "@/lib/store"
+import { useWorktrees } from "@/lib/worktree/store"
 import { RenameDialog } from "../db/rename-dialog"
 import { IconButton } from "../icon-button"
-import { PanelHeader } from "../panel-header"
 import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
-import { SessionsList } from "./sessions-list"
+import { ChangesList } from "./changes-list"
 
 /** What the right-click menu is about: a row in the tree, or the workspace
  * folder heading above one. */
-type MenuTarget =
-  | { kind: "entry"; entry: FileEntry }
-  | { kind: "root"; folder: WorkspaceFolder }
+/** What the tree's own menu is over: a row, or the empty space under the last
+ * one. The root has a menu of its own, on the bar above the list — see
+ * `RootMenu`. */
+type MenuTarget = { kind: "entry"; entry: FileEntry }
 
 /** A pending "name this" dialog: a new file, note or folder inside `dir`. */
 type Creating = { dir: string; kind: "file" | "directory" | "note" }
@@ -131,24 +139,31 @@ function failureOf(error: unknown, fallback: string): string {
  * is the one that changes it. The File menu opens the same Add folder dialog,
  * which is what a rail with this section hidden falls back to.
  *
- * `New session here…` on a folder is the other half of that move: with the
- * Terminal sidebar no longer listing folders that have nothing running, this is
- * where the first session in one is started — and it is the flow anyway, since
- * what somebody wants a terminal in is generally the repository they are
- * reading. The cwd is the folder's own directory, so the item is on the folder
- * heading rather than on the directory rows under it, which `terminalCreate`
- * has no way to run in.
+ * **Nothing here starts a terminal.** A folder's menu used to hold
+ * `New session here…`, and there was a Sessions list under the tree; both are
+ * gone with the panel they opened into. A shell is a tab of the dock now,
+ * pointed at whichever project was last clicked in the left column, so the one
+ * place to open one is the one place it can be — and a menu item that put a
+ * shell in a corner of another column would be a menu item nobody could find
+ * the result of.
  */
 export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
   const folders = useStudio((state) => state.folders)
-  const branches = useStudio((state) => state.branches)
   const renameFolder = useStudio((state) => state.renameFolder)
   const removeFolder = useStudio((state) => state.removeFolder)
 
+  /** The one root drawn: the project being worked in, in the checkout it was
+   * left in. Subscribed to all three stores rather than read through
+   * `shownRoot`, since this is the render that has to follow a row being
+   * clicked in the left column. */
+  const worktrees = useWorktrees((state) => state.worktrees)
+  const checkout = useProjects((state) => state.checkout)
+  const activeFolderId = useProjects((state) => state.activeFolderId)
+  const shown = shownRootOf(folders, worktrees, checkout, activeFolderId)
+  const folder = folders.find((entry) => entry.id === shown?.folderId) ?? null
+
   const expanded = useFiles((state) => state.expanded)
-  const toggle = useFiles((state) => state.toggle)
   const refresh = useFiles((state) => state.refresh)
-  const collapseAll = useFiles((state) => state.collapseAll)
 
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null)
   const [creating, setCreating] = useState<Creating | null>(null)
@@ -161,127 +176,148 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
     null
   )
 
-  /** The directory a header button acts in: whatever is selected in the tree,
-   * falling back to the first folder — with no folders there is nothing to
-   * create in and the buttons are off. */
-  const target = useFiles((state) =>
-    state.selectedId ? parentOf(state.selectedId) : null
+  /*
+   * The root is read and watched without being a row.
+   *
+   * `expanded` is what the tree reads and what `main/watch.ts` watches, and
+   * every other directory joins it by being clicked. This one has no row to
+   * click — it *is* the list — so it is put there whenever it is not, which
+   * also covers Collapse all: that clears the set, and a tree whose own root
+   * had been collapsed out of it would be a blank panel with no way back.
+   */
+  const rootPath = shown?.path ?? null
+  const rootRead = rootPath !== null && expanded.includes(rootPath)
+  useEffect(() => {
+    if (rootPath !== null && !rootRead) useFiles.getState().toggle(rootPath)
+  }, [rootPath, rootRead])
+
+  /** Which of the two tabs is showing, and what the other one has to say for
+   * itself. The count is read for the checkout on screen whichever tab that is,
+   * so `Changes 12` is true before it is clicked — which is the whole use of a
+   * number on a tab. */
+  const tab = useStudio((state) => state.explorerTab)
+  const changeCount = useChanges((state) =>
+    shown ? state.byRoot[shown.id]?.length : undefined
   )
-  const defaultDir = target ?? folders[0]?.path ?? null
+  useWatchChanges(shown)
 
   return (
     <ContextMenu>
       <div className="flex h-full flex-col">
-        <PanelHeader title="Explorer">
-          <IconButton
-            label="New file"
-            disabled={defaultDir === null}
-            onClick={() => {
-              if (defaultDir) setCreating({ dir: defaultDir, kind: "file" })
-            }}
+        {/* Two tabs where the panel's title used to be.
+            `Explorer` named the panel to somebody already looking at it, and
+            the space is worth more as the way in to the other list this panel
+            has: what the checkout has changed, which after an agent's turn is
+            the only question being asked. The names are Conductor's, since this
+            is Conductor's column. */}
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b pr-2 pl-1.5">
+          {/* `overflow-hidden` is the safety valve: with one button beside
+              them the two tabs fit the panel's minimum with room to spare, and
+              a sidebar dragged narrower than that clips them rather than
+              pushing Refresh off the end. */}
+          <div
+            role="tablist"
+            className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden"
           >
-            <FilePlus />
-          </IconButton>
-          <IconButton
-            label="Refresh"
-            disabled={folders.length === 0}
-            // Both halves of what a row shows: what is on disk, and what git
-            // says about it. One button, since "this is out of date" is one
-            // thought.
-            onClick={() => {
-              void refresh()
-              void useGitStatus.getState().refreshAll()
-            }}
-          >
-            <RotateCw />
-          </IconButton>
-          <IconButton
-            label="Collapse all"
-            disabled={expanded.length === 0}
-            onClick={collapseAll}
-          >
-            <ChevronDown />
-          </IconButton>
-          <IconButton label="Add folder" onClick={onAddFolder}>
-            <FolderPlus />
-          </IconButton>
-        </PanelHeader>
-
-        {/* An empty workspace draws an empty list and no notice: Add folder is
-            in the header directly above it, and a panel that announces its own
-            emptiness announces it again every time the section is opened. */}
-        {/* One trigger over the whole tree, rather than one per row: the rows
-            are a recursive component, and a trigger inside a trigger inside a
-            trigger is a menu nobody can predict the target of. Each row says
-            what it is instead, on the way past. */}
-        <ContextMenuTrigger
-          render={
-            <div
-              className="min-h-0 flex-1 overflow-auto pb-3"
-              onContextMenu={(event) => {
-                // Only the empty space below the last row: a row of its own
-                // has already set the target by the time this is reached.
-                if (event.target === event.currentTarget) setMenuTarget(null)
-              }}
+            <ExplorerTabButton id="files" label="All files" />
+            <ExplorerTabButton
+              id="changes"
+              label="Changes"
+              count={changeCount}
             />
-          }
-        >
-          {folders.map((folder) => {
-            const open = expanded.includes(folder.path)
-            const Chevron = open ? ChevronDown : ChevronRight
+          </div>
 
-            return (
-              <section key={folder.id}>
-                <h2>
-                  <button
-                    type="button"
-                    title={folder.path}
-                    aria-expanded={open}
-                    onClick={() => toggle(folder.path)}
-                    onContextMenu={() =>
-                      setMenuTarget({ kind: "root", folder })
-                    }
-                    className="flex w-full items-start gap-1.5 px-2 pt-2 pb-1 text-[0.65rem] font-medium tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground"
-                  >
-                    <Chevron className="size-3.5 shrink-0" />
-                    <span className="flex min-w-0 flex-1 flex-col items-start">
-                      <span className="w-full truncate text-left">
-                        {folder.name}
-                      </span>
-                      {/* The one place a folder's branch is always shown — the
-                          Terminal sidebar repeats it on the headings it draws,
-                          beside the sessions being worked in, and has none to
-                          draw in a single-folder workspace. On its own line
-                          rather than beside the name: a branch is as long as
-                          somebody's ticket title, and sharing the row meant a
-                          heading that was all branch and no folder. */}
-                      {branches[folder.id] && (
-                        <span className="flex w-full items-center gap-1 tracking-normal normal-case opacity-70">
-                          <GitBranch className="size-2.5 shrink-0" />
-                          <span className="truncate">
-                            {branches[folder.id]}
-                          </span>
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                </h2>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {/* **Refresh, and nothing else.** The header is two tabs now and a
+                row of icons beside them is a row of icons nobody reads — every
+                other action here is on a menu over the thing it acts on, which
+                is where it belongs: `New file` and `Collapse all` on the root
+                bar's menu (or a directory row's, which creates in *that*
+                directory), `Add folder` on the empty space under the tree and
+                in the File menu. Refresh is the one that is about the panel
+                rather than about anything in it, and it is the one with no
+                target to right-click: the filesystems `fs.watch` is quiet on
+                are why it exists at all. */}
+            <IconButton
+              label="Refresh"
+              disabled={folders.length === 0}
+              // Both halves of what a row shows: what is on disk, and what git
+              // says about it. One button, since "this is out of date" is one
+              // thought — and the changed-file list re-reads off the git half,
+              // so this is its Refresh too.
+              onClick={() => {
+                void refresh()
+                void useGitStatus.getState().refreshAll()
+              }}
+            >
+              <RotateCw />
+            </IconButton>
+          </div>
+        </div>
 
-                {open && (
-                  <Directory
-                    dir={folder.path}
-                    depth={1}
-                    onMenu={(entry) => setMenuTarget({ kind: "entry", entry })}
-                  />
-                )}
-              </section>
-            )
-          })}
-        </ContextMenuTrigger>
-
-        {/* Under the tree rather than inside it: the tree is the directory
-            tree, and a session is not a file in any folder. */}
-        <SessionsList />
+        {/* The changed files, when that is the tab. Its own scroller and
+            **outside** the tree's context menu: the rows there open a diff, and
+            a right-click offering `Add folder…` over them would be the
+            workspace's menu on a list that is not about the workspace. */}
+        {tab === "changes" ? (
+          <div className="min-h-0 flex-1 overflow-auto pb-3">
+            {shown && <ChangesList root={shown} />}
+          </div>
+        ) : (
+          /* One trigger over the whole tree, rather than one per row: the rows
+             are a recursive component, and a trigger inside a trigger inside a
+             trigger is a menu nobody can predict the target of. Each row says
+             what it is instead, on the way past. */
+          <ContextMenuTrigger
+            render={
+              <div
+                className="min-h-0 flex-1 overflow-auto pb-3"
+                onContextMenu={(event) => {
+                  // Only the empty space below the last row: a row of its own
+                  // has already set the target by the time this is reached.
+                  if (event.target === event.currentTarget) setMenuTarget(null)
+                }}
+              />
+            }
+          >
+            {/* No heading over the list, and no row for the root itself. The
+                tree is one checkout's files, so a row saying which one would be
+                a row every file is indented under for no answer it gives —
+                which project and which branch is the bar above, where it can be
+                read with the list scrolled. */}
+            {shown && folder ? (
+              <Directory
+                dir={shown.path}
+                depth={0}
+                onMenu={(entry) => setMenuTarget({ kind: "entry", entry })}
+              />
+            ) : (
+              /* A workspace pointed at nothing used to draw an empty list and
+                 say nothing, because `Add folder` was a button in the header
+                 directly above it. It is not any more, and a blank column whose
+                 only way forward is a right-click is a dead end — so the way in
+                 is drawn where the files would have been. Only for a workspace
+                 with no folders at all: a folder that is merely empty has a
+                 root bar above it saying which one it is. */
+              folders.length === 0 && (
+                <Empty className="border-0 py-8">
+                  <EmptyHeader>
+                    <EmptyTitle className="text-sm">No folders yet</EmptyTitle>
+                    <EmptyDescription>
+                      Point the workspace at a directory on this machine.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button size="sm" variant="outline" onClick={onAddFolder}>
+                      <FolderPlus />
+                      Add folder…
+                    </Button>
+                  </EmptyContent>
+                </Empty>
+              )
+            )}
+          </ContextMenuTrigger>
+        )}
 
         {creating && (
           <RenameDialog
@@ -343,97 +379,36 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
         )}
       </div>
 
-      {/* The empty space under the tree is about the workspace rather than
-          about any file in it, so it offers the one thing that is. */}
-      {menuTarget === null && (
-        <ContextMenuContent className="w-52">
-          <ContextMenuItem onClick={onAddFolder}>
-            <FolderPlus />
-            Add folder…
-          </ContextMenuItem>
-        </ContextMenuContent>
-      )}
-
-      {menuTarget?.kind === "root" && (
-        <ContextMenuContent className="w-52">
-          <ContextMenuItem
-            onClick={() =>
-              setCreating({ dir: menuTarget.folder.path, kind: "file" })
-            }
-          >
-            <FilePlus />
-            New file…
-          </ContextMenuItem>
-          {/* Beside New file rather than in a group of its own: a note is a
-              file in this folder like any other, and what it opens in is what
-              the extension says. */}
-          <ContextMenuItem
-            onClick={() =>
-              setCreating({ dir: menuTarget.folder.path, kind: "note" })
-            }
-          >
-            <NotebookPen />
-            New note…
-          </ContextMenuItem>
-          <ContextMenuItem
-            onClick={() =>
-              setCreating({ dir: menuTarget.folder.path, kind: "directory" })
-            }
-          >
-            <FolderPlus />
-            New folder…
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          {/* Its own group rather than down with Copy path: opening a terminal
-              in the repository being read is a first-class thing to do with a
-              folder, not a footnote to it. */}
-          <ContextMenuItem
-            onClick={() =>
-              useTerminal.getState().openPicker(menuTarget.folder.id)
-            }
-          >
-            <SquareTerminal />
-            New session here…
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            onClick={() =>
-              void useFiles.getState().read(menuTarget.folder.path)
-            }
-          >
-            <RotateCw />
-            Refresh
-          </ContextMenuItem>
-          <ContextMenuItem
-            onClick={() =>
-              void navigator.clipboard.writeText(menuTarget.folder.path)
-            }
-          >
-            <Copy />
-            Copy path
-          </ContextMenuItem>
-          <ContextMenuItem
-            onClick={() =>
-              void window.desktop.revealPath(menuTarget.folder.path)
-            }
-          >
-            <ExternalLink />
-            Reveal in file manager
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => setRenamingFolder(menuTarget.folder)}>
-            <Pencil />
-            Rename…
-          </ContextMenuItem>
-          <ContextMenuItem
-            variant="destructive"
-            onClick={() => setRemovingFolder(menuTarget.folder)}
-          >
-            <Trash2 />
-            Remove folder…
-          </ContextMenuItem>
-        </ContextMenuContent>
-      )}
+      {/* The empty space under the tree is **the root's** menu.
+          It was the bar above the list — the project's name, its branch and a
+          checkout picker — and the bar is gone: the left column already lists
+          every project and every checkout, and says which one is selected, so
+          a strip repeating it was a row of chrome answering a question that was
+          already on screen. What the bar carried had to go somewhere, and the
+          empty space under the last row is the only part of this panel that is
+          about the checkout as a whole rather than about a file in it. It acts
+          on the checkout being read — a new file lands in the branch on
+          screen — while Rename and Remove are about the workspace's record of
+          the **project**, whichever checkout that is. */}
+      {menuTarget === null &&
+        (shown && folder ? (
+          <RootMenu
+            folder={folder}
+            path={shown.path}
+            expanded={expanded.length > 1}
+            onCreate={(kind) => setCreating({ dir: shown.path, kind })}
+            onRename={() => setRenamingFolder(folder)}
+            onRemove={() => setRemovingFolder(folder)}
+            onAddFolder={onAddFolder}
+          />
+        ) : (
+          <ContextMenuContent className="w-52">
+            <ContextMenuItem onClick={onAddFolder}>
+              <FolderPlus />
+              Add folder…
+            </ContextMenuItem>
+          </ContextMenuContent>
+        ))}
 
       {menuTarget?.kind === "entry" && (
         <ContextMenuContent
@@ -608,6 +583,51 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
 }
 
 /**
+ * One of the Explorer's two tabs.
+ *
+ * Not the workbench's `TabStrip`, and not shadcn's `Tabs`: those are about
+ * things somebody opened and can close, and these are two fixed views of one
+ * checkout. What it borrows instead is the treatment `SideRow` gives a selected
+ * row, so a tab and the row under it read as the same kind of "this is the one".
+ */
+function ExplorerTabButton({
+  id,
+  label,
+  count,
+}: {
+  id: ExplorerTab
+  label: string
+  count?: number
+}) {
+  const active = useStudio((state) => state.explorerTab) === id
+  const setTab = useStudio((state) => state.setExplorerTab)
+
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={() => setTab(id)}
+      className={cn(
+        "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs transition-colors",
+        active
+          ? "bg-accent text-accent-foreground"
+          : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {label}
+      {/* Nothing at all at zero, and nothing before the first read: a badge
+          saying `0` has to be read to learn there is nothing to read. */}
+      {count !== undefined && count > 0 && (
+        <span className="font-mono text-[0.65rem] tabular-nums opacity-70">
+          {count}
+        </span>
+      )}
+    </button>
+  )
+}
+
+/**
  * The viewers a file can be opened with, as a radio group.
  *
  * Its own component so the current choice is read from the store rather than
@@ -658,6 +678,99 @@ function ViewerIcon({ viewer }: { viewer: Viewer }) {
  * recursive and nothing here needs the flat one: the tree has no keyboard
  * navigation across rows, and every row's indent is its own depth.
  */
+/**
+ * The menu on the bar above the tree: the checkout being read, and the project
+ * it belongs to.
+ *
+ * Split that way on purpose. `New file…`, `Refresh`, `Copy path` and `Reveal`
+ * act on the **directory on screen**, which is the checkout — a file made here
+ * while a branch is being read belongs to that branch. `Rename…` and
+ * `Remove folder…` act on the workspace's record of the **project**: what the
+ * studio calls it, and whether it is pointed at it at all, neither of which is
+ * a property of one of its copies.
+ */
+function RootMenu({
+  folder,
+  path,
+  expanded,
+  onCreate,
+  onRename,
+  onRemove,
+  onAddFolder,
+}: {
+  folder: WorkspaceFolder
+  /** The checkout being read — the folder's own path, or a worktree's. */
+  path: string
+  /** Whether anything is open below the root, which is what `Collapse all` has
+   * to do. The root itself is always in the set — it is read without being a
+   * row — so the count rather than the set is what the panel hands down. */
+  expanded: boolean
+  onCreate: (kind: Creating["kind"]) => void
+  onRename: () => void
+  onRemove: () => void
+  onAddFolder: () => void
+}) {
+  return (
+    <ContextMenuContent className="w-52">
+      <ContextMenuItem onClick={() => onCreate("file")}>
+        <FilePlus />
+        New file…
+      </ContextMenuItem>
+      {/* Beside New file rather than in a group of its own: a note is a file in
+          this folder like any other, and what it opens in is what the extension
+          says. */}
+      <ContextMenuItem onClick={() => onCreate("note")}>
+        <NotebookPen />
+        New note…
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => onCreate("directory")}>
+        <FolderPlus />
+        New folder…
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={() => void useFiles.getState().read(path)}>
+        <RotateCw />
+        Refresh
+      </ContextMenuItem>
+      {/* Where the header button went. It is about the tree rather than about
+          this checkout's files, but this menu is the one the tree has — and a
+          button for it beside the tabs was a button that got used once. */}
+      <ContextMenuItem
+        disabled={!expanded}
+        onClick={() => useFiles.getState().collapseAll()}
+      >
+        <ChevronDown />
+        Collapse all
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => void navigator.clipboard.writeText(path)}>
+        <Copy />
+        Copy path
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => void window.desktop.revealPath(path)}>
+        <ExternalLink />
+        Reveal in file manager
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      {/* The workspace's own action, at the end and under a rule: everything
+          above is about this checkout, and this one is about which projects
+          there are. */}
+      <ContextMenuItem onClick={onAddFolder}>
+        <FolderPlus />
+        Add folder…
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={onRename}>
+        <Pencil />
+        Rename…
+      </ContextMenuItem>
+      <ContextMenuItem variant="destructive" onClick={onRemove}>
+        <Trash2 />
+        Remove {folder.name}…
+      </ContextMenuItem>
+    </ContextMenuContent>
+  )
+}
+
 function Directory({
   dir,
   depth,

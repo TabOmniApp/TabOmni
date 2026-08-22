@@ -267,7 +267,11 @@ export async function renamePath(
 export async function indexFiles(
   root: string,
   folderId: string,
-  limit = MAX_INDEXED_FILES
+  limit = MAX_INDEXED_FILES,
+  /** Set when `root` is a `git worktree` checkout of that folder rather than
+   * the folder itself — the palette says which branch a hit is in, and two
+   * checkouts of one project have the same `relative` for every file. */
+  worktreeId: string | null = null
 ): Promise<FileIndexEntry[]> {
   const found: FileIndexEntry[] = []
   const queue: string[] = [root]
@@ -293,6 +297,7 @@ export async function indexFiles(
       found.push({
         path: target,
         folderId,
+        ...(worktreeId === null ? {} : { worktreeId }),
         // Always with forward slashes, even where the path has backslashes:
         // this is the string the user reads and types at, and nobody searching
         // a repository types `src\lib`.

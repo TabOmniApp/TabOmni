@@ -10,24 +10,59 @@ import type { Pane } from "./store"
  */
 export const PREFIX: Record<Pane, string> = {
   files: "file:",
+  // The id after it is a **root** id rather than anything the panel made up:
+  // there is one `Changes` tab per checkout, and that is what it is about.
+  changes: "changes:",
   database: "db:",
   api: "api:",
-  terminal: "term:",
+  worktree: "chat:",
   note: "note:",
 }
+
+/**
+ * What marks a tab id as a *group's* rather than one of the panel's own.
+ *
+ * A grouped strip holds one tab per folder, and that tab has to be addressable
+ * exactly like any other — the order, the drag, `⌘W` and `neighbour` all work
+ * on strip ids and must not learn a second shape. So a group is
+ * `api:@<folderId>` where one of its requests is `api:<requestId>`.
+ *
+ * A character rather than a longer marker, and this one because no id it has to
+ * stay clear of can start with it: a file tab is an absolute path, and the rest
+ * are uuids. Without it the API panel would collide with itself — a folder
+ * there can be open as a tab *and* be the group its requests gather into.
+ */
+export const GROUP = "@"
 
 export function kindOf(id: string): Pane | null {
   if (id.startsWith(PREFIX.files)) return "files"
   if (id.startsWith(PREFIX.database)) return "database"
   if (id.startsWith(PREFIX.api)) return "api"
-  if (id.startsWith(PREFIX.terminal)) return "terminal"
+  if (id.startsWith(PREFIX.worktree)) return "worktree"
   if (id.startsWith(PREFIX.note)) return "note"
   return null
 }
 
-/** The id as its own panel knows it, with the prefix taken back off. */
+/** The id as its own panel knows it, with the prefix taken back off. Still
+ * carries the `GROUP` marker when it is a group's — `isGroup` is the question,
+ * and `bareGroup` takes the marker off. */
 export function bare(id: string, kind: Pane): string {
   return id.slice(PREFIX[kind].length)
+}
+
+/** The strip id of one group of a panel's tabs. */
+export function groupTabId(kind: Pane, group: string): string {
+  return PREFIX[kind] + GROUP + group
+}
+
+/** Whether a bare id names a group rather than one of the panel's own tabs. */
+export function isGroup(bareId: string): boolean {
+  return bareId.startsWith(GROUP)
+}
+
+/** The group's own id — a folder id — with the marker taken back off. */
+export function bareGroup(bareId: string): string {
+  return bareId.slice(GROUP.length)
 }
 
 /**

@@ -26,9 +26,9 @@ export function isStudioShortcut(event: KeyboardEvent, key: string): boolean {
   /*
    * Off macOS these are all `Ctrl`-, and the letters are readline's before
    * they are ours: `Ctrl+P` walks a shell's history, `Ctrl+W` deletes the word
-   * behind the cursor and `Ctrl+S` stops the terminal's output. A session's terminal keeps them — the
-   * editing keys of the thing running in the pty are not the studio's to take,
-   * and there is no second way to press them. Nothing is given up on macOS,
+   * behind the cursor and `Ctrl+S` stops the terminal's output. The dock's
+   * shell keeps them — the editing keys of the thing running in the pty are not
+   * the studio's to take, and there is no second way to press them. Nothing is given up on macOS,
    * where xterm never sends `⌘` to the process.
    */
   if (!IS_MAC && inTerminal(event.target)) return false
@@ -36,8 +36,8 @@ export function isStudioShortcut(event: KeyboardEvent, key: string): boolean {
   return true
 }
 
-/** Whether the key was pressed inside a session's terminal, where xterm hands
- * it to the process. */
+/** Whether the key was pressed inside a terminal, where xterm hands it to the
+ * process. */
 function inTerminal(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && target.closest(".xterm") !== null
 }

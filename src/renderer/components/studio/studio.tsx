@@ -6,33 +6,33 @@ import {
   usePanelRef,
 } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
-import { MessageSquare } from "lucide-react"
+import { PanelBottom, PanelLeft } from "lucide-react"
 
 import { useDatabases } from "@/lib/db/databases-store"
 import { useFiles } from "@/lib/files/store"
 import { useApi } from "@/lib/http/store"
 import { watchExpandedDirectories } from "@/lib/files/watch"
 import { useNotes } from "@/lib/note/store"
-import { useActiveTabId, useHasOpenTabs } from "@/lib/panels"
+import { reconcileScope, useActiveTabId, useHasOpenTabs } from "@/lib/panels"
 import { isEditingRichText, isStudioShortcut } from "@/lib/shortcuts"
-import { useTerminal } from "@/lib/terminal/store"
-import { useAssistant } from "@/lib/assistant/store"
-import { useRail } from "@/lib/rail"
 import { useSettings } from "@/lib/settings"
+import { useDock } from "@/lib/dock"
 import { useStudio, type Pane } from "@/lib/store"
-import { ActivityBar } from "./activity-bar"
-import { AssistantPanel } from "./assistant/assistant-panel"
-import { NewTerminalDialog } from "./terminal/new-terminal-dialog"
-import { TerminalWorkspace } from "./terminal/terminal-workspace"
+import { useRun } from "@/lib/run/store"
+import { useProjects } from "@/lib/projects"
+import { useWorktrees } from "@/lib/worktree/store"
+import { useWorktreeChats } from "@/lib/worktree-chat/store"
+import { Dock } from "./dock"
+import { ProjectCrumbs } from "./project/project-crumbs"
+import { WorkspaceSidebar } from "./workspace-sidebar"
+import { WorktreeChatPane } from "./worktree/chat-pane"
 import { ApiWorkspace } from "./api/api-workspace"
 import { FileTree } from "./files/file-tree"
+import { ChangesPane } from "./files/changes-pane"
 import { FileWorkspace } from "./files/file-workspace"
-import { RequestList } from "./api/request-list"
-import { DatabaseTree } from "./db/database-tree"
 import { DatabaseWorkspace } from "./db/database-workspace"
 import { AddFolderDialog } from "./add-folder-dialog"
 import { CommandPalette } from "./command-palette"
-import { NoteList } from "./note/note-list"
 import { NoteWorkspace } from "./note/note-workspace"
 import { IconButton } from "./icon-button"
 import { NothingOpen } from "./nothing-open"
@@ -44,7 +44,8 @@ import {
   SPLASH_ASSEMBLE_MS,
   SPLASH_FADE_MS,
 } from "./splash"
-import { TitleBarDragStrip } from "./title-bar"
+import { IS_MAC, TitleBarDragStrip } from "./title-bar"
+import { GroupTabs } from "./group-tabs"
 import { WorkspaceTabs } from "./workspace-tabs"
 
 /** What each pane on the rail shows. Built here rather than inline so the
@@ -53,14 +54,16 @@ function paneView(pane: Pane) {
   switch (pane) {
     case "files":
       return <FileWorkspace />
+    case "changes":
+      return <ChangesPane />
     case "database":
       return <DatabaseWorkspace />
     case "api":
       return <ApiWorkspace />
     case "note":
       return <NoteWorkspace />
-    case "terminal":
-      return <TerminalWorkspace />
+    case "worktree":
+      return <WorktreeChatPane />
   }
 }
 
@@ -69,8 +72,9 @@ function paneView(pane: Pane) {
 type Launch = "splash" | "closing" | "done"
 
 export function Studio() {
-  const loaded = useStudio((state) => state.loaded)
+  const workspaceLoaded = useStudio((state) => state.loaded)
   const storageError = useStudio((state) => state.storageError)
+  const loaded = workspaceLoaded
 
   const [launch, setLaunch] = useState<Launch>("splash")
 
@@ -83,17 +87,22 @@ export function Studio() {
   useEffect(() => {
     void useStudio.getState().init()
     void useSettings.getState().restore()
-    void useTerminal.getState().restore()
-    void useRail.getState().restore()
     void useDatabases.getState().refresh()
     void useNotes.getState().refresh()
     void useFiles.getState().restore()
+    void useProjects.getState().restore()
+    void useRun.getState().restore()
+    void useWorktrees.getState().refresh()
+    void useWorktreeChats.getState().refresh()
   }, [])
 
-  // The assistant's turn belongs to the main process, so the panel is only a
-  // view of it — subscribed here rather than in the panel, which is unmounted
-  // whenever the chat is closed and would miss the end of a turn it started.
-  useEffect(() => useAssistant.getState().listen(), [])
+  // A run outlives the dock being closed and the tab being switched away from,
+  // so its output is subscribed to here rather than in the panel.
+  useEffect(() => useRun.getState().listen(), [])
+
+  // A worktree chat's turn is a `claude -p` in the main process and outlives the
+  // pane being switched away from, so its lines are subscribed to here.
+  useEffect(() => useWorktreeChats.getState().listen(), [])
 
   /*
    * The manifest is a small file on a local disk and usually lands well inside
@@ -106,9 +115,19 @@ export function Studio() {
    * Two states rather than one because this is a crossfade and not a cut: the
    * workbench mounts when the fade starts and is on screen behind the last of
    * it.
+   *
+   * **`loaded` and nothing else.** Both timers are set once here, and `launch`
+   * must stay out of the dependencies: it is what the first timer changes, so an
+   * effect watching it re-ran on its own `setLaunch("closing")`, cleared the
+   * `done` timer it had just been holding, and then returned early because
+   * `launch` was no longer `"splash"`. The app sat in `"closing"` for the rest of
+   * the run — invisibly, since the splash is transparent by then, except that its
+   * drag region stayed over the whole title bar and every button up there stopped
+   * taking clicks. Watching the thing you are about to set is the whole of the
+   * bug.
    */
   useEffect(() => {
-    if (!loaded || launch !== "splash") return
+    if (!loaded) return
 
     const left = Math.max(0, SPLASH_ASSEMBLE_MS - splashElapsed())
     const toClosing = setTimeout(() => setLaunch("closing"), left)
@@ -117,7 +136,7 @@ export function Studio() {
       clearTimeout(toClosing)
       clearTimeout(toDone)
     }
-  }, [loaded, launch])
+  }, [loaded])
 
   // A failure has nothing to wait for and nothing to celebrate: it replaces
   // the launch screen outright rather than fading in behind it.
@@ -127,6 +146,12 @@ export function Studio() {
     <>
       {launch !== "splash" && <Workbench />}
       {launch !== "done" && <Splash closing={launch === "closing"} />}
+      {/* The launch screen has nothing clickable, so the top of the window is
+          its drag handle. Owned here rather than by the splash because it has to
+          outlive it: unmounting a drag region leaves macOS holding it, over the
+          crumb bar the workbench draws in the same place — see
+          `TitleBarDragStrip`. */}
+      <TitleBarDragStrip active={launch !== "done"} />
     </>
   )
 }
@@ -143,36 +168,23 @@ function Workbench() {
   /** Which side the tab strip is on, which is the one preference the workbench
    * itself has to lay out for. */
   const tabsPlacement = useSettings((state) => state.tabsPlacement)
-  /** Whether the assistant chat is on screen — the button in the header, and
-   * the `X` in the panel's own. */
-  const assistantOpen = useAssistant((state) => state.open)
-  const toggleAssistant = useAssistant((state) => state.toggle)
-  /** The New session picker, asked for by the Explorer sidebar — the `+` on its
-   * Sessions list, or a folder's own menu — and mounted here rather than in
-   * either, since a dialog held by a sidebar goes when the rail moves. */
-  const picking = useTerminal((state) => state.picking)
-  const closePicker = useTerminal((state) => state.closePicker)
-  /*
-   * Which sidebar is showing.
-   *
-   * On the studio store rather than here, because picking something moves it:
-   * a note opened from the tab strip brings the Notes list with it, or the
-   * sidebar would be marking a row in a list nobody is looking at. The rail
-   * still moves it on its own, which is the half that does *not* touch the
-   * pane — a sidebar can be read while another panel's tab stays on screen.
-   */
-  const section = useStudio((state) => state.section)
-  const setSection = useStudio((state) => state.setSection)
-  /** Whether the sidebar is showing at all — `⌘B`, the View menu, or a click on
-   * the rail icon that is already current. */
+  /** Whether the dock — `Run` and `Terminal` — is on screen: the button in the
+   * header, and the chevron in the dock's own strip. */
+  const dockOpen = useDock((state) => state.open)
+  const toggleDock = useDock((state) => state.toggle)
+  /** The left column, and its toggle in the title bar. */
+  const projectSidebar = useProjects((state) => state.sidebar)
+  const toggleProjectSidebar = useProjects((state) => state.toggleSidebar)
+  /** Whether the Explorer panel is showing at all — `⌘B`, the View menu, or
+   * dragging its handle shut. */
   const sidebar = useStudio((state) => state.sidebar)
   const toggleSidebar = useStudio((state) => state.toggleSidebar)
   /** The panels built so far, in the order they were first shown; see the
    * stack below. */
   const [mounted, setMounted] = useState<Pane[]>([])
 
-  // The panel on screen — or none, which `NothingOpen` answers for whichever
-  // sidebar is showing.
+  // The panel on screen — or none, which `NothingOpen` answers for the pane
+  // whose tab went.
   //
   // A panel is drawn only when it has a tab to draw: each one used to answer
   // "nothing selected" for itself, which meant whoever opened the app to read
@@ -231,6 +243,22 @@ function Workbench() {
   useEffect(() => watchExpandedDirectories(), [])
 
   /*
+   * The strip is per checkout, so moving the checkout may leave the pane drawing
+   * something the strip no longer holds — see `reconcileScope`.
+   *
+   * Here rather than inside `setActive`, which is where it belongs by rights: a
+   * store that reached into `lib/panels.ts` would be a cycle, since that module
+   * reads this one's context to work out what is in scope at all. So the
+   * workbench watches the two fields instead, which is the same thing one frame
+   * later and in the layer that is allowed to know about both.
+   */
+  const activeFolderId = useProjects((state) => state.activeFolderId)
+  const checkout = useProjects((state) => state.checkout)
+  useEffect(() => {
+    reconcileScope()
+  }, [activeFolderId, checkout])
+
+  /*
    * The sidebar's own panel, collapsed rather than unmounted.
    *
    * `collapse()` is the only way to take a `ResizablePanel`'s space back — it
@@ -245,6 +273,26 @@ function Workbench() {
     if (sidebar) sidebarPanel.current?.expand()
     else sidebarPanel.current?.collapse()
   }, [sidebar, sidebarPanel])
+
+  /** The same for the left column, which collapses on its own button. */
+  const projectPanel = usePanelRef()
+  useEffect(() => {
+    if (projectSidebar) projectPanel.current?.expand()
+    else projectPanel.current?.collapse()
+  }, [projectSidebar, projectPanel])
+
+  /**
+   * And the dock, which is collapsed rather than unmounted — the reason being
+   * the shell in it. A pty taken out of the tree ends; it does not hide. The
+   * dock used to unmount, which was fine while it held a conversation the main
+   * process owned and a log, and became a bug the moment closing it would have
+   * killed whatever was running in the Terminal tab.
+   */
+  const dockPanel = usePanelRef()
+  useEffect(() => {
+    if (dockOpen) dockPanel.current?.expand()
+    else dockPanel.current?.collapse()
+  }, [dockOpen, dockPanel])
 
   /*
    * `⌘B` — the editors' shortcut for the sidebar, and the View menu's item.
@@ -286,213 +334,309 @@ function Workbench() {
    * strip off the edge of the window with it.
    */
   const paneContent = (
-    <div className="relative h-full min-h-0 min-w-0 overflow-hidden">
-      {/*
-        Every panel is hidden rather than unmounted, and built the first time it
-        is shown — a panel nobody has opened is a connection nobody is reading,
-        and the terminal's is a process.
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
+      {/* The strip inside the tab on screen, when the panel is grouping its
+          tabs under the folder each belongs to. Between the workbench's strip
+          and the pane in both arrangements — the tabs may be a column beside
+          the pane, but a folder's own tabs are still a row above it. */}
+      <GroupTabs pane={pane} />
 
-        The terminal had to be kept: its session is a pty with no way to
-        reattach, so taking it off the screen would end the conversation. The
-        other five want the same for a smaller reason — everything they hold
-        that their store does not is lost on a switch, and a panel switched away
-        from is coming back. Leaving Database for Notes and returning gave a
-        result grid scrolled back to the top, a SQL editor with no undo history
-        and the split at its default height; a note came back as a fresh
-        ProseMirror over the same text, with the caret at the start.
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        {/*
+        Every panel is hidden rather than unmounted, and built the first time it
+        is shown — a panel nobody has opened is a connection nobody is reading.
+
+        Everything they hold that their store does not is lost on a switch, and
+        a panel switched away from is coming back. Leaving Database for Notes
+        and returning gave a result grid scrolled back to the top, a SQL editor
+        with no undo history and the split at its default height; a note came
+        back as a fresh ProseMirror over the same text, with the caret at the
+        start.
 
         `invisible`, not `hidden`: `display: none` destroys the scrolling boxes
-        inside, which would put that grid back at the top by another route — and
-        it is what the terminal already stacks its own sessions with.
+        inside, which would put that grid back at the top by another route —
+        and it is what the dock stacks its own shells with.
       */}
-      {mounted.map((name) => (
-        <div
-          key={name}
-          className={cn("absolute inset-0", name !== shown && "invisible")}
-        >
-          {paneView(name)}
-        </div>
-      ))}
+        {mounted.map((name) => (
+          <div
+            key={name}
+            className={cn("absolute inset-0", name !== shown && "invisible")}
+          >
+            {paneView(name)}
+          </div>
+        ))}
 
-      {/* One notice for the whole workbench, rather than each panel's own:
+        {/* One notice for the whole workbench, rather than each panel's own:
           nothing open at all, or tabs open with none of them on screen. */}
-      {!shown && (
-        <div className="absolute inset-0">
-          <NothingOpen section={section} hasOpenTabs={hasOpenTabs} />
-        </div>
-      )}
+        {!shown && (
+          <div className="absolute inset-0">
+            <NothingOpen pane={pane} hasOpenTabs={hasOpenTabs} />
+          </div>
+        )}
+      </div>
     </div>
   )
 
   return (
     <div className="flex h-svh flex-col overflow-hidden">
-      {/* Doubles as the window's title bar on macOS, where there is no other. */}
-      <header className="flex h-11 shrink-0 items-center border-b">
-        {/*
-          The drag handle — this part of the header and not the whole of it. A
-          clickable thing inside a `-webkit-app-region: drag` box has to opt
-          back out with `no-drag`, and on macOS that subtraction is unreliable:
-          the theme toggle that used to sit here took no clicks at all while its
-          `d` shortcut still worked. So the region ends before the button rather
-          than being punched through, and nothing clickable is inside it.
+      {/*
+        The window is a row, not a column.
 
-          It starts at the window's left edge, under the traffic lights, since
-          there is nothing here to clear them: deliberately bare, because the
-          workspace holds several folders and each one has a branch of its own,
-          so a single line here could only be about one of them — they are
-          listed, with their branches, in Explorer.
-        */}
-        <div className="drag-region h-full min-w-0 flex-1" />
+        The left column runs the full height, from under the traffic lights to
+        the status bar, and the bar carrying the crumb sits above the *work*
+        only — the pane and the Explorer — rather than across the whole window.
+        Conductor's shape, and the reason is what each of the two is about: the
+        column is the workspace and does not change when you switch checkout,
+        while everything to the right of it is one checkout's, which is exactly
+        what the crumb names. A bar spanning both would be labelling the column
+        too, and mislabelling it.
 
-        {/*
-          The one thing in the title bar, because it is the one thing that is
-          about the whole workspace rather than about a panel: the assistant
-          answers with the workspace's own tools, so it has no sidebar to be
-          reached from and no folder to belong to.
-
-          Two things here are about clicks landing rather than about looks, and
-          neither is why this button once took every other press — that was its
-          own tooltip, see `ui/tooltip.tsx` and `side` below.
-
-          It fills the bar's height instead of being a 24px square floating in a
-          44px strip, which is what a title-bar control is everywhere else. And
-          `no-drag` is claimed even though the button sits outside the drag
-          region: macOS keeps a stale drag rect after the element that asked for
-          it has gone (electron#20926), and the launch screen draws one across
-          this very corner on every run.
-        */}
-        {/* Wider than the button it holds, on purpose: this is the rect that
-            says "not draggable", and it has to cover more than the button in
-            case a stale drag rect reaches past where any live one ends. */}
-        <div className="no-drag flex h-full shrink-0 items-center pl-3">
-          <IconButton
-            label={
-              assistantOpen ? "Hide assistant" : "Ask about this workspace"
-            }
-            pressed={assistantOpen}
-            onClick={toggleAssistant}
-            // Below, because there is no "above" here: this button's top edge is
-            // the top of the window, and a tooltip with nowhere to go is what
-            // made this button unclickable every other press — see the comment
-            // in `ui/tooltip.tsx`.
-            side="bottom"
-            className="h-11 w-11 rounded-none"
-          >
-            <MessageSquare />
-          </IconButton>
-        </div>
-      </header>
-
-      {/* No screen of its own for an empty workspace. A folder is what Explorer
-          lists and what the Terminal panel runs sessions in, and nothing else
-          here is about one — the databases, the requests and the capture server
-          belong to the workspace — so a studio held shut until one is added
-          would be holding back four panels that had nothing to wait for. Adding
-          one is a button in Explorer's own header, and the File menu. */}
+        The cost is that the two strips at the top are two boxes to keep the
+        same height (`h-11` in both), and that the traffic lights now land in
+        whichever of them is at the window's left edge — see `WindowLeftEdge`.
+      */}
       <div className="flex min-h-0 flex-1">
-        <ActivityBar
-          section={section}
-          open={sidebar}
-          onSelect={setSection}
-          onToggle={toggleSidebar}
-        />
-
         <ResizablePanelGroup
           orientation="horizontal"
           className="min-w-0 flex-1"
         >
+          {/*
+            The workspace's own column: its projects, and the branches under
+            each. `Database`, `Notes` and `API` are hidden for now — see
+            `SIDEBAR_SECTIONS` in `lib/projects.ts`.
+          */}
           <ResizablePanel
-            defaultSize={224}
-            minSize={160}
-            maxSize={420}
-            // Dragging the handle past the minimum closes it too, which is the
-            // other half of what `⌘B` does — so the state follows the panel as
-            // well as driving it (`onResize` below), or a sidebar dragged shut
-            // would leave the rail still marking a section as showing.
+            defaultSize={228}
+            minSize={168}
+            maxSize={360}
             collapsible
             collapsedSize={0}
-            panelRef={sidebarPanel}
+            panelRef={projectPanel}
             onResize={(size, _id, previous) => {
-              // `previous` is undefined on mount, where the panel is reporting
-              // the width it was handed rather than a change anybody made — and
-              // a launch that remembered a closed sidebar starts here, at 224,
-              // one frame before the effect above closes it. Read as a drag,
-              // that mount would open the sidebar the user left shut.
+              // Undefined on mount is the panel reporting the width it was
+              // handed, not a drag — read as one, a launch that remembered a
+              // closed column would reopen it. Same trap as the panels' below.
               if (previous === undefined) return
 
               const shown = size.inPixels > 0
-              if (shown !== useStudio.getState().sidebar) toggleSidebar()
+              if (shown !== useProjects.getState().sidebar) {
+                toggleProjectSidebar()
+              }
             }}
           >
-            {/* The four rail sections, and no fallback: `section` is a
-                `Section`, so this list is exhaustive and a fifth would be a
-                type error rather than a sidebar nobody wrote. */}
-            {section === "files" ? (
-              <FileTree onAddFolder={() => setAdding(true)} />
-            ) : section === "database" ? (
-              <DatabaseTree />
-            ) : section === "api" ? (
-              <RequestList />
-            ) : (
-              <NoteList />
-            )}
-          </ResizablePanel>
-
-          {/* Hidden while the sidebar is, the way the composer's is: the rail
-              already draws a border on that edge, so a handle left behind reads
-              as a second one — and there is nothing on its left to resize. */}
-          <ResizableHandle className={cn(!sidebar && "hidden")} />
-
-          <ResizablePanel minSize={280}>
-            {/*
-              The strip beside the pane rather than above it, and the boundary
-              between them draggable like every other one in the workbench: a
-              column of tabs is a list of file names, and how much of a name
-              fits is exactly what somebody with a deep tree wants to set for
-              themselves.
-
-              A nested group rather than a width this component holds, for the
-              reason the sidebar's is a panel too — the drag, the keyboard
-              handle and the minimum all come with it. The width is the panel's
-              own for the run and is not written down, again like the sidebar's.
-            */}
-            {verticalTabs ? (
-              <ResizablePanelGroup orientation="horizontal">
-                <ResizablePanel minSize={240}>{paneContent}</ResizablePanel>
-
-                <ResizableHandle />
-
-                {/* Wide enough for a name and its icon, and capped where a
-                    column of tabs would start costing the editor more than the
-                    names are worth. */}
-                <ResizablePanel defaultSize={224} minSize={140} maxSize={420}>
-                  <WorkspaceTabs pane={pane} orientation="vertical" />
-                </ResizablePanel>
-              </ResizablePanelGroup>
-            ) : (
-              <div className="flex h-full min-w-0 flex-col">
-                {/* Outside the panel rather than inside one, which is what keeps
-                    a table open on screen while the API panel is the one being
-                    looked at. */}
-                <WorkspaceTabs pane={pane} orientation="horizontal" />
-                {paneContent}
+            <div className="flex h-full min-h-0 flex-col">
+              <WindowLeftEdge
+                projectSidebar={projectSidebar}
+                onToggle={toggleProjectSidebar}
+              />
+              <div className="min-h-0 flex-1">
+                <WorkspaceSidebar
+                  onOpenSettings={() => setSettingsOpen(true)}
+                />
               </div>
-            )}
+            </div>
           </ResizablePanel>
-          {/* Outside the pane and its tab strip, at the window's right edge: the
-              conversation is about the workspace, so it is not one of the
-              things the strip holds tabs for. Resizable and collapsible like
-              the sidebar opposite it, and unmounted when closed — a chat panel
-              nobody has opened is a column of nothing, and the conversation it
-              would draw is held by the main process anyway. */}
-          {assistantOpen && (
-            <>
-              <ResizableHandle />
-              <ResizablePanel defaultSize={360} minSize={260} maxSize={640}>
-                <AssistantPanel />
-              </ResizablePanel>
-            </>
-          )}
+
+          <ResizableHandle className={cn(!projectSidebar && "hidden")} />
+
+          {/* Everything about the one checkout: the bar that names it, the pane,
+              and the Explorer with the dock under it. Its minimum is the two
+              columns inside it added up. */}
+          <ResizablePanel minSize={560}>
+            <div className="flex h-full min-h-0 flex-col">
+              <header className="flex h-11 shrink-0 items-center gap-1 border-b">
+                {/* The window's left edge when the column is shut, which is the
+                    other half of `WindowLeftEdge` — the lights and the toggle
+                    have to be somewhere, and with no column there they are
+                    here. */}
+                {!projectSidebar && (
+                  <WindowLeftEdge
+                    projectSidebar={projectSidebar}
+                    onToggle={toggleProjectSidebar}
+                    bare
+                  />
+                )}
+
+                {/*
+                  `project › branch`, and the `…` that acts on it.
+
+                  This bar was deliberately bare for a long while, and the
+                  reason was sound: the workspace holds several folders, each on
+                  a branch of its own, so one line could only be about one of
+                  them. What changed is that one of them *is* the one being
+                  worked in — clicking a row in the column moves the tree, the
+                  shell and the chat together, and so does selecting a tab from
+                  another checkout — and this bar is over exactly the part of
+                  the window that follows it. A `Home › task` crumb took this
+                  end once before and went with the tasks; this one is about a
+                  place rather than a layer that no longer exists.
+                */}
+                <ProjectCrumbs />
+
+                {/*
+                  The drag handle — this part of the bar and not the whole of
+                  it. A clickable thing inside a `-webkit-app-region: drag` box
+                  has to opt back out with `no-drag`, and on macOS that
+                  subtraction is unreliable: the theme toggle that used to sit
+                  here took no clicks at all while its `d` shortcut still
+                  worked. So the region is what is left over between the
+                  controls rather than something punched through them.
+                */}
+                <div className="drag-region h-full min-w-0 flex-1" />
+
+                {/*
+                  The dock, which is the only way back to it once it is shut: its
+                  own chevron hides it, and the tab strip that switches between
+                  `Run` and `Terminal` goes with it. There was an assistant
+                  button here — a workspace chat that was the dock's first tab —
+                  and this is what is left in its corner.
+
+                  Two things are about clicks landing rather than looks, and
+                  neither is why this button once took every other press — that
+                  was its own tooltip, see `ui/tooltip.tsx` and `side` below.
+
+                  It fills the bar's height instead of being a 24px square
+                  floating in a 44px strip, which is what a title-bar control is
+                  everywhere else. And `no-drag` is claimed even though the
+                  button sits outside the drag region: macOS keeps a stale drag
+                  rect after the element that asked for it has gone
+                  (electron#20926), and the launch screen draws one across this
+                  very corner on every run.
+                */}
+                {/* Wider than the button it holds, on purpose: this is the rect
+                    that says "not draggable", and it has to cover more than the
+                    button in case a stale drag rect reaches past where any live
+                    one ends. */}
+                <div className="no-drag flex h-full shrink-0 items-center pl-3">
+                  <IconButton
+                    label={
+                      dockOpen ? "Hide the panel" : "Show run and terminal"
+                    }
+                    pressed={dockOpen}
+                    onClick={toggleDock}
+                    // Below, because there is no "above" here: this button's top
+                    // edge is the top of the window, and a tooltip with nowhere
+                    // to go is what made this button unclickable every other
+                    // press — see the comment in `ui/tooltip.tsx`.
+                    side="bottom"
+                    className="h-11 w-11 rounded-none"
+                  >
+                    <PanelBottom />
+                  </IconButton>
+                </div>
+              </header>
+
+              {/* No screen of its own for an empty workspace. A folder is what
+                  Explorer lists and what the dock opens a shell in, and nothing
+                  else here is about one — the databases, the requests and the
+                  notes belong to the workspace — so a studio held shut until one
+                  is added would be holding back panels that had nothing to wait
+                  for. Adding one is a button in Explorer's own header, and the
+                  File menu. */}
+              <div className="flex min-h-0 flex-1">
+                <ResizablePanelGroup
+                  orientation="horizontal"
+                  className="min-w-0 flex-1"
+                >
+                  <ResizablePanel minSize={280}>
+                    {/*
+                      The strip beside the pane rather than above it, and the
+                      boundary between them draggable like every other one in
+                      the workbench: a column of tabs is a list of file names,
+                      and how much of a name fits is exactly what somebody with
+                      a deep tree wants to set for themselves.
+
+                      A nested group rather than a width this component holds,
+                      for the reason the columns either side are panels too —
+                      the drag, the keyboard handle and the minimum all come
+                      with it.
+                    */}
+                    {verticalTabs ? (
+                      <ResizablePanelGroup orientation="horizontal">
+                        <ResizablePanel minSize={240}>
+                          {paneContent}
+                        </ResizablePanel>
+
+                        <ResizableHandle />
+
+                        {/* Wide enough for a name and its icon, and capped
+                            where a column of tabs would start costing the
+                            editor more than the names are worth. */}
+                        <ResizablePanel
+                          defaultSize={224}
+                          minSize={140}
+                          maxSize={420}
+                        >
+                          <WorkspaceTabs pane={pane} orientation="vertical" />
+                        </ResizablePanel>
+                      </ResizablePanelGroup>
+                    ) : (
+                      <div className="flex h-full min-w-0 flex-col">
+                        {/* Outside the panel rather than inside one, which is
+                            what keeps a table open on screen while the API
+                            panel is the one being looked at. */}
+                        <WorkspaceTabs pane={pane} orientation="horizontal" />
+                        {paneContent}
+                      </div>
+                    )}
+                  </ResizablePanel>
+
+                  <ResizableHandle className={cn(!sidebar && "hidden")} />
+
+                  {/*
+                    The Explorer, with the dock under it — as Conductor stacks
+                    its file list over its Run/Terminal. Two stacked panels: the
+                    tree is the contents of the checkout being worked in, and
+                    the dock is what is *about* what is on screen rather than a
+                    thing that was opened.
+                  */}
+                  <ResizablePanel
+                    defaultSize={320}
+                    minSize={240}
+                    maxSize={520}
+                    // Dragging the handle past the minimum closes it too, which
+                    // is the other half of what `⌘B` does — so the state
+                    // follows the panel as well as driving it, or a column
+                    // dragged shut would leave `⌘B` needing two presses to
+                    // bring it back.
+                    collapsible
+                    collapsedSize={0}
+                    panelRef={sidebarPanel}
+                    onResize={(size, _id, previous) => {
+                      if (previous === undefined) return
+
+                      const shown = size.inPixels > 0
+                      if (shown !== useStudio.getState().sidebar) {
+                        toggleSidebar()
+                      }
+                    }}
+                  >
+                    <ResizablePanelGroup orientation="vertical">
+                      <ResizablePanel minSize={140}>
+                        {/* The Explorer, and nothing else — so no tabs above
+                            it. The other three lists are sections of the left
+                            column (hidden for now), and a strip of four tabs
+                            with one tab on it is a row of chrome that answers
+                            nothing. */}
+                        <FileTree onAddFolder={() => setAdding(true)} />
+                      </ResizablePanel>
+
+                      <ResizableHandle className={cn(!dockOpen && "hidden")} />
+                      <ResizablePanel
+                        defaultSize={320}
+                        minSize={160}
+                        collapsible
+                        collapsedSize={0}
+                        panelRef={dockPanel}
+                      >
+                        <Dock />
+                      </ResizablePanel>
+                    </ResizablePanelGroup>
+                  </ResizablePanel>
+                </ResizablePanelGroup>
+              </div>
+            </div>
+          </ResizablePanel>
         </ResizablePanelGroup>
       </div>
 
@@ -507,13 +651,63 @@ function Workbench() {
       {settingsOpen && (
         <SettingsDialog onClose={() => setSettingsOpen(false)} />
       )}
+    </div>
+  )
+}
 
-      {picking && (
-        <NewTerminalDialog
-          preferredFolderId={picking.folderId}
-          onClose={closePicker}
-        />
-      )}
+/**
+ * The window's top-left corner: the traffic lights' clearance, and the toggle.
+ *
+ * Written once and drawn in two places, because the corner belongs to whichever
+ * box is at the window's left edge — the left column's own top row while it is
+ * showing, the crumb bar when it is not. The alternative was leaving it in one
+ * of them and having the lights land on the column's first project row, or the
+ * toggle disappear with the column it collapses.
+ *
+ * What is draggable here is the space either side of the button rather than the
+ * whole strip with a `no-drag` hole punched in it. macOS drops that hole often
+ * enough that the toggle inside it was another control that "worked sometimes";
+ * a button that was never in a drag region has nothing to be dropped. The
+ * `5.25rem` is what clears the traffic lights at `x: 18`, since macOS insets its
+ * own buttons into whatever the app draws up here (`titleBarStyle` and
+ * `trafficLightPosition` in `main/main.ts`).
+ */
+function WindowLeftEdge({
+  projectSidebar,
+  onToggle,
+  bare = false,
+}: {
+  projectSidebar: boolean
+  onToggle: () => void
+  /** In the crumb bar rather than being a row of its own, so it brings no
+   * height and no border with it. */
+  bare?: boolean
+}) {
+  return (
+    <div className={cn("flex h-11 shrink-0 items-center", !bare && "border-b")}>
+      {IS_MAC && <div className="drag-region h-full w-[5.25rem] shrink-0" />}
+      <div className="no-drag flex h-full shrink-0 items-center">
+        {/*
+          The left column's own toggle, and not the panels' `⌘B`: the two
+          columns are about different things — one is the workspace, one is the
+          contents of what is being worked on — and one key taking both would
+          leave the workbench with no edges at all.
+        */}
+        <IconButton
+          label={projectSidebar ? "Hide projects" : "Show projects"}
+          pressed={projectSidebar}
+          onClick={onToggle}
+          side="bottom"
+          className="size-7 shrink-0"
+        >
+          <PanelLeft />
+        </IconButton>
+      </div>
+
+      {/* The rest of the column's top row, so it can still drag the window.
+          Not in the crumb bar, where the header has a spacer of its own after
+          the crumb and one here would push the crumb across. */}
+      {!bare && <div className="drag-region h-full flex-1" />}
     </div>
   )
 }

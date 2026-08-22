@@ -1,8 +1,6 @@
 import { type CSSProperties } from "react"
 import { cn } from "@/lib/utils"
 
-import { TitleBarDragStrip } from "./title-bar"
-
 /**
  * The screen the app opens on, and the only one shown before the workbench.
  *
@@ -12,9 +10,9 @@ import { TitleBarDragStrip } from "./title-bar"
  * from `startedAt` below so that crossing from the first mount to the second
  * continues the same animation rather than starting it again.
  *
- * What it draws is the studio in miniature: the rail with its sections in
- * their own hues, a strip of tabs, a sidebar and a panel — assembling in the
- * order the eye reads them. A launch screen has to fill the time it takes to
+ * What it draws is the studio in miniature, in the order the eye reads it: the
+ * left column with the four sections in their own hues, a strip of tabs, the
+ * pane, and the Explorer on the right. A launch screen has to fill the time it takes to
  * open a manifest and a few settings either way, and a logo sitting still
  * fills it by looking like nothing is happening.
  */
@@ -61,19 +59,19 @@ export function splashElapsed(): number {
 export const SPLASH_FADE_MS = 420
 
 /**
- * Four of the studio's own hues, in the rail's order.
+ * Four of the studio's own hues, in the sections' order.
  *
  * Not one dot per section — this is the studio in miniature, not a mirror of
- * it — so the rail losing its Terminal button, and later its Mail one, does not
- * change how many are drawn here. `--section-terminal` is still the colour a
- * session is known by; `--section-mail` went with the panel, and Explorer's own
- * cyan took its place in the row.
+ * it — so the sections losing their Terminal entry, and later their Mail one,
+ * does not change how many are drawn here. `--section-terminal` is still the
+ * colour a terminal is known by, now the dock's; `--section-mail` went with the
+ * panel, and Explorer's own cyan took its place in the row.
  *
- * Written out rather than imported from `SECTION_ACCENT` in `activity-bar.tsx`,
- * which is the rail's own copy and the one to change if a section's colour
- * does: reaching for it here would pull the rail — its menus, its icons and its
- * stores — into the chunk that has to be parsed before anything is on screen,
- * which is a strange price for a launch screen to charge. They are variables
+ * Written out rather than imported from `SECTION_ACCENT` in `section-marks.tsx`,
+ * which is the one to change if a section's colour does: reaching for it here
+ * would pull the icons that module names — and through them lucide — into the
+ * chunk that has to be parsed before anything is on screen, which is a strange
+ * price for a launch screen to charge. They are variables
  * from `globals.css` either way, so a re-hue there moves both.
  */
 const HUES = [
@@ -104,10 +102,6 @@ export function Splash({
         closing && "pointer-events-none scale-[1.04] opacity-0"
       )}
     >
-      {/* Nothing here is clickable, so the whole top of the screen can be the
-          window's drag handle — see `title-bar.tsx`. */}
-      <TitleBarDragStrip />
-
       <div className="flex flex-col items-center gap-7">
         <Mark />
 
@@ -158,14 +152,24 @@ function Mark() {
         style={step(0)}
         className="relative flex h-32 w-52 animate-settle overflow-hidden rounded-xl border bg-muted shadow-2xl"
       >
-        {/* The rail, and the hues that are the app's own colours. */}
-        <div className="flex w-7 shrink-0 flex-col items-center gap-1.5 border-r py-3">
+        {/* The left column, and the hues that are the app's own colours: four
+            folding sections — the projects, the databases, the notes and the
+            saved requests — which is what the workspace holds. */}
+        <div className="flex w-11 shrink-0 flex-col gap-1.5 border-r p-2">
           {HUES.map((hue, index) => (
-            <span
-              key={hue}
-              style={{ backgroundColor: hue, ...step(180 + index * 60) }}
-              className="size-1.5 animate-pop rounded-full"
-            />
+            <span key={hue} className="flex items-center gap-1">
+              <span
+                style={{ backgroundColor: hue, ...step(180 + index * 50) }}
+                className="size-1 shrink-0 animate-pop rounded-full"
+              />
+              <span
+                style={{
+                  width: `${[7, 5, 6, 4][index]! * 0.25}rem`,
+                  ...step(180 + index * 50),
+                }}
+                className="h-1 animate-glide rounded-full bg-muted-foreground/35"
+              />
+            </span>
           ))}
         </div>
 
@@ -183,40 +187,53 @@ function Mark() {
             />
           </div>
 
-          <div className="flex min-h-0 flex-1 bg-card">
-            <div className="flex w-14 shrink-0 flex-col gap-1.5 border-r p-2">
-              {[9, 7, 8].map((width, index) => (
+          {/* The pane, and the one thing in the mark that never finishes: a
+              sweep across it for as long as the app is still opening. */}
+          <div className="relative min-h-0 flex-1 overflow-hidden bg-card p-2">
+            <div className="flex flex-col gap-1.5">
+              {[11, 8, 10, 6].map((width, index) => (
                 <span
                   key={index}
                   style={{
                     width: `${width * 0.25}rem`,
-                    ...step(360 + index * 70),
+                    ...step(440 + index * 60),
                   }}
-                  className="h-1 animate-glide rounded-full bg-muted-foreground/35"
+                  className="block h-1 animate-rise rounded-full bg-muted-foreground/30"
                 />
               ))}
             </div>
+            <span
+              aria-hidden
+              className="absolute inset-y-0 left-0 w-1/2 animate-sweep bg-gradient-to-r from-transparent via-primary/25 to-transparent"
+            />
+          </div>
+        </div>
 
-            {/* The panel, and the one thing in the mark that never finishes:
-                a sweep across it for as long as the app is still opening. */}
-            <div className="relative min-w-0 flex-1 overflow-hidden p-2">
-              <div className="flex flex-col gap-1.5">
-                {[11, 8, 10, 6].map((width, index) => (
-                  <span
-                    key={index}
-                    style={{
-                      width: `${width * 0.25}rem`,
-                      ...step(440 + index * 60),
-                    }}
-                    className="block h-1 animate-rise rounded-full bg-muted-foreground/30"
-                  />
-                ))}
-              </div>
+        {/* The right column: the Explorer, and the dock under it. One header
+            rather than a row of tabs, because it holds one thing — the file
+            tree of whichever checkout the left column has clicked. */}
+        <div className="flex w-14 shrink-0 flex-col border-l bg-card">
+          <div className="flex h-4.5 shrink-0 items-center gap-1 border-b px-2">
+            <span
+              style={{ backgroundColor: HUES[0], ...step(180) }}
+              className="size-1.5 shrink-0 animate-pop rounded-full"
+            />
+            <span
+              style={step(240)}
+              className="h-1 w-4 animate-glide rounded-full bg-muted-foreground/35"
+            />
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col gap-1.5 p-2">
+            {[9, 7, 8].map((width, index) => (
               <span
-                aria-hidden
-                className="absolute inset-y-0 left-0 w-1/2 animate-sweep bg-gradient-to-r from-transparent via-primary/25 to-transparent"
+                key={index}
+                style={{
+                  width: `${width * 0.25}rem`,
+                  ...step(360 + index * 70),
+                }}
+                className="h-1 animate-glide rounded-full bg-muted-foreground/35"
               />
-            </div>
+            ))}
           </div>
         </div>
       </div>

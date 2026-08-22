@@ -6,23 +6,29 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 
-import { SECTIONS, SECTION_ACCENT } from "./activity-bar"
-import type { Section } from "@/lib/rail"
+import { SECTIONS, SECTION_ACCENT } from "./section-marks"
+import { isSection } from "@/lib/sections"
+import type { Pane } from "@/lib/store"
 
 /**
- * What each section offers somebody with nothing open — the sidebar on the
- * left, named by what is actually in it.
+ * Where the thing this pane last held is picked from — which is not one place
+ * any more, and saying so is the whole job of these lines.
  *
- * There is no hint for a session, because there is no section for one: the
- * Explorer hint below covers the sidebar a session is started from, and a pane
- * with no tab in it is never the terminal's.
+ * The Explorer is the panel on the **right** and the projects are the column on
+ * the **left**, so a hint saying "the sidebar" would be pointing at whichever of
+ * the two the reader was not looking at. The other three have no list on screen
+ * at all while `SIDEBAR_SECTIONS` is `Projects` alone — their panes and tabs
+ * still work, so the honest thing to name is the way in that is still there:
+ * `⌘P`, which indexes every table, request and note.
  */
-const HINTS: Record<Section, string> = {
-  files:
-    "Pick a file from the tree on the left, or start a session from the list under it.",
-  database: "Pick a table from the list on the left, or open a query tab.",
-  api: "Pick a request from the list on the left, or create one.",
-  note: "Pick a note from the list on the left, or write a new one.",
+const HINTS: Record<Pane, string> = {
+  files: "Pick a file from the Explorer on the right.",
+  changes:
+    "Pick a file under Changes in the Explorer to read what this checkout has changed.",
+  database: "Find a table with ⌘P, or open a query tab.",
+  api: "Find a request with ⌘P.",
+  note: "Find a note with ⌘P.",
+  worktree: "Pick a worktree under a project on the left to open its chat.",
 }
 
 /**
@@ -42,31 +48,35 @@ const HINTS: Record<Section, string> = {
  * is where the last tab was and there is no last one.
  */
 export function NothingOpen({
-  section,
+  pane,
   hasOpenTabs,
 }: {
-  section: Section
+  pane: Pane
   hasOpenTabs: boolean
 }) {
-  const { Icon } = SECTIONS.find((entry) => entry.id === section)!
+  // A worktree chat has no section of its own — it is not one of the four kinds
+  // the workspace holds — so the pane it draws in borrows the Explorer's mark
+  // rather than inventing a fifth for an empty state.
+  const mark = isSection(pane) ? pane : "files"
+  const { Icon } = SECTIONS.find((entry) => entry.id === mark)!
 
   return (
     <Empty className="size-full border-0">
       <EmptyHeader>
-        <EmptyMedia variant="icon" style={{ color: SECTION_ACCENT[section] }}>
+        <EmptyMedia variant="icon" style={{ color: SECTION_ACCENT[mark] }}>
           <Icon />
         </EmptyMedia>
         <EmptyTitle>{hasOpenTabs ? "No tab open" : "Nothing open"}</EmptyTitle>
         <EmptyDescription>
           {hasOpenTabs ? (
             <>
-              Pick one from the strip above — a table, a request, a session and
-              a note sit side by side there, whichever panel they belong to.
+              Pick one from the strip above — a table, a request, a chat and a
+              note sit side by side there, whichever panel they belong to.
             </>
           ) : (
             <>
-              {HINTS[section]} Whatever you open joins the strip above, and
-              stays there while you work in another panel.
+              {HINTS[pane]} Whatever you open joins the strip above, and stays
+              there while you work in another panel.
             </>
           )}
         </EmptyDescription>

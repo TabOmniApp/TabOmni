@@ -14,8 +14,16 @@ import { nameOf } from "./paths"
  *
  * `blocks` is that block editor, and it is one viewer rather than two: what
  * changes between a `.note` and a `.md` is the file it writes, not the pane.
+ *
+ * `diff` is the odd one: every other viewer here is a way of reading the file,
+ * and that one is a way of reading what has happened to it — the committed side
+ * beside the working one. Offered for anything textual rather than only for a
+ * file git has something to say about, because "what has changed in this" is a
+ * fair question to ask of a file that turns out to have changed in nothing, and
+ * a menu entry that appears and disappears with the working tree is one nobody
+ * can learn. It is never the default: a diff is what somebody asks for.
  */
-export type Viewer = "image" | "text" | "markdown" | "blocks"
+export type Viewer = "image" | "text" | "markdown" | "blocks" | "diff"
 
 /**
  * What the studio will draw as a picture.
@@ -94,23 +102,27 @@ export function noteFileName(name: string): string {
 export function viewersFor(filePath: string): Viewer[] {
   if (isImage(filePath)) {
     // An SVG is a picture first — that is what somebody double-clicking one
-    // wants to see — and text when they say so.
-    return extensionOf(filePath) === "svg" ? ["image", "text"] : ["image"]
+    // wants to see — and text when they say so, which is what earns it a diff
+    // too. A PNG has neither: two versions of it as text is nothing anybody
+    // reads, and comparing the pictures is a different feature.
+    return extensionOf(filePath) === "svg"
+      ? ["image", "text", "diff"]
+      : ["image"]
   }
 
   // A `.md` opens in the editor, not the preview. The Explorer is where a
   // project's files are worked on, and a README clicked from a tree of source
   // is more often on the way to being changed than being read — so the
   // rendered view is the one asked for rather than the one arrived at.
-  if (isMarkdown(filePath)) return ["text", "markdown", "blocks"]
+  if (isMarkdown(filePath)) return ["text", "markdown", "blocks", "diff"]
 
   // A `.note` is the other way round from a `.md`: the editor is the point of
   // the file, and the block document underneath it is JSON nobody writes by
   // hand — offered second all the same, since a note that will not open is a
   // note whose text somebody needs to see.
-  if (isNote(filePath)) return ["blocks", "text"]
+  if (isNote(filePath)) return ["blocks", "text", "diff"]
 
-  return ["text"]
+  return ["text", "diff"]
 }
 
 export function defaultViewer(filePath: string): Viewer {
@@ -136,4 +148,5 @@ const FIXED_LABELS: Record<Exclude<Viewer, "blocks">, string> = {
   image: "Image preview",
   text: "Text editor",
   markdown: "Markdown preview",
+  diff: "Diff",
 }

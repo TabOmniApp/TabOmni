@@ -1,4 +1,5 @@
 import type { DbEngine } from "@shared/api"
+import { dateInputKind } from "./date-input"
 import type { Column, ForeignKey } from "./engines"
 
 /**
@@ -8,7 +9,7 @@ import type { Column, ForeignKey } from "./engines"
  * `foreign-key`, the matching constraint) every time.
  */
 export type FieldKind =
-  "generated" | "boolean" | "select" | "foreign-key" | "text"
+  "generated" | "boolean" | "select" | "foreign-key" | "date" | "text"
 
 /**
  * A column is only ever `foreign-key` when it is the *sole* column of some
@@ -76,7 +77,9 @@ function isBooleanType(type: string, engine: DbEngine): boolean {
  * narrowest, least ambiguous signal after that; a native enum beats a
  * foreign key when a column happens to be both (rare — an enum-typed column
  * referencing an enum-typed key) since a closed label set is more useful
- * than a searchable row picker.
+ * than a searchable row picker; and a key wins over `date` for the same
+ * reason — a picker of real rows says more than a calendar over the one
+ * timestamp that happens to be a key.
  */
 export function inferFieldKind(
   column: Column,
@@ -87,6 +90,7 @@ export function inferFieldKind(
   if (isBooleanType(column.type, engine)) return "boolean"
   if (column.enumValues && column.enumValues.length > 0) return "select"
   if (foreignKey) return "foreign-key"
+  if (dateInputKind(column.type)) return "date"
   return "text"
 }
 

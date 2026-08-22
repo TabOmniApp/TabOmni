@@ -85,11 +85,10 @@ const {
   processes,
   sqlConnections,
   docker,
-  transcripts,
   terminals,
   preview,
   mcp,
-  assistant,
+  worktreeChats,
   tsServers,
   watchers,
   noteFilePath,
@@ -232,7 +231,6 @@ app.on("before-quit", (event) => {
   void (async () => {
     // Synchronous kills first, so the slow work below cannot delay them.
     processes.stopAll()
-    transcripts.stopAll()
     // Child processes with nothing to flush: a TypeScript server holds a
     // project in memory and no state worth writing.
     tsServers.stopAll()
@@ -262,7 +260,7 @@ app.on("before-quit", (event) => {
         mcp.stop(),
         // A turn in flight is a `claude` this app spawned; it goes with the app
         // rather than being left talking to a window that has gone.
-        assistant.dispose(),
+        worktreeChats.dispose(),
       ]),
       // A wedged daemon must not leave the app unquittable.
       new Promise((resolve) => setTimeout(resolve, CLEANUP_TIMEOUT_MS)),

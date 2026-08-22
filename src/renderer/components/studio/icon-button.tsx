@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react"
+import type { ComponentProps, ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -13,6 +13,17 @@ import {
  * used to lean on the `title` attribute, which the OS renders in its own style
  * after its own delay. `label` does three jobs here: the tooltip, the
  * accessible name, and nothing else to keep in sync.
+ *
+ * **Everything it is not asked about goes to the button**, `ref` included, and
+ * that is what makes it usable as another component's trigger. Base UI's
+ * `render` prop clones the element it is handed and passes it the trigger's own
+ * props — the ref it anchors a popup to, `aria-expanded`, `onMouseDown` — so a
+ * component that names its props and drops the rest silently swallows all of
+ * them: `DropdownMenuTrigger render={<IconButton …/>}` drew a button that
+ * highlighted, toggled a menu open, and opened it against no anchor at all,
+ * which reads as a button that does nothing. There is nothing to warn about it
+ * either, since dropping a prop is what every component does with props it does
+ * not take.
  */
 export function IconButton({
   label,
@@ -24,6 +35,7 @@ export function IconButton({
   className,
   style,
   children,
+  ...rest
 }: {
   label: string
   /** Which side the tooltip goes on. Worth setting only where the default
@@ -35,11 +47,11 @@ export function IconButton({
   pressed?: boolean
   variant?: "ghost" | "outline"
   className?: string
-  /** For the one thing a class cannot carry: a section's hue, which lives in a
-   * CSS variable Tailwind never sees as a literal. */
-  style?: CSSProperties
   children: ReactNode
-}) {
+} & Omit<
+  ComponentProps<typeof Button>,
+  "children" | "variant" | "size" | "disabled" | "onClick"
+>) {
   return (
     <Tooltip>
       <TooltipTrigger
@@ -53,6 +65,7 @@ export function IconButton({
             aria-pressed={pressed}
             className={className}
             style={style}
+            {...rest}
           >
             {children}
           </Button>

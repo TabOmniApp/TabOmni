@@ -1,5 +1,5 @@
 import { useStudio } from "../store"
-import { folderIdOf, useGitStatus } from "./git-status"
+import { rootIdOf, useGitStatus } from "./git-status"
 import { nameOf } from "./paths"
 import { useFiles } from "./store"
 
@@ -41,12 +41,12 @@ export function watchExpandedDirectories(): () => void {
     // What changed in it may have changed what git says about it. Debounced in
     // the git store rather than here, since a checkout reports every directory
     // it touched and they all mean the same one read.
-    const folderId = folderIdOf(dir)
-    if (folderId !== null) useGitStatus.getState().schedule(folderId)
+    const rootId = rootIdOf(dir)
+    if (rootId !== null) useGitStatus.getState().schedule(rootId)
 
     // `.git` is watched for exactly this: the branch beside the folder, and
     // the row colours above, are both wrong the moment somebody commits or
-    // checks out in a Terminal session. It is never a directory the tree has
+    // checks out in the dock's shell. It is never a directory the tree has
     // open, so nothing above did anything with it.
     if (nameOf(dir) === ".git") void useStudio.getState().refreshBranches()
   })

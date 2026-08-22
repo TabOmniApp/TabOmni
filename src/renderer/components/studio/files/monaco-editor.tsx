@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react"
 import { useTheme } from "next-themes"
 
-import { modelFor } from "@/lib/files/monaco"
+import { modelFor, releaseModel } from "@/lib/files/monaco"
 import {
   closeFile,
   openFile,
@@ -116,10 +116,10 @@ export default function MonacoFileEditor({
       changed.dispose()
       closeFile(initial.path)
       editor.dispose()
-      // The model goes with the tab. Kept alive across a hidden tab (the pane
-      // stays mounted) but not across a closed one, where it would be a copy
-      // of a file nobody is looking at, held for the rest of the run.
-      model.dispose()
+      // Let go rather than dispose: the same model is the right-hand side of
+      // this file's diff, which the `Changes` tab may be showing right now.
+      // `releaseModel` disposes it once nothing holds it — see `modelFor`.
+      releaseModel(initial.path)
     }
   }, [])
 

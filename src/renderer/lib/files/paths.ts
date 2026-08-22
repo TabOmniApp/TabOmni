@@ -75,6 +75,38 @@ export function isInside(root: string, target: string): boolean {
   return target.startsWith(prefix)
 }
 
+/**
+ * `target` as it reads from inside `root`: `/a/b/c.ts` under `/a` → `b/c.ts`.
+ *
+ * Handed back whole when it is not under `root` at all, which is the honest
+ * answer rather than a `../..` chain: a path from another checkout has to say
+ * so, in a message being typed and in a row of a list alike.
+ *
+ * The root itself is `""`, which is the same rule taken to its end — there is
+ * nothing left of the path once the root is off it. That is what a caller wants:
+ * the Changes list writes this under a row's name and draws no line for a file
+ * that sits in the checkout's own directory, where the name has already said
+ * everything. Handing the absolute path back for that case put the whole of
+ * `~/.tabomni/workspace/worktrees/<id>/<branch>` under a file called
+ * `test.txt`.
+ */
+export function relativeTo(root: string, target: string): string {
+  // An empty root is not a root everything is under: `isInside` reads it as one
+  // — its prefix comes out as `/`, which every absolute path starts with — and
+  // that would hand back a path with its leading separator shaved off.
+  if (!root) return target
+
+  // A separator on the end of the root is not part of it. Normalised first so
+  // that the three questions below — is it the root, is it under the root, how
+  // much of it is the root — cannot answer as if it were written two ways.
+  const last = root.slice(-1)
+  const base = last === "/" || last === "\\" ? root.slice(0, -1) : root
+
+  if (target === base) return ""
+  if (!isInside(base, target)) return target
+  return target.slice(base.length + 1)
+}
+
 /** The separator a path is already written with, defaulting to `/` for one
  * that has none. */
 function separatorOf(target: string): string {

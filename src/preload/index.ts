@@ -9,13 +9,12 @@ import {
   IPC,
   type DesktopApi,
   type DirectoryChange,
-  type AssistantEvent,
   type MenuCommand,
   type ProcessExit,
   type ProcessOutput,
+  type WorktreeChatEvent,
   type TerminalExit,
   type TerminalOutput,
-  type TranscriptEvent,
 } from "../shared/api"
 
 /**
@@ -42,6 +41,7 @@ const api: DesktopApi = {
 
   pickDirectory: () => ipcRenderer.invoke(IPC.pickDirectory),
   pickImages: () => ipcRenderer.invoke(IPC.pickImages),
+  pickFiles: (directory) => ipcRenderer.invoke(IPC.pickFiles, directory),
   // Never leaves this script: `webUtils` only resolves a real path for a
   // `File` from inside the preload's own privileged context.
   getPathForFile: (file) => webUtils.getPathForFile(file),
@@ -54,15 +54,6 @@ const api: DesktopApi = {
   onRequestsChanged: (listener) =>
     subscribe<null>(IPC.requestsChanged, listener),
 
-  assistantSend: (prompt) => ipcRenderer.invoke(IPC.assistantSend, prompt),
-  assistantStop: () => ipcRenderer.invoke(IPC.assistantStop),
-  assistantChats: () => ipcRenderer.invoke(IPC.assistantChats),
-  assistantOpen: (id) => ipcRenderer.invoke(IPC.assistantOpen, id),
-  assistantNew: () => ipcRenderer.invoke(IPC.assistantNew),
-  assistantDelete: (id) => ipcRenderer.invoke(IPC.assistantDelete, id),
-  onAssistantEvent: (listener) =>
-    subscribe<AssistantEvent>(IPC.assistantEvent, listener),
-
   dockerStatus: () => ipcRenderer.invoke(IPC.dockerStatus),
 
   listDatabases: () => ipcRenderer.invoke(IPC.listDatabases),
@@ -74,7 +65,11 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.testDatabaseConnection, input),
 
   gitBranch: (folderId) => ipcRenderer.invoke(IPC.gitBranch, folderId),
-  gitStatus: (folderId) => ipcRenderer.invoke(IPC.gitStatus, folderId),
+  gitStatus: (folderId, worktreeId) =>
+    ipcRenderer.invoke(IPC.gitStatus, folderId, worktreeId ?? null),
+  gitChanges: (folderId, worktreeId) =>
+    ipcRenderer.invoke(IPC.gitChanges, folderId, worktreeId ?? null),
+  fileAtHead: (filePath) => ipcRenderer.invoke(IPC.fileAtHead, filePath),
 
   listDirectory: (dirPath) => ipcRenderer.invoke(IPC.listDirectory, dirPath),
   readTextFile: (filePath) => ipcRenderer.invoke(IPC.readTextFile, filePath),
@@ -124,6 +119,22 @@ const api: DesktopApi = {
   saveCookies: (cookies) => ipcRenderer.invoke(IPC.saveCookies, cookies),
   httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
 
+  listWorktreeChats: () => ipcRenderer.invoke(IPC.listWorktreeChats),
+  createWorktreeChat: (worktreeId) =>
+    ipcRenderer.invoke(IPC.createWorktreeChat, worktreeId),
+  readWorktreeChat: (id) => ipcRenderer.invoke(IPC.readWorktreeChat, id),
+  deleteWorktreeChat: (id) => ipcRenderer.invoke(IPC.deleteWorktreeChat, id),
+  setWorktreeChatOptions: (id, options) =>
+    ipcRenderer.invoke(IPC.setWorktreeChatOptions, id, options),
+  sendWorktreeChat: (id, prompt) =>
+    ipcRenderer.invoke(IPC.sendWorktreeChat, id, prompt),
+  stopWorktreeChat: (id) => ipcRenderer.invoke(IPC.stopWorktreeChat, id),
+  onWorktreeChatEvent: (listener) =>
+    subscribe<WorktreeChatEvent>(IPC.worktreeChatEvent, listener),
+  listWorktrees: () => ipcRenderer.invoke(IPC.listWorktrees),
+  createWorktree: (folderId, branch, from) =>
+    ipcRenderer.invoke(IPC.createWorktree, folderId, branch, from),
+  removeWorktree: (id) => ipcRenderer.invoke(IPC.removeWorktree, id),
   listNotes: () => ipcRenderer.invoke(IPC.listNotes),
   saveNotes: (notes) => ipcRenderer.invoke(IPC.saveNotes, notes),
   listNoteFolders: () => ipcRenderer.invoke(IPC.listNoteFolders),
@@ -146,8 +157,8 @@ const api: DesktopApi = {
   deleteNoteFiles: (fileNames) =>
     ipcRenderer.invoke(IPC.deleteNoteFiles, fileNames),
 
-  startProcess: (folderId, command, args) =>
-    ipcRenderer.invoke(IPC.startProcess, folderId, command, args),
+  startProcess: (folderId, command, args, worktreeId) =>
+    ipcRenderer.invoke(IPC.startProcess, folderId, command, args, worktreeId),
   stopProcess: (processId) => ipcRenderer.invoke(IPC.stopProcess, processId),
 
   onProcessOutput: (listener) =>
@@ -155,21 +166,8 @@ const api: DesktopApi = {
   onProcessExit: (listener) =>
     subscribe<ProcessExit>(IPC.processExit, listener),
 
-  agentTools: () => ipcRenderer.invoke(IPC.agentTools),
-  agentInstall: (cols, rows, kind) =>
-    ipcRenderer.invoke(IPC.agentInstall, cols, rows, kind),
-  claudeCommands: (folderId) =>
-    ipcRenderer.invoke(IPC.claudeCommands, folderId),
-
-  terminalCreate: (folderId, cols, rows, kind, claudeSessionId) =>
-    ipcRenderer.invoke(
-      IPC.terminalCreate,
-      folderId,
-      cols,
-      rows,
-      kind,
-      claudeSessionId
-    ),
+  terminalCreate: (folderId, cols, rows, worktreeId) =>
+    ipcRenderer.invoke(IPC.terminalCreate, folderId, cols, rows, worktreeId),
   terminalWrite: (terminalId, data) =>
     ipcRenderer.invoke(IPC.terminalWrite, terminalId, data),
   terminalResize: (terminalId, cols, rows) =>
@@ -181,19 +179,6 @@ const api: DesktopApi = {
     subscribe<TerminalOutput>(IPC.terminalData, listener),
   onTerminalExit: (listener) =>
     subscribe<TerminalExit>(IPC.terminalExit, listener),
-
-  transcriptWatch: (mirrorId, folderId, claudeSessionId) =>
-    ipcRenderer.invoke(
-      IPC.transcriptWatch,
-      mirrorId,
-      folderId,
-      claudeSessionId
-    ),
-  transcriptUnwatch: (mirrorId) =>
-    ipcRenderer.invoke(IPC.transcriptUnwatch, mirrorId),
-
-  onTranscriptEvent: (listener) =>
-    subscribe<TranscriptEvent>(IPC.transcriptEvent, listener),
 
   systemUsage: () => ipcRenderer.invoke(IPC.systemUsage),
 }

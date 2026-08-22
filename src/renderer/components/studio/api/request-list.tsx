@@ -66,7 +66,7 @@ import {
   variablesFrom,
 } from "@/lib/http/store"
 import { IconButton } from "../icon-button"
-import { PanelHeader } from "../panel-header"
+import { PanelHeader, type Fold } from "../panel-header"
 import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
 
@@ -111,7 +111,7 @@ type PendingDelete =
  * (or the root drop zone) to reparent it. */
 type DragItem = { kind: "request" | "folder"; id: string }
 
-export function RequestList() {
+export function RequestList({ fold }: { fold?: Fold }) {
   const requests = useApi((state) => state.requests)
   const selectedId = useApi((state) => state.selectedId)
   const refresh = useApi((state) => state.refresh)
@@ -395,7 +395,7 @@ export function RequestList() {
   return (
     <ContextMenu>
       <div className="flex h-full flex-col">
-        <PanelHeader title="API">
+        <PanelHeader title="API" {...fold}>
           <Select
             items={environments.map((environment) => ({
               value: environment.id,

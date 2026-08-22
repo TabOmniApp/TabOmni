@@ -67,8 +67,8 @@ export type QueryTab = {
    * rather than as a silent absence of the Row/Fields toolbar. Null when
    * `resultEdit` is set, or before anything has run. */
   readOnlyReason: string | null
-  /** Whether the trailing "New row" draft is open, for the one result this
-   * can ever apply to. */
+  /** Whether the New row dialog is open, for the one result this can ever
+   * apply to. */
   inserting: boolean
   /** What actually ran last — the selection rather than `sql` when the console
    * was run over one, with the row cap already appended. A rerun after a row

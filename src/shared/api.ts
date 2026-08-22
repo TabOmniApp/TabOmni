@@ -76,6 +76,11 @@ export type FileIndexEntry = {
   /** Which workspace folder it was found under, for the hint beside it: two
    * repositories in one workspace both have a `src/index.ts`. */
   folderId: string
+  /** Set when it was found in a `git worktree` checkout of that folder rather
+   * than in the folder itself. Two checkouts of one project hold the same
+   * `relative` for every file, so the branch is the only thing that tells a
+   * row from its twin. */
+  worktreeId?: string
 }
 
 /**
@@ -100,6 +105,32 @@ export type GitStatusEntry = {
   path: string
   state: GitFileState
   directory: boolean
+}
+
+/**
+ * One changed file in a checkout — a row of the Explorer's Changes list.
+ *
+ * `GitStatusEntry` answers "what is this file to git" for a row that already
+ * exists in the tree; this answers "what has changed here", which is a
+ * different question with a different shape: it is a **list** rather than a
+ * lookup, it leaves out the ignored (a repository's ignored files are not
+ * anybody's changes), and it carries the line counts, which cost a second git
+ * call and are wanted for a handful of paths rather than for all of them.
+ */
+export type GitChange = {
+  path: string
+  state: GitFileState
+  /**
+   * Lines added and removed against `HEAD`, or null when there is no honest
+   * number: a binary file, a wholly new directory, a file too large to count,
+   * or a repository with no commit to compare against.
+   *
+   * Null rather than zero, because `+0 -0` is a real answer — a file whose only
+   * change is a mode or a line ending — and a row that cannot tell the two
+   * apart is a row that lies about one of them.
+   */
+  added: number | null
+  removed: number | null
 }
 
 /**
@@ -276,63 +307,14 @@ export type ProcessExit = {
 }
 
 /**
- * What a session in the Terminal panel runs, all of it on the host and in one
- * of the workspace's folders.
- *
- * `terminal` is the user's own shell; `claude` is a coding CLI installed on the
- * machine, which is the reason this is a union at all — that CLI being absent
- * is a normal state the panel has to show, not an error.
- *
- * Claude Code is one kind, not two. A session is always the interactive CLI in
- * a pty; whether it is drawn as a terminal or as a chat is a view the user
- * toggles, not a different thing to run — see `electron/transcript.ts` for how
- * the chat draws that same session.
- */
-export type AgentKind = "terminal" | "claude"
-
-/**
- * Whether one kind of session can be started on this machine.
- *
- * Reported per kind rather than as a single "tools are ready" flag, because the
- * picker offers each one separately: a missing CLI turns its row into an
- * install button and leaves the rest alone.
- */
-export type AgentToolStatus = {
-  kind: AgentKind
-  installed: boolean
-  /**
-   * What the login shell resolved the command to — a path, or an alias
-   * definition for the CLIs that install one. Shown as the row's subtext, and
-   * null when nothing was found.
-   */
-  resolved: string | null
-  /** Null for the shell, which is on every machine and installs nothing. */
-  installCommand: string | null
-}
-
-/**
- * One chat with the workspace assistant.
- *
- * `id` is the `claude` session id the conversation runs under, so it is also
- * the transcript the CLI writes — the same id the Conversations list in
- * Explorer would show it under.
- */
-export type AssistantChat = {
-  id: string
-  /** The first thing that was asked, shortened. A conversation names itself:
-   * asking the model for a title would be a second turn to pay for and wait
-   * on, for something the first line already says. */
-  title: string
-  createdAt: string
-  updatedAt: string
-}
-
-/**
  * One line of a chat, as it is drawn and as it is kept on disk.
  *
- * Here rather than in the renderer because both sides hold it now: the panel
- * draws it, and the main process — which sees every event — is what writes the
- * chat down, so a chat reopened next week is the one that was had.
+ * Here rather than in the renderer because both sides hold it: the pane draws
+ * it, and the main process — which sees every event — is what writes the chat
+ * down, so a chat reopened next week is the one that was had.
+ *
+ * `Assistant` names the *role*, not a panel: the workspace assistant that once
+ * shared these types is gone, and a worktree's chat is the conversation left.
  */
 export type AssistantMessage =
   | { id: string; role: "user"; text: string }
@@ -342,13 +324,13 @@ export type AssistantMessage =
   | { id: string; role: "error"; text: string }
 
 /**
- * One thing that happened while the assistant was answering.
+ * One thing that happened while a turn was being answered.
  *
- * The assistant is `claude -p` in `--output-format stream-json`, so what
- * arrives is the CLI's own event stream, narrowed to the three things the panel
- * draws: a message, a tool it called, and the end of the turn. Anything else in
- * that stream — the init line, a tool's result, the token counts — is read by
- * `main/assistant.ts` and not passed on.
+ * A turn is `claude -p` in `--output-format stream-json`, so what arrives is
+ * the CLI's own event stream, narrowed to the three things a pane draws: a
+ * message, a tool it called, and the end of the turn. Anything else in that
+ * stream — the init line, a tool's result, the token counts — is read by
+ * `main/claude-print.ts` and not passed on.
  */
 export type AssistantEvent =
   /** One assistant message, as markdown. A turn can produce several. */
@@ -397,92 +379,11 @@ export const MCP_SETTING_KEYS: Record<McpServerName, string> = {
   notes: "mcp.notes",
 }
 
-/**
- * Where one entry in the composer's `/` menu came from.
- *
- * Kept on the entry rather than resolved away, because the menu says it: two
- * rows can otherwise look identical and behave differently, and "is this
- * mine or the repository's?" is the first question about a command you did not
- * expect to see.
- */
-export type ClaudeSlashSource =
-  | "builtin"
-  | "project-command"
-  | "user-command"
-  | "project-skill"
-  | "user-skill"
-
-/** One row of the composer's `/` menu — see `electron/claude-commands.ts`. */
-export type ClaudeSlashCommand = {
-  /** What is typed after the slash: `review`, `frontend:test`, `web-perf`. */
-  name: string
-  /** One line for the menu. Empty when the file declared no `description`. */
-  description: string
-  /** A command's own `argument-hint` frontmatter (`[pr-number]`), shown after
-   * the name so a command that needs an argument looks like it does. Null for
-   * skills and built-ins, which declare none. */
-  argumentHint: string | null
-  source: ClaudeSlashSource
-}
-
 export type TerminalOutput = {
   terminalId: string
   /** Raw bytes from the shell, ANSI escapes included. */
   chunk: string
 }
-
-/** One piece of an assistant turn, as the chat view draws it. */
-export type TranscriptBlock =
-  | { type: "text"; text: string }
-  | { type: "thinking"; text: string }
-  | { type: "tool-use"; toolUseId: string; name: string; input: unknown }
-
-/**
- * One turn of a conversation.
- *
- * Deliberately this app's own vocabulary rather than the CLI's transcript
- * records passed through: that format grows fields with every CLI release, and
- * translating it in exactly one place (`electron/transcript.ts`) is what keeps
- * a version bump from reaching the components. A record that translation does
- * not recognise is ignored there, so a newer CLI adds nothing to what these
- * components must handle.
- */
-export type TranscriptEntry =
-  | { type: "user"; text: string }
-  | { type: "assistant"; blocks: TranscriptBlock[] }
-  | { type: "tool-result"; toolUseId: string; text: string; isError: boolean }
-
-/**
- * What the chat view is told as a session's transcript is written.
- *
- * Only two shapes, because a file is only ever replaced or appended to:
- * `reset` is the whole conversation from the start, `append` is what has been
- * added since the last event. There is no per-token event and no "turn
- * finished" — the CLI writes a line once a message is complete, so message
- * boundaries are all a reader of the file can see.
- */
-export type TranscriptEventBody = {
-  type: "reset" | "append"
-  entries: TranscriptEntry[]
-  /**
-   * Whether the agent still owes a reply — read from the transcript, not
-   * guessed at from how recently it was written.
-   *
-   * The CLI records a `stop_reason` on every assistant message: `tool_use`
-   * means it is going to carry on, anything else that it has stopped. A user
-   * turn puts it back to true. That is the only account of a turn a reader of
-   * the file gets, and it is an exact one.
-   */
-  working: boolean
-}
-
-/**
- * One event, tagged with the pane it belongs to.
- *
- * The tag is the session tab's own id, not the CLI's: two tabs may be mirroring
- * two conversations, and it is the tab that has to tell them apart.
- */
-export type TranscriptEvent = { mirrorId: string } & TranscriptEventBody
 
 export type TerminalExit = {
   terminalId: string
@@ -660,6 +561,153 @@ export type HttpResponseResult = {
 }
 
 /**
+ * One `git worktree` of a workspace folder: a second checkout, on its own
+ * branch, that this app created.
+ *
+ * The point is isolation. Two agents on one project stand on each other — the
+ * same files, the same branch, the same index — and a worktree is git's own
+ * answer to that: a directory and a branch of its own, sharing the single
+ * object store, so nothing is copied and nothing is duplicated. It is what
+ * Conductor is built on.
+ *
+ * **This is the one place the studio creates a directory.** Everywhere else a
+ * folder is somewhere already on the machine, worked on where it is, and the
+ * rule is that nothing is written into it that the user did not ask for. A
+ * worktree is asked for, and it goes under `~/.tabomni/worktrees/` rather than
+ * beside the repository — so a project's directory stays exactly as its owner
+ * left it, and removing every worktree leaves no trace in it.
+ *
+ * The record is the app's own list, not git's. `git worktree list` is still the
+ * truth about what exists on disk (see `worktrees()` in `main/git.ts`); this is
+ * what lets the renderer name one by id and main resolve that to a cwd without
+ * trusting a path from the renderer.
+ */
+export type WorktreeRecord = {
+  id: string
+  /** The workspace folder it was cut from. */
+  folderId: string
+  /** The branch checked out in it, created with it. */
+  branch: string
+  /** Absolute path to the checkout. */
+  path: string
+  /** What the branch was cut from — `HEAD`, `main`, `origin/main`. Kept so the
+   * chat can say where this checkout came from; optional because it was added
+   * after the record was. */
+  from?: string
+  createdAt: string
+}
+
+/**
+ * One chat in a worktree: a conversation the app hosts, not a pty it reads.
+ *
+ * The app hosts it rather than reading one the CLI wrote: `claude -p` per turn
+ * in the checkout's own directory, with the app holding the messages. There
+ * used to be a session panel that did the opposite — the interactive CLI in a
+ * pty, with a chat view tailing its transcript — and this is what replaced it.
+ * See `main/worktree-chat.ts`, including why it runs with edits pre-approved.
+ *
+ * `id` is also the CLI session id, so the record and the conversation the CLI
+ * resumes name the same thing.
+ */
+/**
+ * `--effort`, weakest first.
+ *
+ * The CLI's own levels rather than a scale of this app's making, so what the
+ * picker says and what the turn is given are the same word.
+ */
+export const CHAT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const
+
+export type ChatEffort = (typeof CHAT_EFFORTS)[number]
+
+/**
+ * The models a chat can be put on.
+ *
+ * Aliases rather than full names — `opus` is whichever Opus that `claude` is
+ * the latest of — because pinning `claude-opus-5` here would mean this list
+ * going stale every time the CLI learns a newer one. An alias it does not know
+ * fails the turn loudly, which is why these are a list and not a text field.
+ */
+export const CHAT_MODELS: { id: string; label: string }[] = [
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "fable", label: "Fable" },
+  { id: "haiku", label: "Haiku" },
+]
+
+/**
+ * What a chat's own toolbar decides, held per chat.
+ *
+ * Per chat rather than per workspace because that is the unit somebody thinks
+ * in: the checkout being refactored wants Opus at `max`, and the chat asking
+ * where a function is called wants Haiku at `low`. The composer writes them
+ * straight to the record, so a chat reopened after a restart is on the footing
+ * it was left on.
+ *
+ * Whole rather than a patch, everywhere it is passed: three fields written at
+ * once cannot half-arrive, and a `null` here means "whatever the user's own
+ * `claude` does" rather than "unchanged".
+ */
+export type WorktreeChatOptions = {
+  /** `--model`, or null for whichever model that `claude` is configured on. */
+  model: string | null
+  /** `--effort`, or null for the CLI's own default. */
+  effort: ChatEffort | null
+  /**
+   * A turn that reads and does not write: the plan, and nothing changed.
+   *
+   * Deliberately **not** `--permission-mode plan`, which cannot work in print
+   * mode — leaving plan mode is `ExitPlanMode`, which is a prompt, and there is
+   * nobody to answer it. See `PLAN_TOOLS` in `main/worktree-chat.ts`.
+   */
+  plan: boolean
+}
+
+/** A chat with nothing chosen: the CLI's own model and effort, and free to
+ * edit, which is what the panel did before there was a toolbar. */
+export const DEFAULT_CHAT_OPTIONS: WorktreeChatOptions = {
+  model: null,
+  effort: null,
+  plan: false,
+}
+
+export type WorktreeChat = {
+  id: string
+  worktreeId: string
+  /** The first thing asked, shortened — `"Untitled"` until there is one. */
+  title: string
+  /**
+   * Whether the CLI has been started on this id yet.
+   *
+   * On the record rather than in memory, because the CLI's own session outlives
+   * this app's run: `id` is the session id, so a chat sent to before a restart
+   * has to come back as `--resume`. Held in a `Set` at first, which was empty
+   * again on every launch — the next message re-offered `--session-id` and the
+   * CLI refused it as already in use, which is a chat that can never be
+   * continued.
+   *
+   * Optional because it was added after the record was: a chat written before
+   * this has no field, and `undefined` reads as "not started" — the wrong way
+   * round for one that was, but only for one turn, and `--session-id` on a used
+   * id fails loudly where `--resume` on an unused one fails just as loudly.
+   */
+  started?: boolean
+  /**
+   * The model, effort and plan switch this chat is on.
+   *
+   * Optional for the same reason `started` is: a chat written before the
+   * toolbar existed has no field, and a missing one reads as
+   * `DEFAULT_CHAT_OPTIONS` — which is exactly how those turns already ran.
+   */
+  options?: WorktreeChatOptions
+  createdAt: string
+  updatedAt: string
+}
+
+/** One of those events, tagged with the chat it belongs to: several worktrees
+ * can be answering at once, so a listener has to know which one this is. */
+export type WorktreeChatEvent = AssistantEvent & { chatId: string }
+
+/**
  * A group of notes, nested arbitrarily deep.
  *
  * Shaped like `HttpFolder` minus the cascading headers and params, because a
@@ -815,6 +863,14 @@ export type DesktopApi = {
    * attach button. */
   pickImages: () => Promise<string[]>
   /**
+   * Files, chosen in the OS picker and handed back as absolute paths.
+   *
+   * `directory` only says where the dialog opens — the paths come back from the
+   * user's own click, so this is not a read and nothing is gated on it. Reading
+   * one is still an ordinary `files:*` call and still inside `insideAny`.
+   */
+  pickFiles: (directory?: string) => Promise<string[]>
+  /**
    * The real path behind a dropped/selected `File`, for the same composer's
    * drag-and-drop — a sandboxed, context-isolated renderer never gets one on
    * the `File` object itself. Unlike everything else here, this never
@@ -867,30 +923,6 @@ export type DesktopApi = {
    */
   onRequestsChanged: (listener: () => void) => () => void
 
-  /**
-   * Sends one message to the chat the assistant is on and resolves when it has
-   * been started — the answer arrives on `onAssistantEvent`.
-   *
-   * The conversation is held by the main process: the panel is a view of it, so
-   * closing the panel or reloading the window does not end the turn or lose the
-   * thread. With no chat open this starts one; the chat's record appears in
-   * `assistantChats` from that moment.
-   */
-  assistantSend: (prompt: string) => Promise<void>
-  /** Stops the turn in flight, if there is one. */
-  assistantStop: () => Promise<void>
-  /** Every chat, newest first. */
-  assistantChats: () => Promise<AssistantChat[]>
-  /** Puts the assistant back on a chat and hands over what was said in it. */
-  assistantOpen: (id: string) => Promise<AssistantMessage[]>
-  /** Leaves every chat: the next message starts a new one. */
-  assistantNew: () => Promise<void>
-  /** Deletes a chat and what was said in it, and resolves with what is left.
-   * The `claude` transcript behind it is not touched — it is a conversation on
-   * disk like any other. */
-  assistantDelete: (id: string) => Promise<AssistantChat[]>
-  onAssistantEvent: (listener: (event: AssistantEvent) => void) => () => void
-
   /** Whether Docker is available, and why not when it is not — used when
    * creating a Docker-managed database. */
   dockerStatus: () => Promise<DockerStatus>
@@ -906,8 +938,42 @@ export type DesktopApi = {
    * failure. Capped at `MAX_STATUS_ENTRIES`; see `main/git.ts` for why a
    * wholly untracked or ignored directory arrives as one entry rather than as
    * its contents.
+   *
+   * `worktreeId` asks about one of that folder's checkouts instead, which is a
+   * repository of its own with its own branch and its own uncommitted work —
+   * the same `worktreeId ?? folderId` resolve `terminalCreate` does, and for
+   * the same reason: an id, never a path. It falls back to the folder when the
+   * checkout has gone, which is the honest answer for a root that is about to
+   * leave the tree.
    */
-  gitStatus: (folderId: string) => Promise<GitStatusEntry[]>
+  gitStatus: (
+    folderId: string,
+    worktreeId?: string | null
+  ) => Promise<GitStatusEntry[]>
+
+  /**
+   * What has changed in one checkout, as a list.
+   *
+   * The same `worktreeId ?? folderId` resolve as `gitStatus`, and for the same
+   * reason: a checkout is a repository of its own with its own uncommitted work.
+   * Ignored paths are left out — see `GitChange`.
+   */
+  gitChanges: (
+    folderId: string,
+    worktreeId?: string | null
+  ) => Promise<GitChange[]>
+  /**
+   * A file as `HEAD` has it — the left-hand side of a diff.
+   *
+   * `null` when `HEAD` does not have it, which is the ordinary answer for a file
+   * somebody has just written: the diff against it is the whole file added. Also
+   * null for a directory that is not a repository at all, and for a repository
+   * with no commits yet, both of which are the same thing to a diff.
+   *
+   * Takes the path rather than a root and a relative path, like every other read
+   * of a file in the workspace, and is gated the same way.
+   */
+  fileAtHead: (filePath: string) => Promise<string | null>
 
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
@@ -1081,6 +1147,60 @@ export type DesktopApi = {
   listCookies: () => Promise<HttpCookie[]>
   saveCookies: (cookies: HttpCookie[]) => Promise<void>
 
+  /** Every chat in every worktree — the listing; the lines are read one chat
+   * at a time. */
+  listWorktreeChats: () => Promise<WorktreeChat[]>
+  /** A new, empty chat in a worktree. Made up front so the tab exists before
+   * anything has been said in it. */
+  createWorktreeChat: (worktreeId: string) => Promise<WorktreeChat>
+  readWorktreeChat: (id: string) => Promise<AssistantMessage[]>
+  deleteWorktreeChat: (id: string) => Promise<void>
+  /**
+   * The model, effort and plan switch for one chat.
+   *
+   * Its own call rather than an argument to `sendWorktreeChat`, because the
+   * toolbar is used before anything is sent: somebody picks Haiku and then
+   * types, and a choice that only landed with a message would be a control that
+   * looks set and is not.
+   */
+  setWorktreeChatOptions: (
+    id: string,
+    options: WorktreeChatOptions
+  ) => Promise<void>
+  /** Runs one turn. Rejects when that chat is still answering. */
+  sendWorktreeChat: (id: string, prompt: string) => Promise<void>
+  /** Kills the turn in flight. There is nothing gentler in print mode. */
+  stopWorktreeChat: (id: string) => Promise<void>
+  /** Every worktree chat's events, tagged with the chat. Returns an
+   * unsubscribe. */
+  onWorktreeChatEvent: (
+    listener: (event: WorktreeChatEvent) => void
+  ) => () => void
+
+  /**
+   * The worktrees this app has made, newest last.
+   *
+   * Reconciled against `git worktree list` on the way out, so a checkout
+   * somebody removed by hand is not offered as somewhere to work.
+   */
+  listWorktrees: () => Promise<WorktreeRecord[]>
+  /**
+   * Adds a worktree to `folderId` on a new branch cut from `from`.
+   *
+   * Resolves to the record, or to an error message — a branch name already
+   * taken is an ordinary answer a dialog has to show, not a fault. `from` is a
+   * committish: `HEAD`, `main`, `origin/main`.
+   */
+  createWorktree: (
+    folderId: string,
+    branch: string,
+    from: string
+  ) => Promise<{ worktree: WorktreeRecord } | { error: string }>
+  /** Removes the checkout and forgets the record. The **branch is kept**: the
+   * commits are the work, and removing a directory is not a reason to drop
+   * them. */
+  removeWorktree: (id: string) => Promise<void>
+
   /** Every note in the workspace, and the folders they are filed under —
    * their listings only; a body is read one at a time. */
   listNotes: () => Promise<NoteRecord[]>
@@ -1167,7 +1287,10 @@ export type DesktopApi = {
   startProcess: (
     folderId: string,
     command: string,
-    args: string[]
+    args: string[],
+    /** Run in this worktree of the folder rather than in the folder itself —
+     * an id, for the reason `terminalCreate` takes one. */
+    worktreeId?: string
   ) => Promise<string>
   stopProcess: (processId: string) => Promise<void>
 
@@ -1177,42 +1300,27 @@ export type DesktopApi = {
   onProcessExit: (listener: (event: ProcessExit) => void) => () => void
 
   /**
-   * Which kinds of session this machine can run, in the order the picker
-   * shows them. Each answer costs a login shell, so it is asked for when the
-   * picker opens rather than kept live.
-   */
-  agentTools: () => Promise<AgentToolStatus[]>
-  /**
-   * Opens a shell running the install command for `kind` and resolves with the
-   * id its events are tagged with — the same events as any other session, so
-   * the install runs in a pane the user can read and answer.
-   */
-  agentInstall: (cols: number, rows: number, kind: AgentKind) => Promise<string>
-
-  /**
-   * What Claude Code's `/` menu would offer for a session in this folder —
-   * the composer's own menu is built from it. Re-read per call rather than
-   * cached, since a command file can be added while the app is open.
-   */
-  claudeCommands: (folderId: string) => Promise<ClaudeSlashCommand[]>
-
-  /**
-   * Opens a session of `kind` in one of the folders and resolves with the
-   * id its events are tagged with.
+   * Opens a shell in one of the folders and resolves with the id its events are
+   * tagged with.
    *
-   * `claudeSessionId` is generated by the caller and passed to the CLI as
-   * `--session-id`, which fixes the name of the transcript file the chat view
-   * tails. Generated in the renderer rather than here because the caller is
-   * also what remembers it for a reattach after the app is restarted — the
-   * pty survives, so nothing runs a command again to learn it a second time.
-   * Ignored for every kind but `claude`.
+   * The user's own login shell, and the only thing this starts: the agent CLIs
+   * used to be kinds of session here, and what runs one now is a worktree's
+   * chat (`main/worktree-chat.ts`) rather than a pty the renderer asked for.
    */
   terminalCreate: (
     folderId: string,
     cols: number,
     rows: number,
-    kind: AgentKind,
-    claudeSessionId?: string
+    /**
+     * Run in this worktree of the folder rather than in the folder itself.
+     *
+     * An **id** rather than a path, so main resolves the directory from its own
+     * record: a path handed over by the renderer would be a cwd this process
+     * had to validate, and the rule here is that the renderer never names a
+     * directory main has not already written down (`insideAny` in `files.ts` is
+     * the same rule for reads).
+     */
+    worktreeId?: string
   ) => Promise<string>
   /** Sends keystrokes to a shell. */
   terminalWrite: (terminalId: string, data: string) => Promise<void>
@@ -1228,25 +1336,6 @@ export type DesktopApi = {
   onTerminalData: (listener: (event: TerminalOutput) => void) => () => void
   /** Subscribes to shells exiting. Returns an unsubscribe function. */
   onTerminalExit: (listener: (event: TerminalExit) => void) => () => void
-
-  /**
-   * Starts mirroring a CLI session's transcript into `mirrorId`'s events —
-   * what the chat view draws while the session itself runs in its pty.
-   *
-   * Reading only: nothing here starts, stops or writes to a `claude`. Calling
-   * it again for the same `mirrorId` re-points it, which is what a tab does
-   * when its pty is started over under a conversation id it did not have.
-   */
-  transcriptWatch: (
-    mirrorId: string,
-    folderId: string,
-    claudeSessionId: string
-  ) => Promise<void>
-  transcriptUnwatch: (mirrorId: string) => Promise<void>
-
-  /** Subscribes to transcript events for every mirror. Returns an unsubscribe
-   * function. */
-  onTranscriptEvent: (listener: (event: TranscriptEvent) => void) => () => void
 
   /**
    * The machine's CPU and memory headroom, and this app's share of it,
@@ -1278,18 +1367,12 @@ export const IPC = {
   removeFolder: "workspace:remove-folder",
   pickDirectory: "workspace:pick-directory",
   pickImages: "workspace:pick-images",
+  pickFiles: "workspace:pick-files",
   readImageDataUrl: "files:read-image-data-url",
   clipboardImagePath: "files:clipboard-image-path",
   menuCommand: "menu:command",
   notesChanged: "notes:changed",
   requestsChanged: "http:changed",
-  assistantSend: "assistant:send",
-  assistantStop: "assistant:stop",
-  assistantChats: "assistant:chats",
-  assistantOpen: "assistant:open",
-  assistantNew: "assistant:new",
-  assistantDelete: "assistant:delete",
-  assistantEvent: "assistant:event",
   dockerStatus: "docker:status",
   listDatabases: "databases:list",
   createDatabase: "databases:create",
@@ -1298,6 +1381,8 @@ export const IPC = {
   testDatabaseConnection: "databases:test-connection",
   gitBranch: "git:branch",
   gitStatus: "git:status",
+  gitChanges: "git:changes",
+  fileAtHead: "git:file-at-head",
   getSetting: "settings:get",
   setSetting: "settings:set",
   dbQuery: "db:query",
@@ -1329,6 +1414,17 @@ export const IPC = {
   listCookies: "http:list-cookies",
   saveCookies: "http:save-cookies",
   httpSend: "http:send",
+  listWorktreeChats: "worktree-chats:list",
+  createWorktreeChat: "worktree-chats:create",
+  readWorktreeChat: "worktree-chats:read",
+  deleteWorktreeChat: "worktree-chats:delete",
+  setWorktreeChatOptions: "worktree-chats:options",
+  sendWorktreeChat: "worktree-chats:send",
+  stopWorktreeChat: "worktree-chats:stop",
+  worktreeChatEvent: "worktree-chats:event",
+  listWorktrees: "worktrees:list",
+  createWorktree: "worktrees:create",
+  removeWorktree: "worktrees:remove",
   listNotes: "notes:list",
   saveNotes: "notes:save",
   listNoteFolders: "notes:list-folders",
@@ -1348,17 +1444,11 @@ export const IPC = {
   stopProcess: "process:stop",
   processOutput: "process:output",
   processExit: "process:exit",
-  agentTools: "agent:tools",
-  agentInstall: "agent:install",
-  claudeCommands: "agent:claude-commands",
   terminalCreate: "terminal:create",
   terminalWrite: "terminal:write",
   terminalResize: "terminal:resize",
   terminalKill: "terminal:kill",
   terminalData: "terminal:data",
   terminalExit: "terminal:exit",
-  transcriptWatch: "transcript:watch",
-  transcriptUnwatch: "transcript:unwatch",
-  transcriptEvent: "transcript:event",
   systemUsage: "system:usage",
 } as const

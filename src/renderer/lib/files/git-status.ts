@@ -2,7 +2,9 @@ import { create } from "zustand"
 
 import type { GitFileState, GitStatusEntry } from "@shared/api"
 import { useStudio } from "../store"
+import { useWorktrees } from "../worktree/store"
 import { isInside } from "./paths"
+import { fileRoots, rootOf, type FileRoot } from "./roots"
 
 /**
  * What git says about the workspace's files, for the colours Explorer draws.
@@ -13,11 +15,13 @@ import { isInside } from "./paths"
  * changes — an editor keystroke marks a tab dirty without touching this, and a
  * commit in the terminal repaints the tree without a `readdir`.
  *
- * One `git status` per folder, which is the granularity git itself works at.
- * It is asked for when the workspace's folders change, when Explorer's Refresh
- * is pressed, and — debounced — whenever a watched directory reports something,
- * `.git` included: a commit made in a Terminal session is a repaint of the whole
- * tree, and nothing else would have told us about it.
+ * One `git status` per **root**, which is the granularity git itself works at:
+ * a workspace folder, and each `git worktree` checkout of it, since a checkout
+ * is a repository of its own with its own branch and its own uncommitted work
+ * (`lib/files/roots.ts`). It is asked for when the roots change, when
+ * Explorer's Refresh is pressed, and — debounced — whenever a watched directory
+ * reports something, `.git` included: a commit made in the dock's shell is a
+ * repaint of the whole tree, and nothing else would have told us about it.
  */
 
 /**
@@ -83,7 +87,7 @@ export const GIT_LABELS: Record<GitFileState, string> = {
 }
 
 /**
- * One folder's answer, split by how it is looked up.
+ * One root's answer, split by how it is looked up.
  *
  * `files` is the exact matches and is the common case — a `Record` because a
  * row asks about one path and there may be thousands. `dirs` are the entries
@@ -91,19 +95,20 @@ export const GIT_LABELS: Record<GitFileState, string> = {
  * handful of them (`node_modules/`, `dist/`, a new directory somebody just
  * made), which is what makes walking them per row affordable.
  */
-type FolderStatus = {
+type RootStatus = {
   files: Record<string, GitFileState>
   dirs: GitStatusEntry[]
 }
 
 type GitStatusState = {
-  byFolder: Record<string, FolderStatus>
-  /** Reads one folder now. */
-  refresh: (folderId: string) => Promise<void>
-  /** Reads every folder now — the workspace loading, and Explorer's Refresh. */
+  /** Keyed by `FileRoot.id`, which is `worktreeId ?? folderId`. */
+  byRoot: Record<string, RootStatus>
+  /** Reads one root now. */
+  refresh: (root: FileRoot) => Promise<void>
+  /** Reads every root now — the workspace loading, and Explorer's Refresh. */
   refreshAll: () => Promise<void>
-  /** Reads one folder once the changes stop arriving. */
-  schedule: (folderId: string) => void
+  /** Reads one root once the changes stop arriving. */
+  schedule: (rootId: string) => void
 }
 
 export const useGitStatus = create<GitStatusState>((set, get) => {
@@ -111,41 +116,39 @@ export const useGitStatus = create<GitStatusState>((set, get) => {
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
 
   return {
-    byFolder: {},
+    byRoot: {},
 
-    async refresh(folderId) {
+    async refresh(root) {
       const entries = await window.desktop
-        .gitStatus(folderId)
+        .gitStatus(root.folderId, root.worktreeId)
         .catch(() => [] as GitStatusEntry[])
 
-      // Dropped if the folder left the workspace while this was in flight, the
+      // Dropped if the root left the workspace while this was in flight, the
       // same way the studio store drops a branch read against one.
-      if (!useStudio.getState().folders.some(({ id }) => id === folderId))
-        return
+      if (!fileRoots().some(({ id }) => id === root.id)) return
 
-      const status: FolderStatus = { files: {}, dirs: [] }
+      const status: RootStatus = { files: {}, dirs: [] }
       for (const entry of entries) {
         if (entry.directory) status.dirs.push(entry)
         else status.files[entry.path] = entry.state
       }
 
-      set((state) => ({ byFolder: { ...state.byFolder, [folderId]: status } }))
+      set((state) => ({ byRoot: { ...state.byRoot, [root.id]: status } }))
     },
 
     async refreshAll() {
-      await Promise.all(
-        useStudio.getState().folders.map((folder) => get().refresh(folder.id))
-      )
+      await Promise.all(fileRoots().map((root) => get().refresh(root)))
     },
 
-    schedule(folderId) {
-      const pending = timers.get(folderId)
+    schedule(rootId) {
+      const pending = timers.get(rootId)
       if (pending) clearTimeout(pending)
       timers.set(
-        folderId,
+        rootId,
         setTimeout(() => {
-          timers.delete(folderId)
-          void get().refresh(folderId)
+          timers.delete(rootId)
+          const root = fileRoots().find((candidate) => candidate.id === rootId)
+          if (root) void get().refresh(root)
         }, SETTLE_MS)
       )
     },
@@ -164,12 +167,12 @@ export function gitStateOf(
   state: GitStatusState,
   filePath: string
 ): GitFileState | null {
-  for (const folder of Object.values(state.byFolder)) {
-    const exact = folder.files[filePath]
+  for (const root of Object.values(state.byRoot)) {
+    const exact = root.files[filePath]
     if (exact !== undefined) return exact
 
     let match: GitStatusEntry | null = null
-    for (const dir of folder.dirs) {
+    for (const dir of root.dirs) {
       if (!isInside(dir.path, filePath)) continue
       if (match === null || dir.path.length > match.path.length) match = dir
     }
@@ -178,33 +181,39 @@ export function gitStateOf(
   return null
 }
 
-/** Which folder a path belongs to, for the store that is keyed by folder. */
-export function folderIdOf(filePath: string): string | null {
-  const folder = useStudio
-    .getState()
-    .folders.find((candidate) => isInside(candidate.path, filePath))
-  return folder?.id ?? null
+/** Which root a path belongs to, for the store that is keyed by one. */
+export function rootIdOf(filePath: string): string | null {
+  return rootOf(filePath)?.id ?? null
 }
 
-// The workspace's folders are what there is to read, so a folder arriving is
-// what asks for its status and a folder leaving is what forgets it. This is
-// also the launch read: `init` sets the folders once the manifest is in.
-useStudio.subscribe((studio, previous) => {
-  if (studio.folders === previous.folders) return
+/**
+ * A root arriving is what asks for its status, and one leaving is what forgets
+ * it. This is also the launch read: `init` sets the folders once the manifest
+ * is in, and `refresh` on the worktree store sets the checkouts.
+ */
+function follow() {
+  const roots = fileRoots()
+  const kept = new Set(roots.map((root) => root.id))
+  const { byRoot } = useGitStatus.getState()
 
-  const kept = new Set(studio.folders.map((folder) => folder.id))
-  const { byFolder } = useGitStatus.getState()
-  if (Object.keys(byFolder).some((id) => !kept.has(id))) {
+  if (Object.keys(byRoot).some((id) => !kept.has(id))) {
     useGitStatus.setState({
-      byFolder: Object.fromEntries(
-        Object.entries(byFolder).filter(([id]) => kept.has(id))
+      byRoot: Object.fromEntries(
+        Object.entries(byRoot).filter(([id]) => kept.has(id))
       ),
     })
   }
 
-  for (const folder of studio.folders) {
-    if (byFolder[folder.id] === undefined) {
-      void useGitStatus.getState().refresh(folder.id)
-    }
+  for (const root of roots) {
+    if (byRoot[root.id] === undefined)
+      void useGitStatus.getState().refresh(root)
   }
+}
+
+useStudio.subscribe((studio, previous) => {
+  if (studio.folders !== previous.folders) follow()
+})
+
+useWorktrees.subscribe((state, previous) => {
+  if (state.worktrees !== previous.worktrees) follow()
 })

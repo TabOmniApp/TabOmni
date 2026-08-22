@@ -2,7 +2,7 @@ import { create } from "zustand"
 
 import type { WorkspaceFolder } from "@shared/api"
 import { isStringArray, recall, remember } from "./tab-memory"
-import { isSection, useRail, type Section } from "./rail"
+import type { Section } from "./sections"
 import * as repo from "./workspace"
 
 /** Where the strip's arrangement and the pane on screen are kept. */
@@ -10,7 +10,14 @@ const STRIP_KEY = "workbench.strip"
 
 /** Every pane there is — the list `lib/panels.ts` walks to reach all five
  * panels' tabs without naming any of them. */
-export const PANES: Pane[] = ["files", "database", "api", "terminal", "note"]
+export const PANES: Pane[] = [
+  "files",
+  "changes",
+  "database",
+  "api",
+  "worktree",
+  "note",
+]
 
 /**
  * `section` is held as a plain string rather than a `Section` on the way in: a
@@ -20,38 +27,71 @@ export const PANES: Pane[] = ["files", "database", "api", "terminal", "note"]
  */
 type RememberedStrip = {
   tabOrder: string[]
-  pane: Pane
+  /** A plain string for the same reason `section` is: a build with a Terminal
+   * panel wrote `"terminal"` here, and that pane no longer exists. Narrowed in
+   * `bootstrap`, which falls back rather than throwing the record away. */
+  pane: string
+  /** Written by a build whose right-hand panel had four tabs. Read no longer:
+   * that panel holds the Explorer and nothing else. */
   section?: string
   sidebar?: boolean
+  /** A plain string on the way in, and narrowed in `bootstrap`: a build that
+   * had no tabs over the Explorer wrote nothing here. */
+  explorerTab?: string
 }
 
 function isRememberedStrip(value: unknown): value is RememberedStrip {
   const record = value as Partial<RememberedStrip> | null
   return (
     isStringArray(record?.tabOrder) &&
-    PANES.includes(record.pane as Pane) &&
+    typeof record.pane === "string" &&
     // Both optional: written by a build that did not remember the sidebar yet,
     // or did not know it could be closed.
     (record.section === undefined || typeof record.section === "string") &&
-    (record.sidebar === undefined || typeof record.sidebar === "boolean")
+    (record.sidebar === undefined || typeof record.sidebar === "boolean") &&
+    (record.explorerTab === undefined || typeof record.explorerTab === "string")
   )
 }
 
 /**
  * Which of the tabbed panels the workspace pane is showing.
  *
- * Deliberately not the activity rail's own section: the rail chooses the
- * sidebar, and changing the sidebar must not take what is open off the screen.
- * What sets this is picking something to look at — a tab, a table in the tree,
- * a request, a session — wherever that pick was made.
+ * What sets it is picking something to look at — a tab, a table in the tree, a
+ * request, a chat — wherever that pick was made. It used to have a sidebar to
+ * drag along with it, back when one box on the right held four lists; the lists
+ * are all on screen at once now, so this is only about the pane.
  *
- * A `Section` and one more: `terminal` is a pane with no rail button and no
- * sidebar of its own. A session is started and listed in the Explorer sidebar
- * and draws here, which is why `showPane` leaves the sidebar alone for it —
- * there is no Terminal sidebar left to bring, and the row that was clicked is
- * in the one already showing.
+ * A `Section` and two more, and neither of the two has a sidebar of its own:
+ * `worktree` draws a checkout's chats and is opened from the left column, and
+ * `changes` draws the diff of whichever changed file the Explorer's `Changes`
+ * tab has picked, one tab per checkout. `showPane` leaves the sections alone
+ * for both, since a click in somebody else's list must not move the section the
+ * panel is on.
+ *
+ * There was a `terminal` pane beside them — a session with a tab, a chat view
+ * and a transcript — and it is gone: a shell is a tab of the dock now
+ * (`lib/shell/store.ts`), and the agent half of what it was is a worktree's
+ * chat.
  */
-export type Pane = Section | "terminal"
+export type Pane = Section | "worktree" | "changes"
+
+/**
+ * Which of the Explorer's two lists is showing: the checkout's files, or the
+ * ones it has changed.
+ *
+ * Two tabs where the panel's own title used to be, which is what the space was
+ * worth: a header reading `Explorer` said what the reader could already see,
+ * and `Changes` is asked for often enough — after every agent turn — to deserve
+ * a click rather than a button that opened a pane. The names are the ones
+ * Conductor uses, so the strip reads `All files | Changes`.
+ *
+ * The list of changed files is here and **not** in the pane it opens: the pane
+ * is the diff. A list in both places is one question answered twice, which is
+ * what the old `Files | Changes` toggle under the header was.
+ */
+export type ExplorerTab = "files" | "changes"
+
+const EXPLORER_TABS: ExplorerTab[] = ["files", "changes"]
 
 type StudioState = {
   /** Storage is open and the workspace has been read. */
@@ -84,33 +124,12 @@ type StudioState = {
   showPane: (pane: Pane) => void
 
   /**
-   * Which sidebar the rail is showing.
+   * Whether the Explorer panel is showing at all.
    *
-   * A `Section` rather than a `Pane`, and deliberately a separate value: the
-   * rail moves this on its own, so a sidebar can be read while another panel's
-   * tab stays on screen. What is *not* symmetric is the other direction —
-   * picking something moves both, because a selection nobody can see the
-   * sidebar for is half an answer, except where the thing picked has no sidebar
-   * of its own to move to (a session).
-   */
-  section: Section
-  /**
-   * The rail's own pick, which moves the sidebar and nothing else — and shows
-   * it, since clicking a way into the studio means "show me this". Clicking the
-   * section already showing is the other half of that and is a `toggleSidebar`;
-   * the rail is what tells the two apart, because only it knows which icon was
-   * hit (`activity-bar.tsx`).
-   */
-  setSection: (section: Section) => void
-
-  /**
-   * Whether the sidebar is showing at all.
-   *
-   * `⌘B`, the editors' shortcut for it, and the same thing the View menu and a
-   * click on the active rail icon do. Which sidebar it *would* show is still
-   * `section` above, so hiding and showing again comes back to the same list
-   * rather than to Explorer — and the rail keeps working while it is closed:
-   * picking another section opens it on that one.
+   * `⌘B`, the editors' shortcut for it, and the same thing the View menu does.
+   * There is no longer a *which* list to remember with it: the panel holds the
+   * Explorer and nothing else, and the workspace's other three lists are
+   * sections of the left column.
    *
    * Remembered with the strip, because a workbench that forgets is a workbench
    * that hands back the space every launch. What is not remembered is the
@@ -118,6 +137,16 @@ type StudioState = {
    */
   sidebar: boolean
   toggleSidebar: () => void
+
+  /**
+   * Which of the Explorer's two tabs is showing.
+   *
+   * Remembered with the strip and not per checkout: it is a way of working —
+   * reviewing, or reading — rather than a fact about a branch, and one that
+   * reset every time the left column moved would be one nobody could stay in.
+   */
+  explorerTab: ExplorerTab
+  setExplorerTab: (tab: ExplorerTab) => void
 
   /**
    * The workbench tab strip's order, as prefixed ids (`db:public.users`).
@@ -148,11 +177,6 @@ type StudioState = {
   removeFolder: (id: string) => Promise<void>
 }
 
-/** A remembered id as a section, or null when it does not name one. */
-function sectionOf(value: string | undefined): Section | null {
-  return value !== undefined && isSection(value) ? value : null
-}
-
 /**
  * Strict Mode invokes mount effects twice, so `init` has to be idempotent,
  * not merely fast.
@@ -180,8 +204,8 @@ export const useStudio = create<StudioState>((set, get) => {
   }
 
   function rememberStrip() {
-    const { tabOrder, pane, section, sidebar } = get()
-    remember(STRIP_KEY, { tabOrder, pane, section, sidebar })
+    const { tabOrder, pane, sidebar, explorerTab } = get()
+    remember(STRIP_KEY, { tabOrder, pane, sidebar, explorerTab })
   }
 
   /** Opens storage and reads the workspace. */
@@ -193,15 +217,17 @@ export const useStudio = create<StudioState>((set, get) => {
     if (strip) {
       set({
         tabOrder: strip.tabOrder,
-        pane: strip.pane,
-        // A layout written before the rail was remembered has no section in it,
-        // and one written while Terminal was still a section may name it; the
-        // pane's own is the closest thing to where it was left, and Explorer is
-        // where a `terminal` pane's sidebar has gone.
-        section: sectionOf(strip.section) ?? sectionOf(strip.pane) ?? "files",
+        // `terminal` is what an older build may have been left on, and there is
+        // no such pane any more — Explorer is where its sidebar went.
+        pane: PANES.includes(strip.pane as Pane)
+          ? (strip.pane as Pane)
+          : "files",
         // A build that never wrote this had no way to close the sidebar, so
         // the absence means open rather than "unknown".
         sidebar: strip.sidebar ?? true,
+        explorerTab: EXPLORER_TABS.includes(strip.explorerTab as ExplorerTab)
+          ? (strip.explorerTab as ExplorerTab)
+          : "files",
       })
     }
 
@@ -240,36 +266,26 @@ export const useStudio = create<StudioState>((set, get) => {
     branches: {},
 
     pane: "database",
-    section: "files",
     sidebar: true,
+    explorerTab: "files",
     tabOrder: [],
 
     showPane(pane) {
-      // Not onto a section taken off the rail: hiding one is saying "this is
-      // not a way into the studio for me", and a pick should not put it back.
-      //
-      // And not onto a pane that is not a section at all: a session's pane has
-      // no sidebar of its own, so what is showing — the Explorer sidebar it was
-      // started from — is already the right one.
-      const hidden = useRail.getState().hidden
-      set((state) => ({
-        pane,
-        section:
-          isSection(pane) && !hidden.includes(pane) ? pane : state.section,
-      }))
-      rememberStrip()
-    },
-
-    setSection(section) {
-      // Shown as well as switched: the rail is reached with the sidebar closed
-      // — that is most of what closing it is for — and an icon that only
-      // changed something invisible would read as an icon that does nothing.
-      set({ section, sidebar: true })
+      // Only the pane. Picking something used to bring a sidebar with it, back
+      // when one box held four lists and marking a row in the hidden one was
+      // half an answer; the lists are all on screen at once now — three in the
+      // left column, the Explorer on the right — so there is nothing to move.
+      set({ pane })
       rememberStrip()
     },
 
     toggleSidebar() {
       set((state) => ({ sidebar: !state.sidebar }))
+      rememberStrip()
+    },
+
+    setExplorerTab(tab) {
+      set({ explorerTab: tab })
       rememberStrip()
     },
 

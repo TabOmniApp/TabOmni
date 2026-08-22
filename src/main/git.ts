@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process"
-import { realpath } from "node:fs/promises"
+import { readFile, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { promisify } from "node:util"
 
-import type { GitFileState, GitStatusEntry } from "../shared/api"
+import type { GitChange, GitFileState, GitStatusEntry } from "../shared/api"
 
 const run = promisify(execFile)
 
@@ -11,12 +11,14 @@ const run = promisify(execFile)
  * What is left of the git integration: the branch name beside a folder, and
  * the state of the files under it.
  *
- * The panel that read a working tree — diffs, staging, commits, and the GitHub
- * pull requests beside them — was removed, and none of that is coming back
- * through here. What these two answer is what a file *is*, which Explorer
- * colours its rows with: a file nobody has committed reads differently from one
- * that has been edited, and a `node_modules` that is the same grey as `src` is
- * a tree that makes somebody read the names to find the code.
+ * The panel that read a working tree — staging, commits, and the GitHub pull
+ * requests beside them — was removed, and none of *that* is coming back through
+ * here: there is still no way to stage anything and nothing here talks to a
+ * forge. What is answered is what a file **is** — which Explorer colours its
+ * rows with, since a file nobody has committed reads differently from one that
+ * has been edited, and a `node_modules` the same grey as `src` is a tree that
+ * makes somebody read the names to find the code — and, for the Changes list,
+ * which files those are and how far each has moved from `HEAD`.
  */
 export async function currentBranch(dir: string): Promise<string | null> {
   try {
@@ -41,6 +43,18 @@ export async function currentBranch(dir: string): Promise<string | null> {
 export const MAX_STATUS_ENTRIES = 5000
 
 /**
+ * A status entry with the path git itself used still on it.
+ *
+ * `path` is absolute and rooted at the folder, which is what the tree's rows
+ * are addressed by; `relative` is the repository's own term for the same file,
+ * which is what every other git command answers in. `changes` matches one
+ * against the other, and the alternative — rebuilding the absolute path from a
+ * second command's output — is how a repository reached through a symlink ends
+ * up with two spellings of one file (`/tmp` on macOS is `/private/tmp`).
+ */
+export type StatusEntry = GitStatusEntry & { relative: string }
+
+/**
  * Every path under `dir` git has something to say about — changed, new,
  * conflicted, or ignored.
  *
@@ -62,7 +76,7 @@ export const MAX_STATUS_ENTRIES = 5000
  * A folder that is not a repository at all is not an error: it is the ordinary
  * case for a directory somebody keeps notes in, and it has no state to report.
  */
-export async function workingTree(dir: string): Promise<GitStatusEntry[]> {
+export async function workingTree(dir: string): Promise<StatusEntry[]> {
   let root: string
   try {
     root = (await git(dir, ["rev-parse", "--show-toplevel"])).trim()
@@ -113,6 +127,201 @@ export async function workingTree(dir: string): Promise<GitStatusEntry[]> {
 
 /** Whether a repo-relative path is inside a repo-relative directory. `""` is
  * the root, and holds everything. */
+/**
+ * How many untracked files are worth counting the lines of.
+ *
+ * An untracked file is not in any diff, so the only way to say `+N` for one is
+ * to read it. That is cheap for the handful somebody has just written and not
+ * cheap for a directory of generated output that is untracked rather than
+ * ignored — so past this the rows say the letter and no number, which is what
+ * they would say for a binary file anyway.
+ */
+const MAX_COUNTED_NEW_FILES = 200
+
+/** And how large one of those may be. A minified bundle is one line and twelve
+ * megabytes; reading it to print `+1` is the read that is not worth making. */
+const MAX_COUNTED_BYTES = 2 * 1024 * 1024
+
+/**
+ * What has changed in a checkout, with how far each file has moved.
+ *
+ * `workingTree` is the same `git status` read from the same place, and this is
+ * deliberately built on it rather than beside it: which files are changed is one
+ * question with one answer, and two readers of porcelain output disagreeing
+ * about a conflict or a rename is the kind of bug nobody finds. What is added
+ * here is the counts, and what is taken away is the ignored — a repository's
+ * ignored files are not anybody's changes, and they are most of the entries.
+ *
+ * The counts come from `--numstat` against `HEAD`, which covers everything git
+ * is already tracking. An untracked file appears in no diff at all, so it is
+ * counted by reading it, under the two caps above. A repository with no commit
+ * yet has no `HEAD` to diff against: the files are still listed, with no
+ * numbers, which is the honest answer rather than an empty panel.
+ */
+export async function changes(dir: string): Promise<GitChange[]> {
+  const entries = (await workingTree(dir)).filter(
+    (entry) => entry.state !== "ignored"
+  )
+  if (entries.length === 0) return []
+
+  const counts = await numstat(dir)
+
+  // Newest work first would need a stat per row; alphabetical by path is what a
+  // list of files in a repository is expected to be, and is stable while
+  // somebody is reading it — a row that moves as it is clicked is worse than a
+  // row in the wrong order.
+  const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path))
+
+  let counted = 0
+  const changed: GitChange[] = []
+  for (const entry of sorted) {
+    const numbers = counts.get(entry.relative)
+    if (numbers) {
+      changed.push({ path: entry.path, state: entry.state, ...numbers })
+      continue
+    }
+
+    // Not in the diff: either untracked, or a repository with no `HEAD`.
+    const newLines =
+      !entry.directory &&
+      entry.state === "untracked" &&
+      counted < MAX_COUNTED_NEW_FILES
+        ? await countLines(entry.path)
+        : null
+    if (newLines !== null) counted += 1
+
+    changed.push({
+      path: entry.path,
+      state: entry.state,
+      added: newLines,
+      removed: newLines === null ? null : 0,
+    })
+  }
+
+  return changed
+}
+
+/**
+ * `--numstat` against `HEAD`, keyed by the same absolute path the entries carry.
+ *
+ * `--no-renames` on purpose: porcelain status reports a rename as one entry for
+ * the new name, so a numstat that split it into `old => new` would key a count
+ * under a path no row has and leave the row that exists with none.
+ */
+async function numstat(
+  dir: string
+): Promise<Map<string, { added: number; removed: number }>> {
+  const counts = new Map<string, { added: number; removed: number }>()
+
+  let stdout: string
+  try {
+    stdout = await git(dir, [
+      // For the reason in `workingTree`: this app watches `.git`, and a read
+      // that writes the index would report a change to itself.
+      "--no-optional-locks",
+      "diff",
+      "--numstat",
+      "-z",
+      "--no-renames",
+      "HEAD",
+      "--",
+    ])
+  } catch {
+    // No commits yet, or not a repository. Both mean no numbers.
+    return counts
+  }
+
+  // `added\tremoved\tpath` per NUL-terminated record, with `-` for either
+  // number when git will not count a binary file's lines.
+  for (const record of stdout.split("\0")) {
+    if (!record) continue
+    const [added, removed, relative] = record.split("\t")
+    if (added === undefined || removed === undefined || !relative) continue
+    if (added === "-" || removed === "-") continue
+
+    // Keyed by git's own path, which is what the status entries carry beside
+    // their absolute one — see `StatusEntry`.
+    counts.set(relative, {
+      added: Number(added),
+      removed: Number(removed),
+    })
+  }
+
+  return counts
+}
+
+/**
+ * The lines in a file somebody has just written, or null for one there is no
+ * point counting.
+ *
+ * A trailing newline is not a line of its own, so `a\nb\n` is two — the same
+ * count git would print for adding that file.
+ */
+async function countLines(filePath: string): Promise<number | null> {
+  try {
+    const info = await stat(filePath)
+    if (!info.isFile() || info.size > MAX_COUNTED_BYTES) return null
+
+    const text = await readFile(filePath, "utf8")
+    if (text === "") return 0
+    // A NUL in the first stretch of a file is what every tool uses to decide it
+    // is not text, and `+12000` for a PNG is worse than no number.
+    if (text.slice(0, 8000).includes("\0")) return null
+
+    const lines = text.split("\n")
+    return lines.at(-1) === "" ? lines.length - 1 : lines.length
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A file as `HEAD` has it, or null when `HEAD` does not have it.
+ *
+ * `git show` rather than reading anything: the point of a diff's left-hand side
+ * is the committed content, which is in the object store and not on disk. The
+ * path is turned into the repository's own terms first, since that is the only
+ * form `HEAD:` takes.
+ */
+export async function fileAtHead(
+  dir: string,
+  filePath: string
+): Promise<string | null> {
+  let root: string
+  try {
+    root = (await git(dir, ["rev-parse", "--show-toplevel"])).trim()
+    if (!root) return null
+  } catch {
+    return null
+  }
+
+  // Turned into the repository's terms the same way `workingTree` turns them
+  // back, and through `dir` rather than through the file: a **deleted** file has
+  // no `realpath` to resolve, and it is exactly the file whose committed side
+  // somebody wants to see. Resolving one path and not the other is what made
+  // `/tmp` on macOS answer with `../../private/tmp/…`.
+  const inRepo = await realpath(dir)
+    .then((resolved) => path.relative(root, resolved))
+    .catch(() => "")
+  const relative = path.join(inRepo, path.relative(dir, filePath))
+
+  // Outside the repository the folder is in — nothing `HEAD:` could name.
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
+    return null
+
+  try {
+    // Forward slashes always: `HEAD:src\main.ts` is not a path git knows, even
+    // on Windows.
+    return await git(dir, [
+      "show",
+      `HEAD:${relative.split(path.sep).join("/")}`,
+    ])
+  } catch {
+    // Not in HEAD, which is what a file somebody has just written looks like.
+    return null
+  }
+}
+
 function isUnder(dir: string, target: string): boolean {
   if (dir === "") return true
   return target === dir || target.startsWith(dir + "/")
@@ -193,6 +402,184 @@ function stateOf(x: string, y: string): GitFileState {
   if (y === "D" || x === "D") return "deleted"
   if (x === "A") return "added"
   return "modified"
+}
+
+/**
+ * One checkout of a repository: the repo's own working tree, or a worktree
+ * added beside it.
+ *
+ * `git worktree` is what makes two agents able to work on one project at once
+ * without standing on each other — each gets a directory and a branch of its
+ * own, sharing the single object store. Conductor is built on it, and this is
+ * the same primitive rather than a copy of the repository.
+ */
+export type Worktree = {
+  /** Absolute path to the checkout. */
+  path: string
+  /** The branch checked out there, or null when the head is detached. */
+  branch: string | null
+  /** Short SHA of its head, or null for a worktree with no commit yet. */
+  head: string | null
+  /** The repository's own working tree — the one that is not addable or
+   * removable, and the one every other worktree was branched from. */
+  main: boolean
+  /** Locked against pruning, usually because it is on removable media. Listed
+   * so a remove that will fail can say why before it is tried. */
+  locked: boolean
+  /** Git believes the directory is gone. Left in the list rather than filtered
+   * out: a worktree somebody deleted by hand is exactly the row that needs to
+   * be prunable from here. */
+  prunable: boolean
+}
+
+/**
+ * Parses `git worktree list --porcelain`.
+ *
+ * Pure and exported for the same reason `parseStatus` is: the shape of git's
+ * output is the part worth a test, and a test should not need a repository.
+ *
+ * The format is blocks separated by blank lines, each opening with a
+ * `worktree <path>` line. Attributes are bare words or `key value` pairs, and a
+ * detached head has `detached` where a branch would have `branch refs/heads/x`.
+ * The **first** block is always the repository's own working tree, which is the
+ * only way to tell it apart — nothing in a block says "I am the main one".
+ */
+export function parseWorktrees(stdout: string): Worktree[] {
+  const out: Worktree[] = []
+  let current: Worktree | null = null
+
+  const push = () => {
+    if (current) out.push(current)
+    current = null
+  }
+
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim()
+
+    if (line.startsWith("worktree ")) {
+      push()
+      current = {
+        path: line.slice("worktree ".length),
+        branch: null,
+        head: null,
+        // Corrected once the block is closed; only position decides it.
+        main: out.length === 0,
+        locked: false,
+        prunable: false,
+      }
+      continue
+    }
+
+    if (!current) continue
+
+    if (line.startsWith("HEAD ")) {
+      current.head = line.slice("HEAD ".length).slice(0, 7)
+    } else if (line.startsWith("branch ")) {
+      // `refs/heads/feature/x` keeps the slashes in its name, so only the
+      // known prefix is taken off.
+      const ref = line.slice("branch ".length)
+      current.branch = ref.startsWith("refs/heads/")
+        ? ref.slice("refs/heads/".length)
+        : ref
+    } else if (line === "locked" || line.startsWith("locked ")) {
+      current.locked = true
+    } else if (line === "prunable" || line.startsWith("prunable ")) {
+      current.prunable = true
+    }
+    // `bare` and `detached` need nothing: a bare repository has no branch and
+    // no head to read, which is already what the blanks say.
+  }
+  push()
+
+  return out
+}
+
+/** Every checkout of the repository `dir` belongs to. Empty when it is not a
+ * repository at all, which is the same answer `currentBranch` gives. */
+export async function worktrees(dir: string): Promise<Worktree[]> {
+  try {
+    return parseWorktrees(await git(dir, ["worktree", "list", "--porcelain"]))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Adds a worktree at `path`, on a new branch `branch` cut from `from`.
+ *
+ * `-b` rather than checking out an existing branch: two checkouts of one branch
+ * is a state git refuses anyway, and the point of a new worktree here is a
+ * place to do something that has not been done yet. Resolves to an error
+ * message rather than throwing — a branch name already taken and a path that
+ * exists are both ordinary answers a caller has to show, not faults.
+ */
+export async function addWorktree(
+  dir: string,
+  path: string,
+  branch: string,
+  from: string
+): Promise<string | null> {
+  try {
+    await git(dir, ["worktree", "add", "-b", branch, path, from])
+    return null
+  } catch (error) {
+    return messageOf(error)
+  }
+}
+
+/**
+ * Removes a worktree, and prunes the administrative record behind it.
+ *
+ * `--force` is passed deliberately. Without it git refuses a worktree with
+ * uncommitted changes, and this is called from a row somebody has already
+ * confirmed removing — a second refusal surfacing as an error they cannot act
+ * on from here is worse than doing what they asked. The branch is **not**
+ * deleted: the commits are the work, and removing a directory is not a
+ * reason to throw them away.
+ */
+export async function removeWorktree(
+  dir: string,
+  path: string
+): Promise<string | null> {
+  try {
+    await git(dir, ["worktree", "remove", "--force", path])
+    return null
+  } catch (error) {
+    // A directory somebody deleted by hand leaves a record git still lists;
+    // pruning is what clears it, and it is not an error if there was nothing.
+    await git(dir, ["worktree", "prune"]).catch(() => "")
+    return messageOf(error)
+  }
+}
+
+/**
+ * A branch name as one path segment.
+ *
+ * A worktree lives in a directory named after its branch, and a branch name is
+ * not a path segment: `feature/orders` would be two directories deep, `..`
+ * would be a directory *above* the one intended, and a name that is all
+ * punctuation would leave nothing at all. So everything outside word
+ * characters, dots and dashes collapses to a dash, leading dots and dashes go
+ * (they make hidden or option-looking directories), and an empty result falls
+ * back to a fixed word.
+ *
+ * Not reversible, and does not need to be: the record holds both the branch and
+ * the path, so nothing ever has to read one back out of the other.
+ */
+export function worktreeSlug(branch: string): string {
+  const slug = branch
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^[.-]+/, "")
+    .replace(/\.+$/, "")
+  return slug || "branch"
+}
+
+/** git's own stderr, which is what a caller should show: "fatal: invalid
+ * reference" says more than any sentence written here could. */
+function messageOf(error: unknown): string {
+  const stderr = (error as { stderr?: string }).stderr?.trim()
+  if (stderr) return stderr
+  return error instanceof Error ? error.message : String(error)
 }
 
 async function git(dir: string, args: string[]): Promise<string> {

@@ -127,7 +127,7 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
           // ⇧⌘W rather than the role's own ⌘W, which now closes a tab — the
           // same move an editor makes, and for the same reason: a window holds
           // every panel's tabs, and losing it to a keystroke aimed at one of
-          // them takes the sessions running in it too.
+          // them takes everything running in it too.
           IS_MAC
             ? { role: "close", accelerator: "Shift+CmdOrCtrl+W" }
             : { role: "quit" },

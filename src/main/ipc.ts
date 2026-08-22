@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import path from "node:path"
+import path, { dirname } from "node:path"
 
 import {
   clipboard,
@@ -16,7 +16,6 @@ import {
   HTTP_ENVIRONMENT_KEY,
   IPC,
   MCP_SETTING_KEYS,
-  type AgentKind,
   type DatabaseConnectionInput,
   type FileIndexEntry,
   type UpdateDatabaseInput,
@@ -29,26 +28,29 @@ import {
   type NoteBody,
   type NoteFolder,
   type NoteRecord,
+  type WorktreeChatOptions,
+  type WorktreeRecord,
 } from "../shared/api"
 import { descendantFolderIds } from "../shared/tree"
-import {
-  agentCommandWith,
-  agentInstallCommand,
-  agentToolStatuses,
-} from "./agent-tools"
-import { Assistant } from "./assistant"
-import { claudeSlashCommands } from "./claude-commands"
+import { WorktreeChats } from "./worktree-chat"
 import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
 import * as files from "./files"
 import { MAX_INDEXED_FILES } from "./files"
-import { currentBranch, workingTree } from "./git"
+import {
+  addWorktree,
+  changes,
+  currentBranch,
+  fileAtHead,
+  removeWorktree,
+  workingTree,
+  worktrees,
+} from "./git"
 import { sendHttp } from "./http"
 import { McpServers } from "./mcp"
 import { NotePreview } from "./preview"
 import { ProcessManager } from "./process"
 import { systemUsage } from "./system-usage"
-import { hasTranscript, TranscriptMirrors } from "./transcript"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
 import { TerminalManager } from "./terminal"
 import { TsServers } from "./tsserver"
@@ -136,13 +138,13 @@ async function clipboardImagePath(): Promise<string | null> {
  */
 export function registerIpc(getWindow: () => BrowserWindow | null): {
   processes: ProcessManager
+  /** Exposed so a turn in flight can be killed on quit. */
+  worktreeChats: WorktreeChats
   sqlConnections: SqlConnections
   docker: DockerRuntime
-  transcripts: TranscriptMirrors
   terminals: TerminalManager
   preview: NotePreview
   mcp: McpServers
-  assistant: Assistant
   tsServers: TsServers
   watchers: DirectoryWatchers
   noteFilePath: (fileName: string) => string
@@ -171,10 +173,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     data: (event) => send(IPC.terminalData, event),
     exit: (event) => send(IPC.terminalExit, event),
   })
-
-  const transcripts = new TranscriptMirrors((event) =>
-    send(IPC.transcriptEvent, event)
-  )
 
   // Reads the workspace's own files and nothing else — the preview is a view
   // of what is on disk, so it is handed the four reads it needs rather than
@@ -344,38 +342,54 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     },
   })
 
-  /**
-   * The workspace assistant — `claude -p`, one conversation, the MCP servers in
-   * front of it.
+  /*
+   * A worktree's chats: `claude -p` per turn in that checkout.
    *
-   * Given the same config the sessions get, so what it can reach is the same
-   * three switches in Settings; and every folder, since the whole point of it
-   * is a conversation about the workspace rather than about a repository.
+   * The only `claude` this app spawns. What the old "no second one" rule was
+   * about is still refused — a feature calling the CLI as a helper, an AI filter
+   * or an import button — because a helper turn is a turn nobody asked for. This
+   * is a conversation somebody is having.
    */
-  const assistant = new Assistant(
+  const worktreeChats = new WorktreeChats(
     {
       mcpConfig: () => mcp.configPath(),
-      folders: async () =>
-        (await store.getWorkspace()).folders.map((folder) => folder.path),
-      chats: () => store.listChats(),
-      saveChats: (chats) => store.saveChats(chats),
-      readChat: (id) => store.readChat(id),
-      writeChat: (id, messages) => store.writeChat(id, messages),
-      deleteChat: (id) => store.deleteChats([id]),
+      worktreeDir: (worktreeId) => store.resolveWorktreeDir(worktreeId),
+      chats: () => store.listWorktreeChats(),
+      saveChats: (chats) => store.saveWorktreeChats(chats),
+      readChat: (id) => store.readWorktreeChat(id),
+      writeChat: (id, messages) => store.writeWorktreeChat(id, messages),
+      deleteChat: (id) => store.deleteWorktreeChat(id),
     },
-    (event) => send(IPC.assistantEvent, event)
+    (event) => send(IPC.worktreeChatEvent, event)
   )
 
-  ipcMain.handle(IPC.assistantSend, (_event, prompt: string) =>
-    assistant.send(prompt)
+  ipcMain.handle(IPC.listWorktreeChats, () => worktreeChats.list())
+
+  ipcMain.handle(IPC.createWorktreeChat, (_event, worktreeId: string) =>
+    worktreeChats.create(worktreeId)
   )
-  ipcMain.handle(IPC.assistantStop, () => assistant.stop())
-  ipcMain.handle(IPC.assistantChats, () => assistant.chats())
-  ipcMain.handle(IPC.assistantOpen, (_event, id: string) => assistant.open(id))
-  ipcMain.handle(IPC.assistantNew, () => assistant.new())
-  ipcMain.handle(IPC.assistantDelete, (_event, id: string) =>
-    assistant.delete(id)
+
+  ipcMain.handle(IPC.readWorktreeChat, (_event, id: string) =>
+    worktreeChats.read(id)
   )
+
+  ipcMain.handle(IPC.deleteWorktreeChat, (_event, id: string) =>
+    worktreeChats.delete(id)
+  )
+
+  ipcMain.handle(
+    IPC.setWorktreeChatOptions,
+    (_event, id: string, options: WorktreeChatOptions) =>
+      worktreeChats.setOptions(id, options)
+  )
+
+  ipcMain.handle(IPC.sendWorktreeChat, (_event, id: string, prompt: string) =>
+    worktreeChats.send(id, prompt)
+  )
+
+  ipcMain.handle(IPC.stopWorktreeChat, (_event, id: string) => {
+    worktreeChats.stop(id)
+  })
 
   /** The account a Docker-managed database is created with. */
   const DB_USER = "tabomni"
@@ -438,6 +452,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return result.canceled ? [] : result.filePaths
   })
 
+  ipcMain.handle(IPC.pickFiles, async (_event, directory?: string) => {
+    const options: OpenDialogOptions = {
+      title: "Attach files",
+      properties: ["openFile", "multiSelections"],
+      // Where it opens, not what it may return: the paths come back from the
+      // user's own click, and reading one is still an ordinary `files:*` call
+      // through `insideAny`.
+      ...(directory ? { defaultPath: expandHome(directory) } : {}),
+    }
+
+    const window = getWindow()
+    const result = await (window
+      ? dialog.showOpenDialog(window, options)
+      : dialog.showOpenDialog(options))
+
+    return result.canceled ? [] : result.filePaths
+  })
+
   ipcMain.handle(IPC.readImageDataUrl, (_event, filePath: string) =>
     imageDataUrl(filePath)
   )
@@ -469,9 +501,79 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     currentBranch(await store.resolveFolderDir(folderId))
   )
 
-  ipcMain.handle(IPC.gitStatus, async (_event, folderId: string) =>
-    workingTree(await store.resolveFolderDir(folderId))
+  ipcMain.handle(
+    IPC.gitStatus,
+    async (_event, folderId: string, worktreeId: string | null) =>
+      workingTree(
+        (worktreeId ? await store.resolveWorktreeDir(worktreeId) : null) ??
+          (await store.resolveFolderDir(folderId))
+      )
   )
+
+  ipcMain.handle(
+    IPC.gitChanges,
+    async (_event, folderId: string, worktreeId: string | null) =>
+      changes(
+        (worktreeId ? await store.resolveWorktreeDir(worktreeId) : null) ??
+          (await store.resolveFolderDir(folderId))
+      )
+  )
+
+  /**
+   * The committed side of a diff.
+   *
+   * Through the same gate as every other read of a file, and then run in the
+   * root that holds it: `HEAD:` is a path in one repository, and a checkout is a
+   * repository of its own — asking the project's own directory for a path in a
+   * worktree would answer with the wrong branch's copy of the file.
+   */
+  ipcMain.handle(IPC.fileAtHead, async (_event, filePath: string) => {
+    const target = await inWorkspace(filePath)
+    const roots = await fileRoots()
+
+    // The narrowest root that holds it, since a folder and a checkout of it can
+    // both be roots and only one of them is where this path lives — the same
+    // rule `rootOf` follows in the renderer.
+    const root = roots
+      .filter((candidate) => files.insideAny([candidate.path], target))
+      .sort((a, b) => b.path.length - a.path.length)[0]
+    if (!root) return null
+
+    return fileAtHead(root.path, target)
+  })
+
+  /**
+   * Every directory the Explorer may read: the workspace's folders, and the
+   * `git worktree` checkouts made of them.
+   *
+   * A checkout is **not** inside the folder it came from — they live under
+   * `~/.tabomni/workspace/worktrees/`, so that removing them all leaves a
+   * project's own directory untouched — which means a tree that lists them has
+   * to say so here or every read of one is refused by the gate below.
+   *
+   * Read fresh on every call, like the workspace itself: a worktree removed
+   * between one read and the next has to stop being readable at once.
+   */
+  async function fileRoots(): Promise<
+    { path: string; folderId: string; worktreeId: string | null }[]
+  > {
+    const [{ folders }, worktrees] = await Promise.all([
+      store.getWorkspace(),
+      store.listWorktrees(),
+    ])
+    return [
+      ...folders.map((folder) => ({
+        path: folder.path,
+        folderId: folder.id,
+        worktreeId: null,
+      })),
+      ...worktrees.map((worktree) => ({
+        path: worktree.path,
+        folderId: worktree.folderId,
+        worktreeId: worktree.id,
+      })),
+    ]
+  }
 
   /**
    * The one gate in front of the Explorer's reads and writes.
@@ -488,10 +590,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    * small file behind a queue.
    */
   async function inWorkspace(target: string): Promise<string> {
-    const { folders } = await store.getWorkspace()
     if (
       !files.insideAny(
-        folders.map((folder) => folder.path),
+        (await fileRoots()).map((root) => root.path),
         target
       )
     ) {
@@ -557,8 +658,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    * is a file being sent to a process, which is exactly the kind of call the
    * gate exists for.
    */
+  // The worktrees are roots here as much as the folders are: a checkout has a
+  // `node_modules` and a `tsconfig.json` of its own, and resolving one file's
+  // imports against another checkout's copy is how a hover ends up pointing at
+  // the wrong branch's source. `serverFor` takes the longest match, and a
+  // checkout is nested inside no folder, so each gets its own server — started
+  // only when a file in it is opened.
   const tsServers = new TsServers(async () =>
-    (await store.getWorkspace()).folders.map((folder) => folder.path)
+    (await fileRoots()).map((root) => root.path)
   )
 
   ipcMain.handle(IPC.tsOpen, async (_event, filePath: string, text: string) =>
@@ -601,36 +708,43 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   )
 
   ipcMain.handle(IPC.watchDirectories, async (_event, dirs: string[]) => {
-    const { folders } = await store.getWorkspace()
-    const roots = folders.map((folder) => folder.path)
+    const roots = (await fileRoots()).map((root) => root.path)
     watchers.set([
       // Filtered rather than refused: this call carries a whole set, and one
       // directory belonging to a folder removed while the message was in
       // flight would otherwise cost the tree every other watcher it asked for.
       ...dirs.filter((dir) => files.insideAny(roots, dir)),
-      // Each folder's own `.git`, whatever the renderer asked for. A commit or
-      // a checkout in a Terminal session changes the colour of every row and
-      // the branch beside the folder, while touching no directory the tree is
+      // Each root's own `.git`, whatever the renderer asked for. A commit or a
+      // checkout in the dock's shell changes the colour of every row and the
+      // branch beside the folder, while touching no directory the tree is
       // watching. Added here rather than sent from the renderer because this
       // side is the one that joins a name to a path.
+      //
+      // In a worktree that path is a *file* pointing into the parent
+      // repository, and watching it catches less than a folder's `.git` does —
+      // enough that a checkout removed underneath is noticed, not enough for a
+      // commit made in it. What covers that case is the ordinary one: a commit
+      // touches files in directories the tree already has open, and each of
+      // those schedules the same status read.
       ...roots.map((root) => path.join(root, ".git")),
     ])
   })
 
   ipcMain.handle(IPC.listWorkspaceFiles, async () => {
-    const { folders } = await store.getWorkspace()
-
-    // Sequential rather than `Promise.all`, so the budget is shared: two
-    // folders walked at once would each take the whole cap and hand back twice
-    // what the renderer agreed to hold.
+    // Sequential rather than `Promise.all`, so the budget is shared: two roots
+    // walked at once would each take the whole cap and hand back twice what
+    // the renderer agreed to hold. The folders come first for the same reason
+    // they are listed first in the tree — a checkout is a copy of one of them,
+    // and the copy is not what somebody reaching for `⌘P` usually means.
     const found: FileIndexEntry[] = []
-    for (const folder of folders) {
+    for (const root of await fileRoots()) {
       if (found.length >= MAX_INDEXED_FILES) break
       found.push(
         ...(await files.indexFiles(
-          folder.path,
-          folder.id,
-          MAX_INDEXED_FILES - found.length
+          root.path,
+          root.folderId,
+          MAX_INDEXED_FILES - found.length,
+          root.worktreeId
         ))
       )
     }
@@ -774,8 +888,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(
     IPC.startProcess,
-    async (_event, folderId: string, command: string, args: string[]) =>
-      processes.start(await store.resolveFolderDir(folderId), command, args)
+    async (
+      _event,
+      folderId: string,
+      command: string,
+      args: string[],
+      worktreeId?: string
+    ) =>
+      processes.start(
+        (worktreeId ? await store.resolveWorktreeDir(worktreeId) : null) ??
+          (await store.resolveFolderDir(folderId)),
+        command,
+        args
+      )
   )
 
   ipcMain.handle(IPC.stopProcess, (_event, processId: string) => {
@@ -811,6 +936,78 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.httpSend, (_event, input: HttpSendInput) =>
     sendHttp(input)
   )
+
+  /*
+   * The worktrees, reconciled against git's own list on the way out.
+   *
+   * A checkout somebody removed with `git worktree remove` themselves, or by
+   * deleting the directory, is dropped here rather than offered as somewhere to
+   * work — and dropped from the record too, so the reconciliation happens once
+   * rather than on every read. Git is the truth about what exists; the record
+   * only exists so the renderer can name one by id.
+   */
+  ipcMain.handle(IPC.listWorktrees, async () => {
+    const known = await store.listWorktrees()
+    if (known.length === 0) return known
+
+    // One `git worktree list` per folder that has records, not per record.
+    const byFolder = new Map<string, Set<string>>()
+    for (const folderId of new Set(known.map((entry) => entry.folderId))) {
+      const dir = await store.resolveFolderDir(folderId).catch(() => null)
+      byFolder.set(
+        folderId,
+        new Set(dir ? (await worktrees(dir)).map((entry) => entry.path) : [])
+      )
+    }
+
+    const live = known.filter((entry) =>
+      byFolder.get(entry.folderId)?.has(entry.path)
+    )
+    if (live.length !== known.length) await store.saveWorktrees(live)
+    return live
+  })
+
+  ipcMain.handle(
+    IPC.createWorktree,
+    async (_event, folderId: string, branch: string, from: string) => {
+      const dir = await store.resolveFolderDir(folderId)
+      const target = store.worktreePath(folderId, branch)
+
+      await mkdir(dirname(target), { recursive: true })
+
+      const error = await addWorktree(dir, target, branch, from)
+      if (error) return { error }
+
+      const worktree: WorktreeRecord = {
+        id: randomUUID(),
+        folderId,
+        branch,
+        path: target,
+        from,
+        createdAt: new Date().toISOString(),
+      }
+      await store.saveWorktrees([...(await store.listWorktrees()), worktree])
+      return { worktree }
+    }
+  )
+
+  ipcMain.handle(IPC.removeWorktree, async (_event, id: string) => {
+    const known = await store.listWorktrees()
+    const worktree = known.find((entry) => entry.id === id)
+    if (!worktree) return
+
+    const dir = await store
+      .resolveFolderDir(worktree.folderId)
+      .catch(() => null)
+    // Removed even when git refuses or the folder has gone: the record is this
+    // app's own, and leaving a row for a checkout nobody can reach is worse
+    // than leaving a directory `git worktree prune` will clear.
+    if (dir) await removeWorktree(dir, worktree.path)
+    // The chats go with the checkout: they are conversations about a directory
+    // that no longer exists, and a turn in one could not run anywhere.
+    await worktreeChats.deleteFor(id)
+    await store.saveWorktrees(known.filter((entry) => entry.id !== id))
+  })
 
   ipcMain.handle(IPC.listNotes, () => store.listNotes())
 
@@ -870,25 +1067,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.notePreviewUrl, (_event, id: string) => preview.urlOf(id))
 
-  ipcMain.handle(IPC.agentTools, () => agentToolStatuses())
-
-  ipcMain.handle(IPC.claudeCommands, async (_event, folderId: string) =>
-    claudeSlashCommands(await store.resolveFolderDir(folderId))
-  )
-
-  ipcMain.handle(
-    IPC.agentInstall,
-    (_event, cols: number, rows: number, kind: AgentKind) =>
-      // The user's own directory, not a folder's: these install globally, and
-      // an installer that writes a lockfile into someone's repository because
-      // that is where it happened to run would be a bug of its own.
-      terminals.create(
-        { cwd: homedir(), command: agentInstallCommand(kind) },
-        cols,
-        rows
-      )
-  )
-
   ipcMain.handle(
     IPC.terminalCreate,
     async (
@@ -896,32 +1074,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       folderId: string,
       cols: number,
       rows: number,
-      kind: AgentKind,
-      claudeSessionId?: string
+      worktreeId?: string
     ) => {
-      const cwd = await store.resolveFolderDir(folderId)
-      // Null unless a server is switched on, and read here rather than passed
-      // in by the renderer: what the workspace offers an agent is a setting,
-      // not something the pane that started the session knows.
-      const mcpConfig = kind === "claude" ? await mcp.configPath() : null
-      // A tab that already has a conversation continues it rather than
-      // starting another — which is what makes a restart cost the process and
-      // nothing else. Asked of the file rather than of the caller: an id
-      // minted for a session that died before the CLI wrote anything is one
-      // `--resume` would reject.
-      const resume = claudeSessionId
-        ? await hasTranscript(cwd, claudeSessionId)
-        : false
-
-      const target = {
-        cwd,
-        command: agentCommandWith(kind, {
-          claudeSessionId,
-          resume,
-          mcpConfig,
-        }),
-      }
-      return terminals.create(target, cols, rows)
+      // The worktree when one was named, the folder otherwise — and the folder
+      // again when the worktree has since been removed, which is the right
+      // fallback for a shell whose checkout is gone.
+      const cwd =
+        (worktreeId ? await store.resolveWorktreeDir(worktreeId) : null) ??
+        (await store.resolveFolderDir(folderId))
+      // No command: the user's own login shell, which is the only thing a pty
+      // is started for now. The agent CLIs used to be started here too, with
+      // their flags built alongside — what runs one is `claude -p` in
+      // `worktree-chat.ts`, which spawns its own process and needs no pty.
+      return terminals.create({ cwd }, cols, rows)
     }
   )
 
@@ -941,32 +1106,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     terminals.kill(terminalId)
   )
 
-  ipcMain.handle(
-    IPC.transcriptWatch,
-    async (
-      _event,
-      mirrorId: string,
-      folderId: string,
-      claudeSessionId: string
-    ) => {
-      const cwd = await store.resolveFolderDir(folderId)
-      return transcripts.watch(mirrorId, cwd, claudeSessionId)
-    }
-  )
-
-  ipcMain.handle(IPC.transcriptUnwatch, (_event, mirrorId: string) =>
-    transcripts.unwatch(mirrorId)
-  )
-
   ipcMain.handle(IPC.systemUsage, () => systemUsage())
 
   return {
     processes,
+    worktreeChats,
     sqlConnections,
     mcp,
-    assistant,
     docker,
-    transcripts,
     terminals,
     preview,
     tsServers,
