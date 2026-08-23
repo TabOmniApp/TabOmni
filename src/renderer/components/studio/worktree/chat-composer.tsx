@@ -9,9 +9,13 @@ import {
 import {
   ArrowUp,
   AtSign,
+  Eye,
   Map,
+  MessageCircleQuestion,
   Paperclip,
+  PencilLine,
   Plus,
+  ShieldOff,
   Signal,
   SignalHigh,
   SignalLow,
@@ -24,8 +28,10 @@ import {
 import {
   CHAT_EFFORTS,
   CHAT_MODELS,
+  CHAT_PERMISSIONS,
   DEFAULT_CHAT_OPTIONS,
   type ChatEffort,
+  type ChatPermission,
   type WorktreeChatOptions,
 } from "@shared/api"
 import {
@@ -385,18 +391,9 @@ export function ChatComposer({
                 effort={options.effort}
                 onPick={(effort) => onOptions({ ...options, effort })}
               />
-              <ToolbarButton
-                icon={<Map />}
-                label="Plan"
-                title={
-                  options.plan
-                    ? "Plan mode is on: this turn reads and changes nothing"
-                    : "Plan mode: answer with a plan and change nothing"
-                }
-                on={options.plan}
-                aria-pressed={options.plan}
-                className={options.plan ? "bg-accent" : undefined}
-                onClick={() => onOptions({ ...options, plan: !options.plan })}
+              <PermissionMenu
+                permission={options.permission}
+                onPick={(permission) => onOptions({ ...options, permission })}
               />
             </>
           )}
@@ -600,6 +597,113 @@ function EffortIcon({ effort }: { effort: ChatEffort | null }) {
   // `xhigh` and `max` are both the full four bars: lucide has no fifth, and the
   // word beside it is what tells them apart.
   return <Signal />
+}
+
+/**
+ * How much this chat's turns may do.
+ *
+ * One picker rather than the plan toggle it replaced plus a picker beside it:
+ * plan mode *is* a permission — the read-only one, asked a particular way — and
+ * two controls over one question can be put into a state neither means. It is
+ * the only control here that never reads "Default", because there is no such
+ * thing: a turn runs at whatever this says, and `Edits` is what it says until
+ * somebody changes it.
+ */
+function PermissionMenu({
+  permission,
+  onPick,
+}: {
+  permission: ChatPermission
+  onPick: (permission: ChatPermission) => void
+}) {
+  const chosen = PERMISSION_MARKS[permission] ?? PERMISSION_MARKS.edits
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <ToolbarButton
+            icon={<chosen.icon />}
+            label={chosen.short}
+            title={chosen.detail}
+            on={permission !== "edits"}
+            // The one mode that is worth spotting from across the pane: a chat
+            // left on it approves whatever the next turn reaches for.
+            className={permission === "full" ? "text-destructive" : undefined}
+          />
+        }
+      />
+      <DropdownMenuContent align="start" className="w-60">
+        {CHAT_PERMISSIONS.map((entry) => {
+          const mark = PERMISSION_MARKS[entry]
+          return (
+            <DropdownMenuItem
+              key={entry}
+              onClick={() => onPick(entry)}
+              variant={entry === "full" ? "destructive" : undefined}
+            >
+              <mark.icon />
+              <span className="flex min-w-0 flex-col">
+                {mark.label}
+                {/* The second line is the whole point of the menu being wider
+                    than the others: "read only" and "full access" are the two
+                    somebody has to be sure about before picking. */}
+                <span className="text-[0.7rem] text-muted-foreground">
+                  {mark.detail}
+                </span>
+              </span>
+              {permission === entry && <Check />}
+            </DropdownMenuItem>
+          )
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** What each mode is called on the button, in the menu, and on the hover line.
+ * The detail says what it *does*, since none of these four names are self
+ * evident to somebody who has not read `PERMISSIONS`. */
+const PERMISSION_MARKS: Record<
+  ChatPermission,
+  {
+    label: string
+    /** The toolbar has room for one word. */
+    short: string
+    detail: string
+    icon: typeof Map
+  }
+> = {
+  plan: {
+    label: "Plan",
+    short: "Plan",
+    detail: "Reads, and answers with a plan. Changes nothing.",
+    icon: Map,
+  },
+  read: {
+    label: "Read only",
+    short: "Read",
+    detail: "Reads and answers. No edits, no shell.",
+    icon: Eye,
+  },
+  ask: {
+    label: "Ask",
+    short: "Ask",
+    detail: "Reads freely, and stops to ask before it writes or runs anything.",
+    icon: MessageCircleQuestion,
+  },
+  edits: {
+    label: "Edits",
+    short: "Edits",
+    detail: "Edits files and runs commands in this checkout.",
+    icon: PencilLine,
+  },
+  full: {
+    label: "Full access",
+    short: "Full",
+    detail: "Nothing is asked, including tools this app has not listed.",
+    icon: ShieldOff,
+  },
 }
 
 /** The tick a chosen row carries, pushed to the end. */

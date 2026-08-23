@@ -322,15 +322,25 @@ export type AssistantMessage =
   /** A tool call, drawn as one line: what it was and what it was about. */
   | { id: string; role: "tool"; name: string; summary: string }
   | { id: string; role: "error"; text: string }
+  /**
+   * Something the turn stopped to ask, and what was said back.
+   *
+   * Written once it has been answered rather than while it is pending: a
+   * question on disk is one nobody can answer, because the process that asked
+   * it is gone. What is kept is the decision, which is the part worth reading
+   * next week — a turn that could edit because somebody allowed it, or a plan
+   * that went one way because somebody picked an option.
+   */
+  | { id: string; role: "ask"; text: string }
 
 /**
  * One thing that happened while a turn was being answered.
  *
- * A turn is `claude -p` in `--output-format stream-json`, so what arrives is
- * the CLI's own event stream, narrowed to the three things a pane draws: a
+ * A turn is one `query()` of `@anthropic-ai/claude-agent-sdk`, so what arrives
+ * is the SDK's own message stream, narrowed to the three things a pane draws: a
  * message, a tool it called, and the end of the turn. Anything else in that
- * stream — the init line, a tool's result, the token counts — is read by
- * `main/claude-print.ts` and not passed on.
+ * stream — the init line, a tool's result, the token counts, the status and
+ * progress events — is read by `main/claude-agent.ts` and not passed on.
  */
 export type AssistantEvent =
   /** One assistant message, as markdown. A turn can produce several. */
@@ -338,9 +348,109 @@ export type AssistantEvent =
   /** A tool the assistant called, drawn as a line rather than in full: the
    * arguments are usually a SQL statement or a request name. */
   | { type: "tool"; name: string; summary: string }
+  /**
+   * The turn has stopped and is waiting to be answered.
+   *
+   * The turn is *paused* here, not ended: the CLI is holding the tool call, and
+   * it stays held until `answerWorktreeChatAsk` names this ask. Nothing else
+   * arrives for this chat in the meantime.
+   */
+  | { type: "ask"; ask: WorktreeChatAsk }
+  /**
+   * An ask has been answered, and this is the line recording it.
+   *
+   * The text comes from the main process rather than being rebuilt by whoever
+   * answered: main is what writes the conversation down, and a renderer
+   * composing its own version of the same sentence is two spellings of one line
+   * waiting to drift apart. Arriving here also means the card can come down.
+   */
+  | { type: "decision"; text: string }
   /** The turn is over, one way or the other. `error` is set when it failed —
-   * including when `claude` itself could not be started. */
+   * including when `claude` itself could not be started. Any ask still pending
+   * is gone with it: the process that would have taken the answer has ended. */
   | { type: "done"; error: string | null }
+
+/** One of the choices in a question the model asked. */
+export type ChatAskOption = {
+  label: string
+  description: string
+}
+
+/** One question, out of the one to four an `AskUserQuestion` carries. */
+export type ChatAskQuestion = {
+  /** The full text, which is also the key an answer is filed under. */
+  question: string
+  /** A short label for it — twelve characters or so, the model's own. */
+  header: string
+  options: ChatAskOption[]
+  multiSelect: boolean
+}
+
+/**
+ * A turn waiting on the user: the thing print mode could not have.
+ *
+ * Two shapes, because the CLI asks two different things and they are answered
+ * differently. A **tool** request is "may I do this", which is yes or no; a
+ * **questions** request is `AskUserQuestion`, where the model wrote the options
+ * and wants one picked. Both arrive through the SDK's `canUseTool`, which is
+ * why they are one type with one answer call rather than two of each.
+ *
+ * Held in memory in the main process only, and lost if the window reloads —
+ * like `sending` in the renderer's own store, and for the same reason: what is
+ * on the other end is a process, not a record.
+ */
+export type WorktreeChatAsk = {
+  /**
+   * Unique per request.
+   *
+   * An answer names it, so a card left on screen from a question that has since
+   * been withdrawn cannot answer the one that replaced it.
+   */
+  id: string
+  chatId: string
+} & (
+  | {
+      kind: "tool"
+      /**
+       * The sentence to show — "Claude wants to read foo.txt".
+       *
+       * The SDK renders it, and it is used rather than rebuilt from the tool
+       * name and its input: the CLI knows which argument of a Bash call is the
+       * interesting one, and this app would be guessing.
+       */
+      title: string
+      /** The tool, for the line that records the decision afterwards. */
+      name: string
+      /** What it was about — the same one-liner a tool row carries. */
+      summary: string
+      /**
+       * Whether "don't ask again" is on offer.
+       *
+       * Only sometimes: the SDK hands back a rule to remember for the calls it
+       * can describe as a rule, and there is nothing to offer for the ones it
+       * cannot. An `always` answer to an ask without it is treated as a plain
+       * allow rather than refused, since the difference is a convenience.
+       */
+      always: boolean
+    }
+  | { kind: "questions"; questions: ChatAskQuestion[] }
+)
+
+/**
+ * What the user said back.
+ *
+ * `always` writes a permission rule where the SDK suggested one, which is the
+ * CLI's own "don't ask again" — it lands in the checkout's
+ * `.claude/settings.local.json`, so it is remembered for that branch and goes
+ * when the branch does.
+ *
+ * Answers are arrays even for a question that takes one, so the shape does not
+ * depend on `multiSelect` — one place to join them instead of two to get wrong.
+ */
+export type WorktreeChatAnswer =
+  | { kind: "allow"; always?: boolean }
+  | { kind: "deny" }
+  | { kind: "answers"; answers: Record<string, string[]> }
 
 /**
  * The three MCP servers the studio can put in front of an agent: the
@@ -635,6 +745,33 @@ export const CHAT_MODELS: { id: string; label: string }[] = [
 ]
 
 /**
+ * How much a turn in this chat may do.
+ *
+ * `plan` and `read` are read-only, `edits` is what a chat opens on, `full` asks
+ * nothing at all, and `ask` is the one that stops and puts the question on
+ * screen. See `PERMISSIONS` in `main/worktree-chat.ts` for what each one
+ * actually runs as.
+ *
+ * `ask` was impossible until the turn moved to the agent SDK: a `claude -p`
+ * had nobody to answer a prompt, so a mode that ended by asking was a turn
+ * that stalled. It is the reason the rest of this list is shaped the way it
+ * is — four ways to decide up front, because deciding later could not be done.
+ *
+ * Ordered from least to most, which is the order the menu draws them in; `ask`
+ * sits between the read-only pair and `edits`, since a turn that has to ask is
+ * doing less on its own than one that does not.
+ */
+export const CHAT_PERMISSIONS = [
+  "plan",
+  "read",
+  "ask",
+  "edits",
+  "full",
+] as const
+
+export type ChatPermission = (typeof CHAT_PERMISSIONS)[number]
+
+/**
  * What a chat's own toolbar decides, held per chat.
  *
  * Per chat rather than per workspace because that is the unit somebody thinks
@@ -653,13 +790,22 @@ export type WorktreeChatOptions = {
   /** `--effort`, or null for the CLI's own default. */
   effort: ChatEffort | null
   /**
-   * A turn that reads and does not write: the plan, and nothing changed.
+   * How much this chat's turns may do without being asked.
    *
-   * Deliberately **not** `--permission-mode plan`, which cannot work in print
-   * mode — leaving plan mode is `ExitPlanMode`, which is a prompt, and there is
-   * nobody to answer it. See `PLAN_TOOLS` in `main/worktree-chat.ts`.
+   * One control rather than two: a plan toggle beside a permission picker is
+   * two answers to one question, and "plan, with full access" is a state
+   * neither of them meant. Read through `chatOptions` rather than off the
+   * record, which is where the toggle this replaced is migrated.
    */
-  plan: boolean
+  permission: ChatPermission
+  /**
+   * The plan toggle this replaced, on records written before the picker.
+   *
+   * Kept only to be read: `chatOptions` turns a `true` here into
+   * `permission: "plan"` and drops the field, so a chat left in plan mode
+   * before an update comes back in it. Never written.
+   */
+  plan?: boolean
 }
 
 /** A chat with nothing chosen: the CLI's own model and effort, and free to
@@ -667,7 +813,45 @@ export type WorktreeChatOptions = {
 export const DEFAULT_CHAT_OPTIONS: WorktreeChatOptions = {
   model: null,
   effort: null,
-  plan: false,
+  permission: "edits",
+}
+
+/**
+ * A record's options as the app uses them — defaults filled in, `plan`
+ * migrated, and never the legacy field.
+ *
+ * One function on both sides of the contract rather than a `??` per caller:
+ * main builds an argument list out of these and the composer draws them, and a
+ * chat whose toolbar says one thing while its turn runs as another is the one
+ * failure worth writing a function to make impossible.
+ */
+export function chatOptions(
+  options?: WorktreeChatOptions | null
+): WorktreeChatOptions {
+  if (!options) return DEFAULT_CHAT_OPTIONS
+  return {
+    model: options.model ?? null,
+    effort: options.effort ?? null,
+    permission: readPermission(options),
+  }
+}
+
+/**
+ * The mode a record is on, as one of the four this build knows.
+ *
+ * Checked against the list rather than trusted, because these come off disk:
+ * a chat written by a newer build names a mode nothing here has heard of, and
+ * both sides would then draw a blank label over a turn assembled from
+ * `undefined`. Falling back to the default is the one answer that is safe in
+ * both directions — it is the least a chat can be on that is still useful.
+ */
+function readPermission(options: WorktreeChatOptions): ChatPermission {
+  if (options.permission && CHAT_PERMISSIONS.includes(options.permission)) {
+    return options.permission
+  }
+  // The toggle this replaced, on a record older than the picker.
+  if (options.plan) return "plan"
+  return DEFAULT_CHAT_OPTIONS.permission
 }
 
 export type WorktreeChat = {
@@ -692,11 +876,12 @@ export type WorktreeChat = {
    */
   started?: boolean
   /**
-   * The model, effort and plan switch this chat is on.
+   * The model, effort and permission this chat is on.
    *
    * Optional for the same reason `started` is: a chat written before the
    * toolbar existed has no field, and a missing one reads as
    * `DEFAULT_CHAT_OPTIONS` — which is exactly how those turns already ran.
+   * Read it through `chatOptions`, never directly.
    */
   options?: WorktreeChatOptions
   createdAt: string
@@ -1156,7 +1341,7 @@ export type DesktopApi = {
   readWorktreeChat: (id: string) => Promise<AssistantMessage[]>
   deleteWorktreeChat: (id: string) => Promise<void>
   /**
-   * The model, effort and plan switch for one chat.
+   * The model, effort and permission for one chat.
    *
    * Its own call rather than an argument to `sendWorktreeChat`, because the
    * toolbar is used before anything is sent: somebody picks Haiku and then
@@ -1166,6 +1351,18 @@ export type DesktopApi = {
   setWorktreeChatOptions: (
     id: string,
     options: WorktreeChatOptions
+  ) => Promise<void>
+  /**
+   * Answers what a turn stopped to ask — see `WorktreeChatAsk`.
+   *
+   * Named by ask id rather than by chat, even though a chat has at most one
+   * pending at a time: the card is on screen while the turn is paused, and an
+   * answer that arrived for the question before it would otherwise be applied
+   * to this one. An id nothing is waiting on is ignored.
+   */
+  answerWorktreeChatAsk: (
+    askId: string,
+    answer: WorktreeChatAnswer
   ) => Promise<void>
   /** Runs one turn. Rejects when that chat is still answering. */
   sendWorktreeChat: (id: string, prompt: string) => Promise<void>
@@ -1419,6 +1616,7 @@ export const IPC = {
   readWorktreeChat: "worktree-chats:read",
   deleteWorktreeChat: "worktree-chats:delete",
   setWorktreeChatOptions: "worktree-chats:options",
+  answerWorktreeChatAsk: "worktree-chats:answer",
   sendWorktreeChat: "worktree-chats:send",
   stopWorktreeChat: "worktree-chats:stop",
   worktreeChatEvent: "worktree-chats:event",

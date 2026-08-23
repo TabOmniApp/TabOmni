@@ -19,15 +19,8 @@ const { values } = parseArgs({
   },
 })
 
-/** @type {import("esbuild").BuildOptions} */
-const options = {
-  entryPoints: {
-    main: "src/main/main.ts",
-    preload: "src/preload/index.ts",
-    // The agent daemon: a separate process (see src/main/daemon.ts), so it
-    // gets its own bundle rather than living inside main.cjs.
-    daemon: "src/main/daemon.ts",
-  },
+/** Everything the three bundles agree on. @type {import("esbuild").BuildOptions} */
+const shared = {
   outdir: "dist-electron",
   bundle: true,
   platform: "node",
@@ -53,9 +46,50 @@ const options = {
   logLevel: "info",
 }
 
+/**
+ * Main, which is the only one that bundles the agent SDK.
+ *
+ * `@anthropic-ai/claude-agent-sdk` is ESM and reaches for `import.meta.url` to
+ * build a `require` of its own. esbuild's CJS output turns `import.meta` into
+ * `{}`, so that becomes `createRequire(undefined)` — which throws the first time
+ * the SDK uses it. The define below points it at a real file URL instead.
+ *
+ * It is bundled rather than left external because `files` in package.json is
+ * `dist-electron` and `dist-renderer` only: a `require` of node_modules
+ * resolves in dev and is missing from a packaged app.
+ *
+ * Its own build rather than a field on `shared` because the banner cannot go
+ * near the preload: that script is sandboxed and has no `require` of node
+ * builtins, so a `require("node:url")` at the top of it would fail before
+ * anything else ran.
+ *
+ * @type {import("esbuild").BuildOptions}
+ */
+const main = {
+  ...shared,
+  entryPoints: { main: "src/main/main.ts" },
+  banner: {
+    js: `const __importMetaUrl = require("node:url").pathToFileURL(__filename).href;`,
+  },
+  define: { "import.meta.url": "__importMetaUrl" },
+}
+
+/** @type {import("esbuild").BuildOptions} */
+const rest = {
+  ...shared,
+  entryPoints: {
+    preload: "src/preload/index.ts",
+    // The agent daemon: a separate process (see src/main/daemon.ts), so it
+    // gets its own bundle rather than living inside main.cjs.
+    daemon: "src/main/daemon.ts",
+  },
+}
+
 if (values.watch) {
-  const context = await esbuild.context(options)
-  await context.watch()
+  for (const options of [main, rest]) {
+    const context = await esbuild.context(options)
+    await context.watch()
+  }
 } else {
-  await esbuild.build(options)
+  await Promise.all([esbuild.build(main), esbuild.build(rest)])
 }

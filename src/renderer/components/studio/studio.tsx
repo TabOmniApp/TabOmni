@@ -100,7 +100,7 @@ export function Studio() {
   // so its output is subscribed to here rather than in the panel.
   useEffect(() => useRun.getState().listen(), [])
 
-  // A worktree chat's turn is a `claude -p` in the main process and outlives the
+  // A worktree chat's turn runs in the main process and outlives the
   // pane being switched away from, so its lines are subscribed to here.
   useEffect(() => useWorktreeChats.getState().listen(), [])
 

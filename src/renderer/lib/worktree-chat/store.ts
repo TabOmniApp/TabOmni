@@ -3,6 +3,8 @@ import { create } from "zustand"
 import type {
   AssistantMessage,
   WorktreeChat,
+  WorktreeChatAnswer,
+  WorktreeChatAsk,
   WorktreeChatOptions,
 } from "@shared/api"
 import { useProjects } from "../projects"
@@ -13,7 +15,7 @@ import { useWorktrees } from "../worktree/store"
 /**
  * The chats held in worktrees.
  *
- * A view of what `main/worktree-chat.ts` owns. The turn is a `claude -p` in the
+ * A view of what `main/worktree-chat.ts` owns. The turn runs in the
  * main process, so this holds no process and no timers — only the listing, the
  * lines of whichever chats have been opened, and which chat is on screen.
  *
@@ -29,6 +31,18 @@ type WorktreeChatState = {
   messages: Record<string, AssistantMessage[]>
   /** Which chats have a turn in flight. */
   sending: string[]
+  /**
+   * The question each chat is stopped on, for the chats that are.
+   *
+   * One per chat, not a queue: the turn is *held* while it waits, so there
+   * cannot be a second one behind it. Keyed by chat rather than by ask because
+   * that is how the pane looks it up — the answer names the ask, which is what
+   * keeps the two from getting out of step.
+   *
+   * Lost on a reload, like `sending` and for the same reason: what is on the
+   * other end is a process in the main process, not a record.
+   */
+  asks: Record<string, WorktreeChatAsk>
 
   /** Chats with a tab open, oldest first — the strip's membership. */
   openIds: string[]
@@ -55,7 +69,15 @@ type WorktreeChatState = {
 
   send: (id: string, prompt: string) => Promise<void>
   stop: (id: string) => void
-  /** The model, effort and plan switch for one chat — the composer's toolbar. */
+  /**
+   * Answers what a chat is waiting on, and takes the card down.
+   *
+   * Cleared here rather than on the `decision` event coming back: the turn
+   * carries on the moment main has the answer, so a card left up until the
+   * round trip completes is a card somebody can answer twice.
+   */
+  answer: (chatId: string, answer: WorktreeChatAnswer) => void
+  /** The model, effort and permission for one chat — the composer's toolbar. */
   setOptions: (id: string, options: WorktreeChatOptions) => void
 
   /** Subscribes to turns. Called once from the workbench: a turn outlives the
@@ -68,6 +90,7 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
   loading: false,
   messages: {},
   sending: [],
+  asks: {},
   openIds: [],
   selectedId: null,
 
@@ -246,6 +269,19 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     })
   },
 
+  answer(chatId, answer) {
+    const ask = get().asks[chatId]
+    if (!ask) return
+
+    set({ asks: without(get().asks, chatId) })
+
+    void window.desktop
+      .answerWorktreeChatAsk(ask.id, answer)
+      .catch((error: unknown) => {
+        console.error("Could not answer that request", error)
+      })
+  },
+
   /**
    * Written here and then to the record, rather than waiting on the write.
    *
@@ -273,8 +309,18 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     return window.desktop.onWorktreeChatEvent((event) => {
       const { chatId } = event
 
+      // The turn has stopped on something. Nothing else arrives for this chat
+      // until it is answered, so there is no ordering to worry about here.
+      if (event.type === "ask") {
+        set({ asks: { ...get().asks, [chatId]: event.ask } })
+        return
+      }
+
       if (event.type === "done") {
         set({ sending: get().sending.filter((entry) => entry !== chatId) })
+        // A turn can end while a card is up — Stop, or a failure — and the
+        // question died with the process that asked it.
+        if (get().asks[chatId]) set({ asks: without(get().asks, chatId) })
         if (!event.error) {
           // The listing's title and order moved with the turn.
           void get().refresh()
@@ -296,13 +342,19 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
                 name: event.name,
                 summary: event.summary,
               }
-            : event.error
+            : event.type === "decision"
               ? {
                   id: `s${Date.now()}-${Math.random()}`,
-                  role: "error",
-                  text: event.error,
+                  role: "ask",
+                  text: event.text,
                 }
-              : null
+              : event.error
+                ? {
+                    id: `s${Date.now()}-${Math.random()}`,
+                    role: "error",
+                    text: event.error,
+                  }
+                : null
 
       if (!line) return
       set({
@@ -321,4 +373,12 @@ export function chatsOf(
   worktreeId: string
 ): WorktreeChat[] {
   return chats.filter((chat) => chat.worktreeId === worktreeId)
+}
+
+/** One key dropped from a record. Written out because the destructuring form
+ * leaves a binding nothing reads, which is a lint error here. */
+function without<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const rest = { ...record }
+  delete rest[key]
+  return rest
 }
