@@ -1,4 +1,4 @@
-import { TriangleAlert, Wrench } from "lucide-react"
+import { ShieldCheck, TriangleAlert, Wrench } from "lucide-react"
 
 import type { AssistantMessage } from "@shared/api"
 import { useSettings } from "@/lib/settings"
@@ -7,10 +7,10 @@ import { MarkdownView } from "../markdown-view"
 import { MentionText } from "./chat-composer"
 
 /**
- * One line of a `claude -p` conversation.
+ * One line of an agent conversation.
  *
- * One file for every role rather than a component per role: a print-mode turn
- * arrives as `AssistantMessage`s, and a tool call, an error and a reply have to
+ * One file for every role rather than a component per role: a turn arrives as
+ * `AssistantMessage`s, and a tool call, a decision, an error and a reply have to
  * read as one conversation.
  *
  * A tool call is a row rather than a bubble, and only the user's line gets one:
@@ -39,6 +39,27 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
         {of.summary && (
           <span className="truncate opacity-70">{of.summary}</span>
         )}
+      </div>
+    )
+  }
+
+  if (of.role === "ask") {
+    // A row like a tool call rather than a bubble, and for the same reason: it
+    // is a note about the turn rather than either side speaking. Under
+    // `showToolCalls` too — somebody who has turned the machinery off does not
+    // want half of it back — except that a refusal changed what the turn did,
+    // so it says so either way.
+    const refused = of.text.startsWith("Refused")
+    if (!showToolCalls && !refused) return null
+    return (
+      <div
+        className={cn(
+          "flex items-baseline gap-1.5 px-1 text-[0.7rem]",
+          refused ? "text-destructive/80" : "text-muted-foreground"
+        )}
+      >
+        <ShieldCheck className="size-3 shrink-0 translate-y-0.5" />
+        <span className="truncate">{of.text}</span>
       </div>
     )
   }

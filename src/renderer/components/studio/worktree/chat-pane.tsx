@@ -1,10 +1,15 @@
 import { useEffect, useRef } from "react"
 
-import { DEFAULT_CHAT_OPTIONS, type WorktreeChatOptions } from "@shared/api"
+import {
+  chatOptions,
+  type ChatPermission,
+  type WorktreeChatOptions,
+} from "@shared/api"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import { useWorktrees } from "@/lib/worktree/store"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
+import { ChatAsk } from "./chat-ask"
 import { ChatComposer } from "./chat-composer"
 import { ChatMessage } from "./chat-message"
 import { WorktreeWelcome } from "./worktree-welcome"
@@ -12,8 +17,8 @@ import { WorktreeWelcome } from "./worktree-welcome"
 /**
  * A worktree's chat: the pane the strip's chat tabs draw into.
  *
- * The conversation is hosted rather than tailed — `claude -p` per turn in the
- * checkout's own directory, streamed back a message at a time (see
+ * The conversation is hosted rather than tailed — one agent-SDK turn at a time
+ * in the checkout's own directory, streamed back a message at a time (see
  * `main/worktree-chat.ts`). So this is the app's own chat UI rather than a
  * reader: a session's chat view tails the transcript the interactive CLI
  * writes, and therefore cannot be anything else.
@@ -54,9 +59,33 @@ export function WorktreeChatPane() {
     <Conversation
       chatId={shown.id}
       worktreeId={shown.worktreeId}
-      options={shown.options ?? DEFAULT_CHAT_OPTIONS}
+      // Through `chatOptions` on both sides of the contract: main builds the
+      // turn's argument list out of the same reading, and a toolbar showing
+      // `Edits` over a turn that ran as a plan is the one disagreement worth
+      // ruling out.
+      options={chatOptions(shown.options)}
     />
   )
+}
+
+/** What the empty field asks for. The permission is what the turn will actually
+ * do, so it is what the prompt should be inviting. */
+const PLACEHOLDERS: Record<ChatPermission, string> = {
+  plan: "Ask for a plan for this checkout…",
+  read: "Ask about this checkout…",
+  ask: "Ask to make changes in this checkout…",
+  edits: "Ask to make changes in this checkout…",
+  full: "Ask to make changes in this checkout…",
+}
+
+/** The line under the composer: what this chat's next turn may do, in the words
+ * somebody would want to have read before it ran. */
+const CAPTIONS: Record<ChatPermission, string> = {
+  plan: "Plan mode: this turn reads and changes nothing",
+  read: "Read only: this turn reads and changes nothing",
+  ask: "Reading runs freely; edits and commands will stop and ask you",
+  edits: "Edits and commands run without asking, in this branch only",
+  full: "Full access: nothing is asked, in this branch only",
 }
 
 function Conversation({
@@ -70,8 +99,10 @@ function Conversation({
 }) {
   const messages = useWorktreeChats((state) => state.messages[chatId])
   const sending = useWorktreeChats((state) => state.sending.includes(chatId))
+  const ask = useWorktreeChats((state) => state.asks[chatId])
   const send = useWorktreeChats((state) => state.send)
   const stop = useWorktreeChats((state) => state.stop)
+  const answer = useWorktreeChats((state) => state.answer)
   const setOptions = useWorktreeChats((state) => state.setOptions)
 
   // Where the file picker opens and what a picked path is written relative to.
@@ -88,10 +119,12 @@ function Conversation({
   // Follows the newest turn, but only while it is already at the bottom:
   // yanking the view down while somebody reads further up is what makes a
   // transcript unusable.
+  // `ask` is in here too: a question arriving is the one thing that must not be
+  // left below the fold, since the turn is waiting on it.
   useEffect(() => {
     const element = box.current
     if (element && atBottom.current) element.scrollTop = element.scrollHeight
-  }, [messages, sending])
+  }, [messages, sending, ask])
 
   const lines = messages ?? []
   const empty = lines.length === 0
@@ -120,7 +153,14 @@ function Conversation({
             {lines.map((line) => (
               <ChatMessage key={line.id} of={line} />
             ))}
-            {sending && (
+            {/* At the end of the transcript rather than over it: it is the turn
+                asking, so it belongs where the turn had got to. */}
+            {ask && (
+              <ChatAsk ask={ask} onAnswer={(given) => answer(chatId, given)} />
+            )}
+            {/* Not while a question is up — the turn is held, not working, and
+                a spinner under the card would say otherwise. */}
+            {sending && !ask && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Spinner className="size-3" />
                 Working…
@@ -137,9 +177,9 @@ function Conversation({
             onSend={(text) => void send(chatId, text)}
             onStop={() => stop(chatId)}
             placeholder={
-              options.plan
-                ? "Ask for a plan for this checkout…"
-                : "Ask to make changes in this checkout…"
+              ask
+                ? "Answer above to carry on…"
+                : PLACEHOLDERS[options.permission]
             }
             options={options}
             onOptions={(next) => setOptions(chatId, next)}
@@ -148,13 +188,20 @@ function Conversation({
 
           {/* Said plainly rather than left implicit: a turn here edits files and
               runs commands without asking, and the only reason that is
-              acceptable is that this is a branch of its own. Plan mode is the
-              one case where that is not true, and the line has to say so — a
-              caption that lies about the turn is worse than none. */}
-          <p className="px-1 text-[0.7rem] text-muted-foreground">
-            {options.plan
-              ? "Plan mode: this turn reads and changes nothing"
-              : "Edits and commands run without asking, in this branch only"}
+              acceptable is that this is a branch of its own. It has to follow
+              the permission rather than describe the usual one — a caption that
+              lies about the turn is worse than none, in either direction. */}
+          <p
+            className={cn(
+              "px-1 text-[0.7rem]",
+              options.permission === "full"
+                ? "text-destructive"
+                : "text-muted-foreground"
+            )}
+          >
+            {ask
+              ? "The turn is waiting on your answer. Stop ends it instead."
+              : CAPTIONS[options.permission]}
           </p>
         </div>
       </div>

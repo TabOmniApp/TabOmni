@@ -126,6 +126,8 @@ const api: DesktopApi = {
   deleteWorktreeChat: (id) => ipcRenderer.invoke(IPC.deleteWorktreeChat, id),
   setWorktreeChatOptions: (id, options) =>
     ipcRenderer.invoke(IPC.setWorktreeChatOptions, id, options),
+  answerWorktreeChatAsk: (askId, answer) =>
+    ipcRenderer.invoke(IPC.answerWorktreeChatAsk, askId, answer),
   sendWorktreeChat: (id, prompt) =>
     ipcRenderer.invoke(IPC.sendWorktreeChat, id, prompt),
   stopWorktreeChat: (id) => ipcRenderer.invoke(IPC.stopWorktreeChat, id),

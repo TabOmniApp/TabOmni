@@ -28,6 +28,7 @@ import {
   type NoteBody,
   type NoteFolder,
   type NoteRecord,
+  type WorktreeChatAnswer,
   type WorktreeChatOptions,
   type WorktreeRecord,
 } from "../shared/api"
@@ -381,6 +382,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     IPC.setWorktreeChatOptions,
     (_event, id: string, options: WorktreeChatOptions) =>
       worktreeChats.setOptions(id, options)
+  )
+
+  ipcMain.handle(
+    IPC.answerWorktreeChatAsk,
+    (_event, askId: string, answer: WorktreeChatAnswer) => {
+      worktreeChats.answer(askId, answer)
+    }
   )
 
   ipcMain.handle(IPC.sendWorktreeChat, (_event, id: string, prompt: string) =>

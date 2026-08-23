@@ -173,47 +173,123 @@ There was a session panel that did the opposite: its chat view tailed the
 transcript the interactive CLI writes, so the terminal and the chat were two
 views of one conversation and the app was a _reader_ (see Terminal sessions,
 removed). This is the other shape — its own message model, its own composer, its
-own tool-call rows. Hosting one means driving the CLI, which is `claude -p` in
-`--output-format stream-json` (`main/worktree-chat.ts`).
+own tool-call rows. Hosting one means driving the CLI, which is
+`@anthropic-ai/claude-agent-sdk` (`main/claude-agent.ts`, driven by
+`main/worktree-chat.ts`).
 
 The rows and the composer are its own — `ChatMessage` and `ChatComposer`, beside
 the pane in `components/studio/worktree/`. They were the assistant panel's until
 that panel was removed (see The assistant, removed) and came here with it, which
 is where they belong now: this is the only chat in the app.
 
-It is also the **only** `claude` the app spawns. What this document's old
+It is also the **only** `claude` the app runs. What this document's old
 "only one" rule was actually against is still refused: features calling the CLI
 as a helper — an AI filter, an import button — because a helper turn is a turn
 nobody asked for. A worktree chat is a conversation somebody is having.
-`claude-print.ts` stayed a file of its own even with one caller left, for the
-part that matters: `stream-json` is the CLI's own shape, it moves between
-versions, and a reader of it tangled into a store and a session id is one nobody
-wants to re-read when it moves. Policy is not in there — where a turn runs and
-what it may do are the caller's.
+`claude-agent.ts` stays a file of its own even with one caller left, for the
+part that matters: what the SDK hands back moves between versions, and a reader
+of it tangled into a store and a session id is one nobody wants to re-read when
+it moves. Policy is not in there — where a turn runs and what it may do are the
+caller's.
+
+**Why the SDK rather than `claude -p`.** It was a `spawn` of the CLI in print
+mode, reading `--output-format stream-json` a line at a time, and the one thing
+wrong with that shape is not something parsing fixes: a turn that met a
+permission prompt had nobody to answer it, so it stalled or failed. That is the
+constraint the permission picker below was designed around. The SDK's
+`canUseTool` is the missing half — it hands the request back to the host and
+waits, indefinitely if need be — so a chat here _can_ ask, the way the
+interactive CLI does. That is the `Ask` permission; see Asking below.
+
+Four things about the swap are worth knowing, because none of them are visible
+from the option names:
+
+- **The CLI is still the thing that runs.** `pathToClaudeCodeExecutable` is the
+  user's own `claude`, located through the same login shell as before
+  (`claude-bin.ts`, `shell-env.ts`), so a turn uses their install and their
+  login rather than a second copy of the CLI with an authentication story of its
+  own. A path that does not end in a JS extension is spawned directly, so both
+  the npm and the native installs work.
+- **The MCP servers go over as a file, not as the SDK's `mcpServers` option.**
+  That option looks like the obvious way to do it and it serialises the config
+  onto the CLI's command line — and these URLs carry the run's secret, which a
+  command line publishes to every process on the machine. The path goes through
+  `extraArgs` instead, which is the same flag pointing at the same `0600` file
+  `mcp.ts` already wrote.
+- **`bypassPermissions` needs a second opt-in.** The SDK refuses the mode unless
+  `allowDangerouslySkipPermissions` is set beside it, so `Full access` passes
+  both.
+- **The appended system prompt is no longer a flag.** The SDK runs the CLI in
+  `--input-format stream-json` and sends `appendSystemPrompt` in the
+  `initialize` frame on stdin. It arrives; it is simply not in the argument list
+  any more, which matters the next time somebody goes looking for it there.
+
+The SDK also **throws** where the old reader only read: an error result is
+delivered as a message and _then_ raised as an exception. So the row is already
+drawn and `onDone` already called by the time it lands, and the guard in
+`runAgentTurn` is what keeps one failure from being reported twice.
+
+`main.cjs` is the only one of the three bundles that carries the SDK, and it has
+an esbuild build of its own for it: the package is ESM and reaches for
+`import.meta.url` to build a `require`, which esbuild's CJS output turns into
+`{}` — `createRequire(undefined)`, which throws the first time it is used. A
+`define` points it at a real file URL through a banner, and the banner cannot go
+anywhere near the preload, which is sandboxed and has no `require` of node
+builtins. It is bundled rather than left external because `files` in
+package.json is `dist-electron` and `dist-renderer`: a `require` of
+node_modules resolves in dev and is missing from a packaged app.
 
 **What a turn may do, and why.** Edits are pre-approved
-(`--permission-mode acceptEdits`) and `Bash` is on the allowed list. Print mode
-has nobody to ask, so a turn that met a prompt would not pause — it would fail —
+(`--permission-mode acceptEdits`) and `Bash` is on the allowed list — that is
+what a chat opens on, and the toolbar's permission picker below is how it is
+narrowed or widened per chat. Nothing here answers a prompt yet,
+so a turn that met one would not pause — it would fail —
 and the choice is between saying up front what is allowed and having a chat that
 cannot change anything. What makes the first honest is the isolation: the worst
 case is a branch, and it is not the branch the user has checked out. The composer
 says so in as many words rather than leaving it implicit.
 
 **The composer's toolbar.** Inside the box, under the field: which model
-answers, how much effort a turn gets, and a plan toggle, with a `+` menu and the
-send button at the other end. They are `WorktreeChatOptions` on the chat's own
+answers, how much effort a turn gets, and how much it is allowed to do, with a
+`+` menu and the send button at the other end. They are `WorktreeChatOptions` on the chat's own
 record — per chat rather than per workspace, because that is the unit somebody
 thinks in: the checkout being refactored wants Opus at `max`, and the chat asking
 where a function is called wants Haiku at `low`. A turn is built from whatever
 they said when the message was sent, and a turn already in flight keeps what it
 started with — they are its argument list, and there is nothing to change it to.
 
-Both pickers offer **Default**, and it is the one they start on: `null` means
-whichever model and effort the user's own `claude` is configured for. Naming
-today's default here instead would be this app quietly overriding a setting of
-theirs, and a list of full model names would go stale every time the CLI learned
-a newer one — so the entries are aliases (`opus`, `sonnet`), which the CLI
-resolves and refuses loudly when it cannot.
+The model and effort pickers offer **Default**, and it is the one they start on:
+`null` means whichever model and effort the user's own `claude` is configured
+for. Naming today's default here instead would be this app quietly overriding a
+setting of theirs, and a list of full model names would go stale every time the
+CLI learned a newer one — so the entries are aliases (`opus`, `sonnet`), which
+the CLI resolves and refuses loudly when it cannot.
+
+**Permission is one picker, not a picker and a toggle.** There was a plan toggle
+beside the other two and it is gone into this: plan mode _is_ a permission — the
+read-only one, asked a particular way — and two controls over one question can be
+put into a state neither of them means ("plan, with full access"). So the third
+control is `Plan` / `Read only` / `Ask` / `Edits` / `Full access`, held as `permission`
+on `WorktreeChatOptions`, and `PERMISSIONS` in `main/worktree-chat.ts` is the one
+table saying what each runs as — the tool list, the refusals, the
+`--permission-mode` and what the turn is told, out of one entry, so a turn cannot
+be assembled half in one mode and half in another. It is the only control here
+that never reads **Default**, because there is no such thing: a turn runs at
+whatever this says, and `Edits` is what it says until somebody changes it.
+
+Four of the five decide up front, which is what print mode forced and what a
+chat that never interrupts still wants. **Read only** is what `default` used to
+have to become, back when a turn that may not write without a prompt may as well
+have been told so up front; it is still the right mode for a question, and now
+it is a choice rather than a workaround.
+**Full access** is `bypassPermissions` with no allowed list at all, and it exists
+for the failure the list itself causes: `ALLOWED_TOOLS` is broad but it is still
+a list, and a turn reaching for something not on it — `BashOutput` after a
+background command, a skill, a tool a newer CLI grew — meets a prompt nobody can
+answer. It is a choice per chat rather than the default, drawn in the destructive
+colour, and the one mode where the two `delete_*` refusals are a request rather
+than a guarantee: whether `bypassPermissions` honours a deny list is the CLI's
+business and not this app's.
 
 **Plan mode is a tool list rather than `--permission-mode plan`.** That is the
 CLI's own plan mode and it ends by asking: leaving it is `ExitPlanMode`, which is
@@ -221,14 +297,82 @@ a prompt, and print mode has nobody to answer one. A turn started that way spend
 itself trying to get out — it writes the plan to a file it may not write, calls a
 tool that is disabled, and comes back `is_error` with an apology where the plan
 should be. So plan mode here is the thing somebody wanted from it, built out of
-the half print mode can enforce: `PLAN_TOOLS` is everything that reads and
-`PLAN_REFUSED` names every writer, the workspace's own included, since saving a
+the half print mode can enforce: `READ_TOOLS` is everything that reads and
+`WRITE_REFUSED` names every writer, the workspace's own included, since saving a
 request is the one kind of change no `git checkout` takes back. `Bash` is on
 neither list — a command can write, and no reading of an argument list decides
 which ones do — and what that costs is `git log` and `rg`, which `Glob` and
-`Grep` are the same reconnaissance without a shell. The caption under the
-composer changes with the toggle, because a line that says edits run without
-asking is a lie about a turn that cannot make one.
+`Grep` are the same reconnaissance without a shell. Those two lists are what
+**Read only** runs as as well: the two modes differ in what the turn is _told_,
+not in what it may do, since a model asked where a function is called should not
+get a numbered list of changes back. The caption under the composer and the
+field's own placeholder follow the picker, because a line that says edits run
+without asking is a lie about a turn that cannot make one — and so is the
+reverse.
+
+**Asking.** `Ask` is the mode that stops. `READ_TOOLS` stay pre-approved under
+it, so reading never interrupts — the difference between a mode somebody can work
+in and one that asks four times before it has finished reading a file — and what
+reaches the screen is the writes, the shell, and anything this app never listed,
+which is the set worth being asked about. Its `--permission-mode` is **`manual`**
+and not `default`: this CLI's mode list no longer has a `default` (it is `manual`
+for "prompt about everything" and `auto` for the classifier), and the SDK passes
+whichever string it is handed straight through, so naming the one that is gone
+would fail the turn on its argument list. Nothing is refused except the
+workspace's two `delete_*` — in every other mode a refusal is what a stall would
+otherwise be, and here there is somebody to say no, so refusing up front would be
+taking their answer for them.
+
+The turn is genuinely **held** while the card is up. The promise
+`WorktreeChats.ask` returns _is_ the pause: the CLI is sitting on the tool call
+until it settles, nothing on this side times it out, and the composer says as
+much instead of showing a spinner — a question that answered itself after thirty
+seconds would be this app deciding. What that costs is care about the ends: a
+question is in memory only, keyed by an ask id an answer has to name, and it dies
+with the turn, so `finish` and `dispose` both settle whatever is outstanding or
+the CLI is left waiting on a promise nobody will resolve. It is lost on a window
+reload, like `sending` in the store and for the same reason — what is on the other
+end is a process, not a record — and Stop is what ends a turn whose question has
+gone.
+
+Answering appends a `role: "ask"` line — `Allowed Bash: npm test`, or `Refused`
+one — which main composes and emits as a `decision` event, so the sentence has
+one author rather than a renderer spelling its own version of it. A refusal shows
+even with tool calls switched off, because it changed what the turn did.
+`Always allow` echoes the SDK's own `suggestions` back as `updatedPermissions`,
+which writes a rule into the checkout's `.claude/settings.local.json` — remembered
+for that branch, gone when the branch is — and it is offered only where the SDK
+had a rule to suggest, since a button that did nothing would be worse than no
+button.
+
+**`AskUserQuestion` comes down the same callback**: the model's own
+multiple-choice question, the thing anyone who has used the interactive CLI will
+recognise. It reaches the app by _not_ being pre-approved, which is the whole
+mechanism, and it is why `REFUSED_ASKING` names it in the other four modes — there
+a question is a turn waiting on nobody. It is answered by **allowing the call**
+with the picks merged into its input, the original questions included, which the
+SDK requires and which is why `AskDecision.input` merges rather than replaces.
+Picks are arrays in the contract and in the pane whether or not a question is
+multi-select, so nothing branches on `multiSelect` twice and disagrees with
+itself, and every question has to be answered before any of them goes back
+because the tool takes them together.
+
+`titleFor` is what a permission card actually reads. The SDK documents a rendered
+`title` — "Claude wants to read foo.txt" — and does not send one for a plain SDK
+run, so this is the sentence rather than a fallback, and it is a verb per tool
+because "Claude wants to use Bash" over a card asks somebody to work out what
+they are being asked. `asked`, `decided`, `said` and `titleFor` are the pure half,
+tested in `test/chat-ask.ts`: each of them sits between two things no compiler
+can check against each other — a tool input the CLI wrote, one the SDK reads
+back, and a line somebody reads next week — and each fails silently.
+
+A record written before the picker carries `plan: true/false` and no
+`permission`. `chatOptions` in `@shared/api` is where that is read: it fills the
+defaults in, turns a `true` into `plan`, refuses a mode this build has never
+heard of, and never hands back the legacy field. Both sides of the contract go
+through it — main builds the argument list out of the same reading the composer
+draws — because a toolbar saying `Edits` over a turn that ran as a plan is the
+one disagreement worth a function to make impossible.
 
 The `+` menu is two items. **Attach file** (⌘U) is the OS picker, and what it
 leaves in the draft is a path relative to the checkout — plain text, not a
