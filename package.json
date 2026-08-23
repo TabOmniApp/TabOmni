@@ -1,7 +1,7 @@
 {
   "name": "tabomni",
   "productName": "TabOmni",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -30,7 +30,9 @@
     "@base-ui/react": "^1.6.0",
     "@eslint/js": "^9",
     "@excalidraw/excalidraw": "^0.18.1",
+    "@milkdown/crepe": "^7.22.0",
     "@milkdown/kit": "^7.22.0",
+    "@milkdown/react": "^7.22.0",
     "@tailwindcss/postcss": "^4",
     "@tanstack/react-virtual": "^3.14.9",
     "@types/node": "^20",
