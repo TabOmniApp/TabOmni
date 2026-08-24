@@ -101,6 +101,24 @@ check(
 )
 check("and nothing is drawn as an answer", running.length === 2)
 
+// The shape that made this a bug: the turn narrated and then carried on
+// working, so its sentence was not the last word after all. Everything after it
+// was landing outside the fold, one row at a time, under a summary that was not
+// counting them.
+const narrated = blocksOf([
+  user("refactor it"),
+  thought("starting"),
+  said("Now the renderer store:"),
+  tool("Edit", "/a/store.ts"),
+])
+check(
+  "a sentence the turn worked on past is folded with the rest",
+  narrated.length === 2 &&
+    narrated[1]?.kind === "activity" &&
+    narrated[1].lines.length === 3,
+  narrated
+)
+
 section("a turn with nothing to fold")
 
 const chatty = blocksOf([user("hello"), said("Hello.")])

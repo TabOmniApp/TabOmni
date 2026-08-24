@@ -843,9 +843,15 @@ export const useFiles = create<FilesState>((set, get) => {
  * extension implies. */
 export function viewOf(
   state: { views: Record<string, Viewer> },
-  filePath: string
+  filePath: string,
+  /** What the pane asking would rather draw, for a file the reader has not
+   * chosen a viewer for — the `Changes` tab, where a file is a diff. Below the
+   * reader's own choice and above the extension's default, which is the order
+   * those three were always in; it is a parameter because "what is this file
+   * shown as" is per pane, and `views` is per path. */
+  preferred?: Viewer
 ): Viewer {
-  return state.views[filePath] ?? defaultViewer(filePath)
+  return state.views[filePath] ?? preferred ?? defaultViewer(filePath)
 }
 
 /** One image read into the shape the image view draws — a failure is a

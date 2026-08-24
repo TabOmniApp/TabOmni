@@ -37,7 +37,7 @@ import { FileBlocks } from "./file-blocks"
  * The open files, one editor each.
  *
  * Stacked and hidden rather than mounted one at a time, for the reason the
- * Notes pane stacks its editors: a Monaco rebuilt on every tab click is a lost
+ * Notes pane stacks its editors: an editor rebuilt on every tab click is a lost
  * undo history, a caret back at line 1, the folds reset and the scroll position
  * gone. The text was never the cost — the store has it — the editing state was.
  */
@@ -55,7 +55,7 @@ export function FileWorkspace() {
    * and a panel that assumes the first implies the second has editors behaving
    * as though they were on screen when they are not.
    *
-   * What that cost: a Monaco **diff** editor left live in the hidden panel went
+   * What that cost: a **diff** editor left live in the hidden panel went
    * on painting its own line numbers and its red and green bands through the
    * chat drawn over it. It also had a note editor in a hidden panel answering
    * the drawing event that only the visible one may answer.
@@ -68,7 +68,7 @@ export function FileWorkspace() {
   /*
    * ⌘S saves the file on screen.
    *
-   * Monaco takes the key for itself while the editor has focus, which is most
+   * The editor takes the key for itself while it has focus, which is most
    * of the time and not all of it: the tree, the tab strip and this panel's own
    * header can each hold focus with a file open behind them. Claimed on the
    * capture phase and with `preventDefault`, the way the palette claims ⌘P —
@@ -137,17 +137,27 @@ export function FileWorkspace() {
  *
  * `visible` is "this is the pane on screen **and** the tab it is showing", not
  * merely the latter: see `FileWorkspace`.
+ *
+ * `preferred` is what a file is shown as here when the reader has not said
+ * otherwise — `diff` for the `Changes` tab, nothing for a file tab. It is a prop
+ * rather than a write into `views` on the way in, which is what it was: writing
+ * it meant the pane rendered the new path once with the *default* viewer before
+ * the write landed, so clicking a row drew that file's text editor for a frame
+ * and took the diff — and everything it was holding to make the switch smooth —
+ * off the screen to do it.
  */
 export function FilePane({
   path,
   visible,
+  preferred,
 }: {
   path: string
   visible: boolean
+  preferred?: Viewer
 }) {
   const doc = useFiles((state) => state.docs[path])
   const image = useFiles((state) => state.images[path])
-  const viewer = useFiles((state) => viewOf(state, path))
+  const viewer = useFiles((state) => viewOf(state, path, preferred))
 
   /*
    * Ask for what this pane is about to draw.
@@ -305,6 +315,59 @@ function Body({
   onChange: (text: string) => void
   onSave: () => void
 }) {
+  /*
+   * The diff goes first, before the read has even landed, and it is the one
+   * viewer that does.
+   *
+   * `Reading…` here is what made clicking down the `Changes` list flicker: the
+   * notice replaced the diff for as long as the file took to read, so the pane
+   * went diff → notice → diff, and `FileDiff` — whose whole job is to hold the
+   * last diff through a switch — was unmounted by the notice and had nothing to
+   * hold. So it is mounted through the read instead and told whether there is
+   * anything to draw yet (`ready`), which it answers by keeping the diff that is
+   * already on screen.
+   *
+   * `binary` and `too-large` are left to the notices below, which are honest for
+   * a diff too — two versions of a megabyte of one line is not a thing to
+   * render — and `error` is not, for the reason the comment further down gives.
+   */
+  const readable =
+    doc === undefined ||
+    doc.kind === "loading" ||
+    doc.kind === "text" ||
+    doc.kind === "error"
+
+  if (viewer === "diff" && readable) {
+    /*
+     * Unmounted while it is off screen, unlike every other editor here.
+     *
+     * The stacking exists to keep editing state — an undo history, a caret, the
+     * folds — and a diff has none of that worth keeping: the right-hand side is
+     * the file's own path-keyed buffer, which the text editor holds either way,
+     * so what is lost by rebuilding is a scroll position. Set against that, a
+     * diff editor that is merely `invisible` was drawing its line numbers and
+     * its bands over whatever pane was actually showing.
+     */
+    if (!visible) return null
+
+    return (
+      <FileDiff
+        // Not keyed by the path, unlike every other editor here: `FileDiff`
+        // keeps the diff on screen while the next file is read, and a key would
+        // unmount the thing it is holding.
+        path={path}
+        initialText={doc?.kind === "text" ? doc.text : ""}
+        // A deleted file reads as an error and is ready: its right-hand side is
+        // empty and its left is what was committed, which is what its diff is.
+        ready={doc !== undefined && doc.kind !== "loading"}
+        // No writers: a diff takes no keystrokes, and the buffer it shows is the
+        // path's own — whichever editor *can* be typed into is the one that tells
+        // the store what is in it (`lib/files/documents.ts`). ⌘S is claimed by
+        // the pane rather than by this editor for the same reason.
+      />
+    )
+  }
+
   if (doc === undefined || doc.kind === "loading") {
     return <Notice title="Reading…" />
   }
@@ -328,7 +391,7 @@ function Body({
   }
 
   /*
-   * Above the error below, and deliberately.
+   * The diff was drawn above this, and deliberately.
    *
    * A **deleted** file cannot be read and is exactly the file whose diff
    * somebody wants: it is a row in the Changes list, it has no row in the tree
@@ -337,39 +400,11 @@ function Body({
    * committed, which is what its diff *is*.
    *
    * Nothing to guard there any more: **the diff is read-only whatever it is
-   * showing** (`monaco-diff.tsx`), so a deleted file is a diff of a file that is
+   * showing** (`codemirror-diff.tsx`), so a deleted file is a diff of a file that is
    * gone rather than a pane taking keystrokes the store would drop. Writing one
    * back would be a way to undelete it — a different feature, and not one to
    * arrive at by typing.
-   *
-   * Not above `binary` or `too-large`, which are honest for a diff too: two
-   * versions of a megabyte of one line is not a thing to render.
    */
-  if (viewer === "diff") {
-    /*
-     * Unmounted while it is off screen, unlike every other editor here.
-     *
-     * The stacking exists to keep editing state — an undo history, a caret, the
-     * folds — and a diff has none of that worth keeping: the right-hand side is
-     * the file's own path-keyed model, which the text editor holds either way,
-     * so what is lost by rebuilding is a scroll position. Set against that, a
-     * diff editor that is merely `invisible` was drawing its line numbers and
-     * its bands over whatever pane was actually showing.
-     */
-    if (!visible) return null
-
-    return (
-      <FileDiff
-        // Same key rule as the editor below: the path is the identity.
-        key={path}
-        path={path}
-        initialText={doc.kind === "text" ? doc.text : ""}
-        onChange={onChange}
-        onSave={onSave}
-      />
-    )
-  }
-
   if (doc.kind === "error") {
     return <Notice title="Could not open this file" detail={doc.message} />
   }

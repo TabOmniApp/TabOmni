@@ -8,7 +8,7 @@
   "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "//build": "Vite is run through node with an explicit heap size rather than through its bin shim: rolling up the renderer — Monaco, mermaid, katex, Excalidraw — peaks over 2GB, and V8 sizes the default old space from physical memory, so a 7GB machine (a macOS CI runner, a smaller laptop) caps it at ~2GB and the build dies with CALL_AND_RETRY_LAST while a 16GB one never notices.",
+    "//build": "Vite is run through node with an explicit heap size rather than through its bin shim: rolling up the renderer — mermaid, katex, Excalidraw, and a Lezer parser per language — peaks over 2GB, and V8 sizes the default old space from physical memory, so a 7GB machine (a macOS CI runner, a smaller laptop) caps it at ~2GB and the build dies with CALL_AND_RETRY_LAST while a 16GB one never notices.",
     "build": "node scripts/build-electron.mjs --minify && node --max-old-space-size=4096 node_modules/vite/bin/vite.js build",
     "package": "bun run build && electron-builder",
     "test": "node scripts/test.mjs",
@@ -23,6 +23,17 @@
     "@blocknote/core": "^0.53.0",
     "@blocknote/react": "^0.53.0",
     "@blocknote/shadcn": "^0.53.0",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/merge": "^6.12.2",
+    "@codemirror/search": "^6.7.1",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "6.43.8",
+    "@lezer/highlight": "^1.2.3",
     "@lydell/node-pty": "1.2.0-beta.14",
     "mysql2": "^3.15.2",
     "pg": "^8.16.3"
@@ -60,7 +71,6 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.6.0",
     "lucide-react": "^1.27.0",
-    "monaco-editor": "^0.56.0",
     "next-themes": "^0.4.6",
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
@@ -143,5 +153,9 @@
       "category": "Development",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     }
+  },
+  "//overrides": "One @codemirror/view for the whole renderer. Milkdown already depends on the CodeMirror packages and resolves them at 6.43.8, so the app's own direct dependency resolving one patch newer put two copies in node_modules — which is not merely wasteful: a CodeMirror extension is identified by the class it was built from, so a keymap from one copy is not a keymap to the other, and tsc says so before the editor does. Pinned exact, and the direct dependency is pinned to match.",
+  "overrides": {
+    "@codemirror/view": "6.43.8"
   }
 }

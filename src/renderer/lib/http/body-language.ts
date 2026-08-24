@@ -1,72 +1,100 @@
-import { monaco } from "@/lib/monaco"
+import { json } from "@codemirror/lang-json"
+import { RangeSetBuilder, type Extension } from "@codemirror/state"
+import {
+  Decoration,
+  EditorView,
+  ViewPlugin,
+  type ViewUpdate,
+} from "@codemirror/view"
+
+import { languageExtension, languageNamed } from "@/lib/editor-languages"
 import { languageIdForContentType } from "@/lib/language"
 
 /**
  * A request body is a template, not a document.
  *
  * `{{token}}` is substituted on the way out (see `substitute` in
- * `http/store.ts`), so what is on screen is JSON-shaped rather than JSON — and
- * Monaco's JSON language service, handed it, marks every variable as a syntax
- * error. That service has no per-model switch: validation is on for every JSON
- * model in the window or none of them, and the Explorer's own `.json` files
- * want it on.
+ * `http/store.ts`), so what is on screen is JSON-shaped rather than JSON. Under
+ * Monaco that was a problem to be worked around: its JSON *language service*
+ * marked every variable as a syntax error and had no per-model switch — on for
+ * every JSON model in the window or none of them — so a body got a hand-written
+ * Monarch grammar of its own, `http-body`, with deliberately no service behind
+ * it. That cost the real JSON grammar and bought back the variables.
  *
- * So a body written as JSON gets its own language instead, with a Monarch
- * grammar and deliberately no service behind it — the same bargain `files/
- * monaco.ts` makes for Vue. It costs the squiggles on genuinely malformed JSON
- * and buys back the variables, which are highlighted as variables here rather
- * than left as the plain text CodeMirror showed.
+ * Neither half of that trade exists here. A CodeMirror language is a parser and
+ * nothing else; linting is a separate extension nobody adds to this editor. So a
+ * body is highlighted by **the real JSON parser**, and the variables are a
+ * decoration over the top of it — which is what they are, and is why they now
+ * show up in an XML body and a form body too rather than only in JSON.
  */
-const BODY_LANGUAGE = "http-body"
 
 /** Matches what `substitute` replaces, so what is highlighted is exactly what
  * will be filled in. */
-const VARIABLE = /\{\{\s*[\w.-]+\s*\}\}/
+const VARIABLE = /\{\{\s*[\w.-]+\s*\}\}/g
 
-monaco.languages.register({ id: BODY_LANGUAGE })
+const variableMark = Decoration.mark({ class: "cm-templateVariable" })
 
-monaco.languages.setLanguageConfiguration(BODY_LANGUAGE, {
-  brackets: [
-    ["{", "}"],
-    ["[", "]"],
-  ],
-  autoClosingPairs: [
-    { open: "{", close: "}" },
-    { open: "[", close: "]" },
-    { open: '"', close: '"', notIn: ["string"] },
-  ],
-  surroundingPairs: [
-    { open: "{", close: "}" },
-    { open: "[", close: "]" },
-    { open: '"', close: '"' },
-  ],
-})
+/** Only what is on screen. A body is small, but this is the same pass a large
+ * one would take, and scanning the viewport is what makes it not matter. */
+function variablesIn(view: EditorView) {
+  const builder = new RangeSetBuilder<Decoration>()
 
-monaco.languages.setMonarchTokensProvider(BODY_LANGUAGE, {
-  defaultToken: "",
-  tokenizer: {
-    root: [
-      [VARIABLE, "variable"],
-      // A key is a string the tokenizer has already seen a colon after, which
-      // is the one piece of structure worth colouring differently — it is what
-      // makes a body skimmable.
-      [/"(?:[^"\\]|\\.)*"(?=\s*:)/, "type"],
-      [/"(?:[^"\\]|\\.)*"/, "string"],
-      [/-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/, "number"],
-      [/\b(?:true|false|null)\b/, "keyword"],
-      [/[{}[\],:]/, "delimiter"],
-    ],
-  },
-})
+  for (const { from, to } of view.visibleRanges) {
+    const text = view.state.doc.sliceString(from, to)
+    for (const match of text.matchAll(VARIABLE)) {
+      if (match.index === undefined) continue
+      builder.add(
+        from + match.index,
+        from + match.index + match[0].length,
+        variableMark
+      )
+    }
+  }
+
+  return builder.finish()
+}
+
+/** `{{baseUrl}}`, marked wherever it appears in a body. */
+export const templateVariables: Extension = [
+  ViewPlugin.fromClass(
+    class {
+      decorations = Decoration.none
+
+      constructor(view: EditorView) {
+        this.decorations = variablesIn(view)
+      }
+
+      update(update: ViewUpdate) {
+        if (!update.docChanged && !update.viewportChanged) return
+        this.decorations = variablesIn(update.view)
+      }
+    },
+    { decorations: (plugin) => plugin.decorations }
+  ),
+  EditorView.baseTheme({
+    ".cm-templateVariable": {
+      // A variable is a hole in the document rather than a token of it, so it is
+      // drawn as a chip: the colour alone read as one more kind of string.
+      borderRadius: "3px",
+      padding: "0 1px",
+      backgroundColor: "color-mix(in oklch, var(--primary) 18%, transparent)",
+      color: "var(--primary)",
+    },
+  }),
+]
 
 /**
- * Which language the body editor shows a given `Content-Type` in.
+ * The language a body of a given `Content-Type` is shown in, plus the variable
+ * decorations that go over any of them.
  *
- * Everything but JSON is Monaco's own — an XML or HTML body carrying a variable
- * has no service to be confused by one, and the post-response script is real
- * JavaScript that is never substituted.
+ * JSON is imported directly rather than resolved through the registry: it is the
+ * overwhelming majority of bodies, and one static import is a parser that is
+ * already there when the editor first paints instead of one that arrives a frame
+ * later.
  */
-export function languageIdForBody(contentType: string): string {
+export async function bodyLanguage(contentType: string): Promise<Extension> {
   const id = languageIdForContentType(contentType)
-  return id === "json" ? BODY_LANGUAGE : id
+  if (id === "json") return [json(), templateVariables]
+
+  return [await languageExtension(languageNamed(id)), templateVariables]
 }

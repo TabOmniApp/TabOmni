@@ -1645,8 +1645,8 @@ export type DesktopApi = {
    * go-to-definition.
    *
    * A real `tsserver` in the main process — the folder's own copy where it has
-   * one — because Monaco's built-in worker sees a single file and can therefore
-   * say nothing about an import. See `main/tsserver.ts`.
+   * one — because nothing in the renderer can see past the file in front of it
+   * and can therefore say nothing about an import. See `main/tsserver.ts`.
    *
    * The three sync calls are how it learns what is in the editor rather than
    * what is on disk: without them a hover would answer for the last saved
@@ -1655,8 +1655,10 @@ export type DesktopApi = {
   tsOpen: (filePath: string, text: string) => Promise<void>
   tsChange: (filePath: string, text: string) => Promise<void>
   tsClose: (filePath: string) => Promise<void>
-  /** Both take 1-based line and column, which is what tsserver and Monaco both
-   * count in. Null and empty rather than an error for "nothing here". */
+  /** Both take 1-based line and column, which is what tsserver counts in — the
+   * editor converts (`placeOf` in `lib/files/typescript.ts`), since CodeMirror
+   * addresses a document by offset. Null and empty rather than an error for
+   * "nothing here". */
   tsHover: (
     filePath: string,
     line: number,

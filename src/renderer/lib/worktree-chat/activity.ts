@@ -63,9 +63,11 @@ export function blocksOf(messages: AssistantMessage[]): ChatBlock[] {
      * A turn still being answered has none — everything so far is working, and
      * a fold that closed over the answer the moment it arrived would be the
      * pane hiding what it just finished writing. So this is the index to fold
-     * *up to*, and while a turn is running that is all of it.
+     * *up to*, and while a turn is running that is all of it: see
+     * `answerIndexOf`, which is what "last word" has to mean for a turn that
+     * carried on working after saying something.
      */
-    const answer = lastIndexOf(turn.lines, (line) => line.role === "assistant")
+    const answer = answerIndexOf(turn.lines)
 
     let run: AssistantMessage[] = []
     const flush = () => {
@@ -187,12 +189,25 @@ function turnsOf(messages: AssistantMessage[]): {
   return turns
 }
 
-function lastIndexOf(
-  lines: AssistantMessage[],
-  matches: (line: AssistantMessage) => boolean
-): number {
+/**
+ * Where a turn's last word starts, or `-1` while it has not said one.
+ *
+ * The last thing the turn *said* only counts as its answer while it is still the
+ * last thing there is: a tool call after it means the narration was working
+ * after all, and the turn has gone back to it. Taking the last assistant line
+ * regardless left every line a running turn produced after its latest sentence
+ * outside the fold — a tool row, then another, growing down the pane under a
+ * summary that was not counting them.
+ *
+ * Lines that are never folded do not count as something coming after: a usage
+ * line lands under a finished turn's answer, and an error or a refusal is drawn
+ * on its own wherever it happened.
+ */
+function answerIndexOf(lines: AssistantMessage[]): number {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (matches(lines[index]!)) return index
+    const line = lines[index]!
+    if (line.role === "assistant") return index
+    if (!alwaysShown(line)) return -1
   }
   return -1
 }

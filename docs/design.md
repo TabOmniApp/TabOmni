@@ -1125,7 +1125,7 @@ nothing to a text editor; `⌘B` is bold in every one there has ever been, and t
 studio has two on screen at once — a note, and a `.md` opened in the block
 editor. So `isEditingRichText` refuses the key inside anything
 `contenteditable`, which is what those three have in common, and the sidebar
-keeps it everywhere else: in Monaco, which has no binding for it, and in a plain
+keeps it everywhere else: in the code editor, which has no binding for it, and in a plain
 field, which has nothing to bold. The trade is one-sided — the panel has the
 View menu and a drag; bolding a word has only the key.
 
@@ -1638,7 +1638,7 @@ file that turns out to have changed in nothing, and a menu entry that appears an
 disappears with the working tree is one nobody can learn. It is never the
 default — a diff is asked for.
 
-Monaco's diff editor, and **both sides are read-only**. A diff is a thing to
+CodeMirror's merge view, and **both sides are read-only**. A diff is a thing to
 read: two columns, one of them a commit, with the caret stepping between
 versions of the same line. The right-hand side was editable for a while, because
 it genuinely is the file — and what that bought was a pane whose left half
@@ -1647,15 +1647,21 @@ opened in order to type. Editing is the `Edit` half of the toggle in the header,
 which is one click away and the same buffer.
 
 The right-hand side is still **the file** and not a copy: the same path-keyed
-model the text editor uses, which is what makes the diff show unsaved edits
+buffer the text editor uses, which is what makes the diff show unsaved edits
 rather than what is on disk, and what makes switching to `Edit` keep the buffer
-and its undo history. ⌘S saves from here too, since the model can be dirty from
+and its undo history. ⌘S saves from here too, since the buffer can be dirty from
 the other view and the key is muscle memory rather than a property of the pane
-it was pressed in. More than one editor can hold that model at once — a file
-open as a tab while the `Changes` tab shows its diff — so `modelFor` counts
-holders and `releaseModel` disposes at zero. Before it did, whichever editor
-unmounted first took the buffer out from under the other. The left is a
-throwaway model holding `git show HEAD:<path>`, the content of a commit.
+it was pressed in — claimed by `changes-pane.tsx` on the window rather than by
+the editor, because a genuinely non-editable CodeMirror view holds no focus to
+bind a key on. (Monaco's read-only diff was still focusable and took the key
+itself; this is the one place the change of stack moved a behaviour rather than
+kept it.) More than one editor can hold that buffer at once — a file open as a
+tab while the `Changes` tab shows its diff — which is what
+`lib/files/documents.ts` exists for: it counts holders, drops the buffer at
+zero, and forwards a change made in one view to every other view on the same
+path. Before any of that, whichever editor unmounted first took the buffer out
+from under the other. The left side holds `git show HEAD:<path>`, the content of
+a commit, and belongs to nothing.
 
 A **deleted** file is the case worth naming: it has no row in the tree, it is a
 row in this list, and its diff is the whole of it removed. So the diff is drawn
@@ -1692,18 +1698,24 @@ whichever it means, half the people reading it take it for the other. `pressed`
 on `IconButton` is only `aria-pressed` — it says so to a screen reader and
 nothing to the eye — so the on state is drawn here.
 
-Choosing side by side also turns **off** `useInlineViewWhenSpaceIsLimited`.
-Monaco second-guesses `renderSideBySide` by falling back to the inline view below
-`renderSideBySideInlineBreakpoint`, which is the right default for a setting
-nobody set and the wrong behaviour for a button somebody just pressed — and it is
-what made the first diffs in this panel come out unified in a pane a shade under
-the 900px threshold.
+Choosing between them **rebuilds the view**, because side by side and inline are
+two different constructions rather than one widget with a flag: `MergeView`
+against the `unifiedMergeView` extension. Under Monaco it was an `updateOptions`
+that also had to turn `useInlineViewWhenSpaceIsLimited` **off** — Monaco
+second-guessed `renderSideBySide` by falling back to the inline view below a
+width threshold, which is the right default for a setting nobody set and the
+wrong behaviour for a button somebody just pressed, and is what made the first
+diffs in this panel come out unified in a pane a shade under 900px. That clause
+has nothing left to guard against and is gone. Whitespace is now all or nothing
+(`highlightWhitespace`) where Monaco drew the marks inside a selection: there is
+no selection-scoped equivalent, and somebody who turned the toggle on to find a
+stray tab wanted all of them anyway.
 
 **The diff is the one editor that is unmounted rather than hidden.** Every panel
 in the workbench, and every file tab inside this one, is kept mounted and hidden
 with `invisible` — the point is editing state, an undo history and a caret and a
 set of folds that a rebuild would take. A diff has none of that worth keeping:
-the right-hand side is the file's own model, which the text editor holds anyway,
+the right-hand side is the file's own buffer, which the text editor holds anyway,
 so a rebuild costs a scroll position. Set against that, a diff editor left live
 in a hidden panel went on painting its line numbers and its red and green bands
 straight through the pane drawn over it.
@@ -2073,65 +2085,81 @@ what this app itself holds, which is a worktree's chats.
 
 ### The editor
 
-**Monaco**, which is what every editor in the studio is. It was this panel's
-alone for a while, against CodeMirror everywhere else: the rest of the app edits
-fields — a SQL statement, a request body, a response — where CodeMirror's size
-was the point, and this one edits the user's own source, where what is wanted is
-the editor they already know. Two editing stacks turned out to be the more
-expensive half of that trade. One stack costs the schema-aware SQL completion
-`lang-sql` gave the console for free, which is now hand-written in
-`lib/db/sql-completion.ts`, and buys back a launch bundle ~250 kB smaller, one
-set of keybindings across the app, and JSON and TypeScript language services the
-field editors never had.
+**CodeMirror**, which is what every editor in the studio is. It has been all
+three arrangements now, and the order matters more than any one of them:
+CodeMirror everywhere; then Monaco in this panel against CodeMirror in the
+field editors — the rest of the app edits _fields_, a SQL statement, a request
+body, a response, where CodeMirror's size was the point, and this one edits the
+user's own source, where what is wanted is the editor they already know; then
+Monaco everywhere, because two editing stacks turned out to be the more
+expensive half of that trade; and now back, on one stack.
 
-What is shared is in `lib/monaco.ts` — the workers, the font, the theme, and
-`panelEditorOptions`, which is what an editor that is a _field_ gets. That is
-deliberately less than this panel's: no minimap, no sticky scroll, no overview
-ruler and none of Monaco's own context menu, since those are a few lines of
-chrome competing with a few lines of text. What survives at any size is the half
-the shared CodeMirror chrome carried too — numbered lines, folding, the find
-widget and wrapping.
+**What the round trip actually decided.** Monaco's case was one stack, one set
+of keybindings, and language services the field editors never had. It kept the
+first two. The third is where the accounting went the other way: nearly every
+piece of machinery the Monaco version needed was machinery _for_ Monaco.
 
-Every one of them is loaded on demand, each panel's editor behind its own `lazy`
-so the ~4 MB of grammars is fetched the first time an editor of any kind is
-opened and never in a run that stays in the sidebars. The fallback is an empty
-box rather than a spinner: the chunk comes off disk on the `app://` origin, so
-what it covers is a parse rather than a download. Those workers are bundled by
-Vite and served from that same origin rather than fetched from the CDN the
-default `MonacoEnvironment` would reach for, which in a desktop app is a network
-round trip for something already on disk, and offline is a silent failure.
+- The SQL console's schema completion had to be written by hand — 290 lines of
+  regex, alias-tracking and a map keyed by model URI — because Monaco ships
+  grammars for SQL and no service behind them. It is ten lines now
+  (`lib/db/sql-completion.ts`). This was the one cost the move to Monaco
+  admitted to at the time, and it was the largest.
+- The request body needed a hand-written Monarch grammar, `http-body`, because
+  Monaco's JSON _service_ marked every `{{variable}}` as a syntax error and had
+  no per-model switch. The body is highlighted by the real JSON parser now, with
+  the variables as a decoration over it (`lib/http/body-language.ts`).
+- `.tsx`, `.jsx` and `.vue` needed grammars extended by hand, and the JSX one
+  rested on a heuristic — `<` after an identifier is generics, `<` after
+  anything else is a tag — that got `1<x` wrong. Lezer has real TSX and Vue
+  parsers, so `lib/files/grammars.ts` is deleted rather than ported.
+- The diff pane held a `visibility: hidden` host, two chained animation frames,
+  a 32ms settle, a two-second guard and a rule about when `HEAD` could arrive,
+  all to hide the gap between Monaco painting a file and folding it. The merge
+  view comes up folded on its first paint; all of it is gone.
+- Five worker entry points and a `MonacoEnvironment` existed so a desktop app
+  did not fetch its tokenizer from a CDN. Lezer parses on the main thread.
 
-**Two grammars are extended rather than taken as they come** (`lib/files/grammars.ts`).
-Standalone Monaco highlights with Monarch, not with the TextMate grammars VS
-Code uses, and that set is smaller. `.tsx` and `.jsx` were already registered as
-TypeScript and JavaScript, but neither grammar has any notion of a tag, so
-markup tokenized as arithmetic; JSX rules are added in front of both. `.vue` was
-not registered at all — it is HTML's own grammar plus one state for
-`<script lang="ts">`, since a single-file component is an HTML document as far
-as tokenizing goes.
+**And what it cost, which is one thing.** Monaco bundled a TypeScript worker
+that reported _syntax_ errors. Lezer parses and does not diagnose, so a genuine
+typo in a `.ts` file no longer gets a squiggle. See the next section: the server
+that could answer it better is already running.
 
-The JSX rules rest on one heuristic, because Monarch matches a regex at a
-position and `<` is three different things: **`<` directly after an identifier
-is generics, `<` after anything else is a tag**. `Array<string>` and
-`useState<number>()` never have a space there, while JSX always follows a `(`, a
-`return`, an `=>`, a `{` or another tag. It can be wrong — `1<x` reads as a tag —
-and being wrong colours a line oddly rather than breaking anything. The rules go
-on the `typescript` and `javascript` languages rather than on ids of their own,
-because Monaco has no `typescriptreact` and the TypeScript worker is bound to
-those two ids. They are registered as a tokens provider _factory_, which is how
-Monaco registers its own: registering a factory replaces the one already there,
-while setting a provider directly would win only until Monaco's lazy loader
-resolved and overwrote it.
+What is shared is in `lib/editor.ts` — the font, the theme, `baseChrome`, and
+`panelChrome`, which is what an editor that is a _field_ gets. That is
+deliberately less than this panel's `fileChrome`: no active-line band, no
+indenting Tab (Tab is how you leave a field) and no completion popover, since
+those are chrome competing with a few lines of text. What survives at any size
+is numbered lines, folding, the find panel and wrapping. The theme is this app's
+own tokens for everything structural — gutter, selection, find bar, completion
+popover — and two literal palettes for the syntax colours, which are VS Code's
+Light+ and Dark+ so that changing the stack did not silently restyle every file
+in the app. It is a **per-view** compartment, where Monaco had one theme for
+every editor on the page and each component called `setTheme` globally.
 
-Semantic TypeScript diagnostics are **off**, syntax diagnostics **on**. Monaco's
-TS worker sees one file with no tsconfig, no `node_modules` and no other file in
-the repository; left on, it reports every import in a real project as missing.
-Syntax validation needs none of that context and is right every time — with
-`jsx: Preserve` set on both defaults, or a `.tsx` file would report its own tags
-as syntax errors.
+**A language is a dynamic import, not a grammar in the bundle.**
+`@codemirror/language-data` carries 143 of them and loads each on demand;
+`lib/editor-languages.ts` is the whole of the resolution, matching a filename or
+a name against that registry rather than against a table kept here — the same
+argument the Monaco version made about `monaco.languages.getLanguages()`. What
+follows is that resolving a language is synchronous and _using_ one is a promise:
+every editor opens in plain text and colours a frame or two later. That is the
+trade that stopped a session which opens one JSON file paying for four megabytes
+of grammars.
 
-What follows from the worker seeing one file is that it can say nothing about an
-import — which is what the next section is for.
+Every editor is behind its own `lazy`, so nothing of the stack is in the bundle
+the studio launches with and a run that stays in the sidebars fetches none of it.
+The fallback is an empty box rather than a spinner: the chunk comes off disk on
+the `app://` origin, so what it covers is a parse rather than a download.
+
+**One copy of `@codemirror/view` in the bundle, enforced twice.** A CodeMirror
+extension is identified by the object it was built from, so two copies of that
+package are two `EditorView.theme` facets and two `keymap`s, and an extension
+built against one is silently inert in a view built from the other — no error,
+the theme just does not apply. Milkdown depends on the same packages, and this
+project's install resolves thirteen nested copies at the _same version_, which is
+exactly why neither the package manager nor `tsc` reports a conflict.
+`package.json` pins the version exactly; `resolve.dedupe` in `vite.config.ts`
+pins the module. Both comments say so, and both are load-bearing.
 
 ### Hover and go-to-definition
 
@@ -2141,16 +2169,17 @@ A checkout gets its own because it has its own `node_modules` and its own
 `tsconfig.json`, and resolving one branch's imports against another branch's
 copy is how a hover ends up pointing at source nobody is looking at.
 `serverFor` takes the longest matching root and a checkout is nested inside no
-folder, so this falls out of the list it is given. Monaco keeps what it is good at — colouring, folding,
-syntax errors in the file in front of it — and two providers hand the two
-project-shaped questions to the server: what is this symbol, and where does it
-come from. Hovering an import gives its signature and its doc comment;
+folder, so this falls out of the list it is given. The editor keeps what it is
+good at — colouring, folding, bracket matching in the file in front of it — and
+a hover source and a key binding hand the two project-shaped questions to the
+server: what is this symbol, and where does it come from. Hovering an import gives its signature and its doc comment;
 `⌘`-clicking it opens the declaration as a tab, `node_modules` included, with the
 tree expanded down to it.
 
 **tsserver directly, not a language server.** `typescript-language-server` is a
 translation layer over this same process, and turning LSP into tsserver's
-protocol only to turn it back into Monaco's providers is a dependency to carry
+protocol only to turn it back into the editor's own hover and definition
+sources is a dependency to carry
 and keep in step for no answer it could give that this cannot. The protocol is
 newline-delimited JSON in, `Content-Length`-framed JSON out; the whole client is
 one file, and `test/tsserver.ts` runs it against this repository rather than
@@ -2174,11 +2203,26 @@ positions that no longer line up with the screen. Nothing starts at launch — a
 run spent in the Database panel never reads a `.ts` file, and loading a monorepo
 is not a cost to pay on the chance somebody might.
 
-Go-to-definition across files needs one more piece: standalone Monaco, handed a
-target in a model it is not attached to, does nothing at all, which reads as a
-broken key rather than a missing feature. `monaco.editor.registerEditorOpener` is
-the hook it offers, and the studio answers it by opening the file as a tab — the
-same act as clicking it in the tree.
+Go-to-definition across files is a call into the files store: open the file as a
+tab and reveal it, the same act as clicking it in the tree, with the position
+left in `pendingReveal` for the editor that mounts a frame later. Monaco needed
+a hook for this — handed a target in a model it was not attached to its
+standalone editor did nothing at all, which read as a broken key rather than a
+missing feature, and `registerEditorOpener` was what it offered instead. There
+is no editor-level indirection to satisfy here: the extension already knows the
+path it was built for.
+
+**The one thing lost in moving off Monaco is on this page rather than hidden.**
+Monaco bundled a TypeScript worker that reported _syntax_ errors in the file in
+front of it — held to syntax alone, because it could see no `tsconfig.json` and
+no `node_modules` and marked every import in a real project as missing. Lezer
+parses for structure and does not diagnose, and there is no CodeMirror
+TypeScript service that is not a second copy of the compiler in the renderer,
+which is the thing the server above was written to avoid. So a genuine typo in a
+`.ts` file no longer gets a squiggle. The server that could give it back
+properly — with the _type_ errors Monaco's worker never had — is already running
+and already told what is in the editor; wiring diagnostics through it is a
+feature, and was deliberately not smuggled into a migration.
 
 Saving is `⌘S`, with a dot on the tab and on the tree row while a buffer is
 ahead of the disk. Closing a tab writes it rather than asking — the same bargain
@@ -2279,16 +2323,22 @@ is — so one statement of a script can be tried without deleting the rest of it
 Editing a row in the result grid reruns exactly what produced that grid,
 selection included, rather than whatever the editor holds by then.
 
-Completion is the connected database's own schema, and is hand-written
-(`lib/db/sql-completion.ts`) because Monaco ships a grammar for `sql`, `mysql`
-and `pgsql` but no language service behind any of them. It offers the tables,
-and after a `.` the columns of whichever table that alias resolves to; the
-statement is delimited by `;` and read with a regex rather than parsed, since
-the question is only which tables are named under which aliases, and being
-wrong there costs one bad suggestion rather than a broken query. Providers in
-Monaco are registered per language rather than per editor, so the live schema is
-published under each console's model URI and looked up from there — otherwise
-two open consoles would answer for each other.
+Completion is the connected database's own schema, handed to
+`@codemirror/lang-sql` (`lib/db/sql-completion.ts`). It offers the tables, and
+after a `.` the columns of whichever table that alias resolves to, off a real
+parse of the statement.
+
+That file was 290 lines and is now about ten, which is the clearest single
+measure of what the two moves between editing stacks cost and refunded. Monaco
+ships grammars for `sql`, `mysql` and `pgsql` and no language service behind any
+of them, so all of this had to be written by hand: a regex for the tables a
+statement names and the aliases they are named under, a keyword list, a
+statement-at-the-cursor split on `;` that a semicolon inside a string literal
+would fool, and a `Map` keyed by model URI — because a Monaco provider is
+registered per _language_ rather than per editor, and two open consoles would
+otherwise answer for each other. Every one of those is a property of Monaco
+rather than of SQL. Here the schema is configuration of the one editor it
+belongs to, so two consoles cannot collide by construction.
 
 A row-returning statement that doesn't limit itself gets `limit 500` appended
 (`lib/db/row-limit.ts`), with "Run without limit" next to the results as the

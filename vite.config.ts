@@ -101,5 +101,28 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src/renderer", import.meta.url)),
       "@shared": fileURLToPath(new URL("./src/shared", import.meta.url)),
     },
+    /*
+     * One copy of each of these in the bundle, whatever node_modules looks like.
+     *
+     * A CodeMirror extension is identified by the object it was built from — a
+     * facet, a `ViewPlugin`, a state field — so two copies of `@codemirror/view`
+     * are two `EditorView.theme` facets, two `keymap`s and two `Decoration`
+     * classes, and an extension from one is silently inert in a view from the
+     * other. Nothing errors; the theme just does not apply.
+     *
+     * This is not hypothetical here. Milkdown depends on the CodeMirror packages
+     * too, and this project's install resolves thirteen nested copies of
+     * `@codemirror/view` under the other `@codemirror/*` packages — every one of
+     * them the same version, which is why nothing upstream considers it a
+     * conflict and why `tsc` cannot see it either. The exact-version pin in
+     * `package.json` keeps the *versions* from diverging; this keeps the
+     * *modules* from being two.
+     */
+    dedupe: [
+      "@codemirror/state",
+      "@codemirror/view",
+      "@codemirror/language",
+      "@lezer/common",
+    ],
   },
 })

@@ -1,90 +1,169 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 
 import { useSettings } from "@/lib/settings"
 
 /**
  * A file's diff against `HEAD`, fetched the first time one is opened.
  *
- * Split the way `file-editor.tsx` is split, and for the same reason — Monaco is
- * around four megabytes and does not belong in the launch bundle. The committed
- * side is read here, outside the `lazy`, so the IPC round trip and the chunk
- * load happen at once rather than one after the other.
+ * Split the way `file-editor.tsx` is split, and for the same reason. The
+ * committed side is read here, outside the `lazy`, so the IPC round trip and the
+ * chunk load happen at once rather than one after the other.
+ *
+ * **The editor is not mounted until `HEAD` is in hand.** Under Monaco that was
+ * load-bearing in a way it no longer is — a diff computed against an empty
+ * original has no unchanged region in it, and Monaco carried that absence
+ * forward as *the reader has expanded everything* when the real text arrived, so
+ * the fold only ever worked because of this. CodeMirror computes the collapsed
+ * regions from the pair it is built with, so the reason it still waits is the
+ * plainer one: an editor mounted against a blank commit would draw "the whole
+ * file added" and then redraw it as a diff.
+ *
+ * **And the diff on screen stays there while the next one is read**: reading a
+ * file and asking git for its committed self are both round trips, so waiting
+ * for them with nothing mounted turned every click in the `Changes` list into an
+ * empty pane for a beat and then a diff. A path is swapped in only once there is
+ * something to draw for it, and until then the reader keeps looking at the file
+ * they came from. This component is therefore *not* keyed by path, unlike
+ * everything else in `Body`, and is mounted through that panel's `Reading…`
+ * state as well — the whole point is that it outlives the switch.
+ *
+ * **The editor inside it, on the other hand, is now rebuilt per file**, and that
+ * is the one place this pane got worse rather than better. Monaco reused a single
+ * `IStandaloneDiffEditor` for every file the pane ever showed, because
+ * `createDiffEditor` builds two code editors, a gutter and a worker connection
+ * and doing that on every row clicked in `Changes` was a stutter on the thread
+ * that also has to draw. CodeMirror's merge view has no worker, computes its diff
+ * synchronously and comes up folded on the first paint, so the construction cost
+ * that argument rested on is gone — and rebuilding is unavoidable anyway, since
+ * side-by-side and inline are two different constructions rather than one widget
+ * with a flag. See `CodeMirrorFileDiff`.
  */
-const MonacoFileDiff = lazy(() => import("./monaco-diff"))
+const loadDiffEditor = () => import("./codemirror-diff")
+const CodeMirrorFileDiff = lazy(loadDiffEditor)
 
 export function FileDiff({
   path,
   initialText,
-  onChange,
-  onSave,
+  ready,
 }: {
   path: string
   initialText: string
-  onChange: (text: string) => void
-  onSave: () => void
+  /** Whether `initialText` is the file — false while the pane is still reading
+   * it. The committed side is not asked for until it is, which is what makes
+   * `read` below lag the prop by the whole switch rather than half of it: a
+   * `HEAD` that arrived first would mount an editor against a blank file. */
+  ready: boolean
 }) {
-  const original = useHeadText(path)
+  // The file the editor is showing, which lags the prop through a switch: the
+  // one on screen stays until there is a committed side for the next.
+  const [head, setHead] = useState<Head | null>(null)
+
+  // The read is dropped if the pane has already moved on — its `initialText`
+  // would be the new file's, and that pair is one file's commit against
+  // another's buffer. The read for the file now selected is already in flight.
+  const docRef = useRef({ path, initialText })
+  useEffect(() => {
+    docRef.current = { path, initialText }
+  })
+
+  useHeadText(ready ? path : null, (read) => {
+    const doc = docRef.current
+    if (doc.path !== read.path) return
+    setHead({ path: read.path, text: read.text, initialText: doc.initialText })
+  })
+
+  // Warmed while the reads are in flight, since nothing is mounted until they
+  // land: the module registry dedupes this against the `lazy`, so the chunk and
+  // the IPC overlap rather than queueing.
+  useEffect(() => {
+    void loadDiffEditor()
+  }, [])
 
   // Read here rather than handed down from the pane: they are the diff's own two
   // and nothing above it has any use for them.
   const sideBySide = useSettings((state) => state.diffSideBySide)
   const whitespace = useSettings((state) => state.diffWhitespace)
 
+  // Nothing read yet, which is only ever the first diff of a pane. Blank rather
+  // than a spinner: two round trips and a diff is a beat, and a spinner
+  // appearing and leaving in that window is more movement than none.
+  if (!head) return <div className="h-full w-full" />
+
   return (
     <Suspense fallback={<div className="h-full w-full" />}>
-      <MonacoFileDiff
-        // The path is the identity here as it is for the editor: a renamed file
-        // is a fresh diff rather than one against a commit's copy of a name that
-        // has moved.
-        key={path}
-        path={path}
-        initialText={initialText}
+      <CodeMirrorFileDiff
+        // The editor rebuilds itself on the file, the commit and the layout, so
+        // no `key` is needed to make that happen — and one here would also throw
+        // away the host element every switch.
+        path={head.path}
+        // The text that was read for *that* file, and only a seed: a buffer this
+        // path already has — the `Edit` view's unsaved work — wins over it.
+        initialText={head.initialText}
         sideBySide={sideBySide}
         whitespace={whitespace}
-        original={original}
-        onChange={onChange}
-        onSave={onSave}
+        original={head.text}
       />
     </Suspense>
   )
 }
 
 /**
- * What `HEAD` has of this file — null for a file it does not have, which is both
- * a new file and a directory that is not a repository.
+ * What `HEAD` has of a file, **with the path it was read for** — null text for a
+ * file `HEAD` does not have, which is both a new file and a directory that is not
+ * a repository, and null altogether until the first read comes back.
+ *
+ * The path travels with the text for two reasons. Nothing worth drawing can be
+ * built against an empty committed side — a diff computed against one is "the
+ * whole file added", which is a pane that redraws itself the moment the real text
+ * lands. And the caller draws whatever the last answer was while the next is in
+ * flight, so it has to be able to tell which file that answer is about.
  *
  * Not in the files store, unlike the working text: nothing else in the studio
  * asks for it, it cannot be edited, and it is invalidated by a commit rather
  * than by anything the store already watches for. A tab kept open across one is
- * re-read by being remounted, which is what a `key` on the path gives for free.
- *
- * Nothing resets this when `path` changes, and nothing has to: the pane keys
- * this component by the path, so a different file is a different mount starting
- * from null. Clearing it here as well would be a second render on every open for
- * a state that was already right.
+ * re-read when the path it is showing changes, which is this hook's own effect.
  */
-function useHeadText(path: string): string | null {
-  const [original, setOriginal] = useState<string | null>(null)
+type Head = {
+  path: string
+  /** What `HEAD` has of it, null for a file `HEAD` does not have. */
+  text: string | null
+  /** And the working tree's, kept beside it so the pair the editor is built from
+   * is two halves of one file. */
+  initialText: string
+}
+
+function useHeadText(
+  path: string | null,
+  onRead: (read: { path: string; text: string | null }) => void
+) {
+  // Through a ref, so a caller that builds its handler inline does not re-run
+  // `git show` on every render.
+  const onReadRef = useRef(onRead)
+  useEffect(() => {
+    onReadRef.current = onRead
+  }, [onRead])
 
   useEffect(() => {
+    // Nothing to read against yet — the pane has not finished reading the file.
+    // Whatever was answered last stays, and with it the diff drawn from it.
+    if (path === null) return
+
     let alive = true
 
     void window.desktop
       .fileAtHead(path)
       .then((text) => {
-        if (alive) setOriginal(text)
+        if (alive) onReadRef.current({ path, text })
       })
       .catch(() => {
         // A path outside the workspace's roots, or a git that could not be run.
         // Both mean there is nothing to compare against, which the empty left
         // side already says.
-        if (alive) setOriginal(null)
+        if (alive) onReadRef.current({ path, text: null })
       })
 
     return () => {
       alive = false
     }
   }, [path])
-
-  return original
 }

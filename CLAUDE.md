@@ -178,16 +178,45 @@ the row that was clicked is in the left column already showing. No panel store
 clears itself any more: there is no
 switch to clear for, and the only one that follows the folders at all is the
 dock's shell store, which drops a removed folder's or checkout's shells. Every code editor is
-Monaco, set up once in `lib/monaco.ts` and always behind a `lazy` so its ~4 MB
-of grammars stays out of the launch bundle. What a panel adds to it lives with
-that panel: the Explorer's grammars and TypeScript wiring in
-`lib/files/monaco.ts`, whose hovers and go-to-definition come from a real
-`tsserver` per Explorer root in `src/main/tsserver.ts` (that root's own
-`typescript`, and nothing if it has none — a checkout resolves against its own
-`node_modules`, not another branch's); the SQL console's schema completion in
-`lib/db/sql-completion.ts`, which Monaco ships no language service for; and the
-request body's own grammar in `lib/http/body-language.ts`, because a body full
-of `{{variables}}` is a template rather than the JSON it looks like. The dock's
+**CodeMirror**, set up once in `lib/editor.ts` and always behind a `lazy` so
+neither it nor a language parser is in the launch bundle. It was Monaco, which
+was CodeMirror before that, and the round trip is on the record because both
+moves were argued rather than fashionable: the case _for_ Monaco was one stack
+across the app and the editor people already know; the case for coming back is
+that almost everything the Monaco version needed a workaround for was a
+workaround for Monaco. The three biggest are named where they live — see the
+diff pane, `lib/db/sql-completion.ts` and `lib/http/body-language.ts` below —
+and what it costs is one thing, stated plainly: **`.ts` files no longer get
+syntax squiggles.** Monaco carried a TypeScript worker for them; Lezer parses
+and does not diagnose. The `tsserver` that could answer better is already
+running and was deliberately not wired up as part of a migration.
+
+A language is a _dynamic import_ rather than a grammar in the bundle
+(`@codemirror/language-data`, 143 of them, resolved in `lib/editor-languages.ts`),
+so an editor opens in plain text and colours a frame later, and a run that opens
+one JSON file fetches one parser rather than four megabytes of them. There are no
+workers and no `MonacoEnvironment`: Lezer parses incrementally on the main
+thread, so the five bundled worker entry points and the `app://`-origin wiring
+that kept a desktop app off a CDN are gone with them. What a panel adds lives
+with that panel: the Explorer's shared buffers in `lib/files/documents.ts` and
+its TypeScript wiring in `lib/files/typescript.ts`, whose hovers and
+go-to-definition come from a real `tsserver` per Explorer root in
+`src/main/tsserver.ts` (that root's own `typescript`, and nothing if it has none
+— a checkout resolves against its own `node_modules`, not another branch's); the
+SQL console's schema completion in `lib/db/sql-completion.ts`, which is
+`lang-sql` handed a schema and is the one feature the move to Monaco is on record
+as having cost; and the request body's `{{variables}}`, which are a decoration
+over the real JSON parser in `lib/http/body-language.ts` rather than the
+hand-written grammar Monaco's JSON _service_ forced.
+
+**One copy of `@codemirror/view`, enforced twice.** A CodeMirror extension is
+identified by the object it was built from, so two copies of that package are two
+`EditorView.theme` facets and an extension that is silently inert — no error, the
+theme simply does not apply. Milkdown depends on the same packages and this
+install resolves thirteen nested copies at the _same version_, which is why
+neither the package manager nor `tsc` sees a conflict. `package.json` pins the
+version exactly and `resolve.dedupe` in `vite.config.ts` pins the module; read
+the comments on both before touching either. The dock's
 terminal is xterm, over the one `TerminalView` in `components/studio/`.
 
 **The left column: the window's left edge.**
@@ -694,29 +723,41 @@ debounce rather than a second set of timers, with `test/git-changes.ts` over a
 real repository behind both it and `fileAtHead`. The file is shown as a **diff**:
 `diff` is a `Viewer` beside `text` and the rest, so the same file opened from the
 tree is an ordinary tab with the right-click menu switching back, and it is
-Monaco's diff editor over the file's own model on the right (⌘S saves) and
-`git show HEAD:<path>` on the left (`file-diff.tsx`, `monaco-diff.tsx`). **Both
-sides are read-only**: a diff is read, and an editable right half over a left
-half that refuses every keystroke is a pane that behaves two ways at once —
+CodeMirror's merge view over the file's own buffer on the right and
+`git show HEAD:<path>` on the left (`file-diff.tsx`, `codemirror-diff.tsx`).
+**Both sides are read-only**: a diff is read, and an editable right half over a
+left half that refuses every keystroke is a pane that behaves two ways at once —
 editing is the `Edit` half of the toggle in the header, one click and the same
-buffer. The right side is still the file's own model, so the diff shows unsaved
-edits and ⌘S still saves.
+buffer. The right side is still the file's own buffer, so the diff shows unsaved
+edits. ⌘S is claimed by `changes-pane.tsx` rather than by the editor, which is
+the one thing the stack change moved: Monaco's read-only diff was still
+focusable and took the key itself, and a genuinely non-editable CodeMirror view
+holds no focus to bind one on.
 The header draws the path **relative to its root** with the absolute one on the
 hover line, since a checkout's own is forty characters of
 `~/.tabomni/workspace/worktrees/<uuid>/<branch>/` before it says anything about
 the file; `Copy path` and `Reveal` still use the absolute one. Two
-editors can hold one path's model — a file tab and the `Changes` diff of
-it — so `modelFor` counts holders and `releaseModel` disposes at zero; before
-that, whichever unmounted first took the buffer from the other. A
+editors can hold one path's buffer — a file tab and the `Changes` diff of it —
+and `lib/files/documents.ts` is the registry that had to be _written_ rather than
+ported, since Monaco owned its documents and CodeMirror deliberately does not.
+It counts holders and drops the buffer at zero, forwards what is typed in one
+view to every other view on the same path, and hands an editable view's undo
+history and caret to the next one — which is what carries an editing session
+across the `Diff | Edit` switch. Sharing the _document_ live and the _history_
+by handover is the distinction to keep: only one view of a path can ever be
+typed into, because a diff is read-only on both sides. A
 deleted file is why the diff is drawn ahead of the cannot-open notice: it has no
 row in the tree, it is a row in Changes, and its diff is the whole of it
 removed. The diff's toolbar is in the pane header beside the
 path: `Diff | Edit` over the same `views` field, plus inline/side-by-side and
 whitespace, the last two under `workbench.settings` (`diffSideBySide`,
-`diffWhitespace`) and applied with `updateOptions`. Picking side by side also
-clears `useInlineViewWhenSpaceIsLimited`, since Monaco otherwise falls back to
-unified below 900px and overrules the button that was just pressed. **The diff is
-also the one editor unmounted rather than hidden**: the panes are stacked and
+`diffWhitespace`). Side-by-side and inline are two different constructions —
+`MergeView` against `unifiedMergeView` — so that toggle rebuilds the view where
+Monaco took an `updateOptions`, and with it goes the
+`useInlineViewWhenSpaceIsLimited` clause that existed only because Monaco
+second-guessed the button below 900px. Whitespace is all-or-nothing
+(`highlightWhitespace`), where Monaco drew the marks inside a selection.
+**The diff is also the one editor unmounted rather than hidden**: the panes are stacked and
 hidden with `invisible` to keep editing state, a diff has none worth keeping, and
 one left live painted its bands through whatever pane was showing. `visible` in
 `file-workspace.tsx` means the active tab **of the panel being looked at**
