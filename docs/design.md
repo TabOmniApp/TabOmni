@@ -195,6 +195,40 @@ the pane in `components/studio/worktree/`. They were the assistant panel's until
 that panel was removed (see The assistant, removed) and came here with it, which
 is where they belong now: this is the only chat in the app.
 
+#### A chat in the project itself
+
+A chat is a **place**, and a place is a checkout _or_ a project's own working
+tree: `New chat here` on a project row's context menu, and on the title bar
+crumb's, starts one with the project directory as the cwd. On the record that is
+`folderId` plus a nullable `worktreeId` (`ChatPlace` in `@shared/api`), and
+`chatRootId` — `worktreeId ?? folderId` — is where a record older than the pair
+is read, the way `chatOptions` reads an older record's options. That id is a
+`FileRoot.id` and the dock's shell key already, so a chat's scope, its tab group
+and the row it moves the workbench to all fall out of it unchanged.
+
+The argument this was held back by — that a branch of its own is what makes
+pre-approved edits honest — turns out to be an argument about the _permission_
+and not about the feature. Plenty of what somebody asks an agent is a question
+about the project they have open, and making them cut a branch first is a
+worktree nobody wanted and a directory to remove afterwards. So the permissions
+are **not** quietly narrowed here: narrowing them would make `Edits` mean two
+different things depending on which row it was picked from, and `Plan` and `Ask`
+are already in the picker for exactly this. What changes is that nothing claims
+isolation any more. `SYSTEM_PROMPTS` in `main/worktree-chat.ts` has one prompt
+per kind of place — the worktree one opens by saying edits here cannot disturb
+the branch you have checked out elsewhere, which is _false_ in a project, and a
+model told it is isolated when it is not reaches for `Bash` more freely than it
+should. The caption under the composer says "in this project's own working tree"
+rather than "in this branch only" (`captionFor` in `chat-pane.tsx`), and the
+empty state says it a third time, with the toolbar named as the way to be asked
+first.
+
+The cwd resolve is deliberately **not** the `worktreeDir(id) ?? folderDir(id)`
+chain `terminalCreate` uses. A shell that lands in the project because its
+checkout was removed is a surprising `pwd`; a turn that lands there with edits
+pre-approved is a diff in the branch the user actually has open. A chat whose
+place has gone finishes with a line saying so instead.
+
 #### What a turn looks like
 
 **A turn's working is folded, and its answer is not.** A finished turn is read

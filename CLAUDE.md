@@ -261,7 +261,21 @@ the assistant panel's until that panel went and came here with it)
 and always grouped **by worktree**, so the outer tab is the branch and the inner
 strip is its chats). Edits and `Bash` are pre-approved
 (`--permission-mode acceptEdits`) because nothing here answers a prompt yet and
-the directory is a branch of its own; the composer says so out loud. **The composer
+the directory is a branch of its own; the composer says so out loud.
+**A chat can also be in a project's own working tree** — `New chat here` on a
+project row's menu and on the title-bar crumb's, with the project as the cwd. A
+chat's place is `folderId` + a nullable `worktreeId` on the record (`ChatPlace`
+and `chatRootId` in `@shared/api`, which is where a record older than the pair is
+read, the way `chatOptions` is), and `worktreeId ?? folderId` is a chat's root id
+— the same key `FileRoot.id` and the dock's shells use, so its scope and its
+group need no translation. `createWorktreeChat` takes the pair. What does **not**
+change is the permission table: narrowing it here would make `Edits` mean two
+things depending on where it was picked. What changes is that nothing claims
+isolation — `SYSTEM_PROMPTS` in `main/worktree-chat.ts` tells the turn where it
+really is, and `captionFor` in `chat-pane.tsx` says "in this project's own
+working tree" rather than "in this branch only". The cwd resolve is deliberately
+**not** the `??` chain `terminalCreate` uses: a chat whose checkout was removed
+must not have its next turn land in the project with edits pre-approved. **The composer
 has a toolbar**, inside its own box: a model, an effort and a permission, held
 per chat as `options` on the record (`WorktreeChatOptions` in `@shared/api`,
 `setWorktreeChatOptions` writing it) and read at send time, so the checkout being
@@ -443,9 +457,10 @@ checkout rather than for something the user opened; what that actually bought wa
 two tab strips on screen at once whenever a chat was open — the outer one the
 branch, the inner one its chats — for a panel nobody had asked to group. The
 field is gone rather than left unused, `grouper` reads only the setting, and a
-chat is one tab in the one strip, with its branch on the tab's hover line
-(`tab-items.tsx`) since the label cannot carry it. A second chat in a branch is
-still started from that worktree's row in the left column, or `New chat here` on
+chat is one tab in the one strip, with its branch — or, for a chat in a project's
+own working tree, the project's name — on the tab's hover line (`tab-items.tsx`)
+since the label cannot carry it. A second chat in a place is
+still started from that row in the left column, or `New chat here` on
 its menu. Closing a folder's tab closes
 everything under it; the inner strip's ✕, a sidebar row's ✕ and ⌘W all close one
 tab, through `closePanelTab`. What a tab _looks_ like is

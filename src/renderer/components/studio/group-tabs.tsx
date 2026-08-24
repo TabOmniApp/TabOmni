@@ -4,14 +4,16 @@ import {
   closeOthersInGroup,
   closePanelTab,
   closeTab,
-  groupWorktreeId,
+  groupRootId,
   reorderWithinGroup,
   selectTab,
   useShownGroup,
 } from "@/lib/panels"
-import type { Pane } from "@/lib/store"
+import type { ChatPlace } from "@shared/api"
+import { useStudio, type Pane } from "@/lib/store"
 import { bare } from "@/lib/tabs"
-import { useWorktreeChats } from "@/lib/worktree-chat/store"
+import { useWorktrees } from "@/lib/worktree/store"
+import { placeOfRoot, useWorktreeChats } from "@/lib/worktree-chat/store"
 import { IconButton } from "./icon-button"
 import { useTabItems } from "./tab-items"
 import { TabStrip } from "./tab-strip"
@@ -31,6 +33,15 @@ const LABELS: Record<Pane, string> = {
 /** The Database panel's one group that is not a schema: the console's own
  * tabs, which belong to no schema and gather together. */
 const DB_QUERIES = ""
+
+/** Where the `+` at the end of a chat group's strip would put a chat: the group
+ * is a root id, and what `create` takes is the folder and the checkout. */
+function useChatGroupPlace(group: string): ChatPlace | null {
+  const folders = useStudio((state) => state.folders)
+  const worktrees = useWorktrees((state) => state.worktrees)
+  const root = groupRootId(group)
+  return root ? placeOfRoot(root, folders, worktrees) : null
+}
 
 /**
  * The second strip: one folder's own tabs, under the workbench strip's tab for
@@ -54,10 +65,14 @@ export function GroupTabs({ pane }: { pane: Pane }) {
   const byId = useTabItems()
   const create = useWorktreeChats((state) => state.create)
 
-  if (!shown) return null
+  // Null for a group that is not a chat's, which is every other panel's — and
+  // for one whose checkout or project has left the workspace, which is a `+`
+  // with nowhere to put a chat. Resolved before the early return below, since a
+  // hook cannot be called under one.
+  const grouped = useChatGroupPlace(shown?.group ?? "")
+  const place = pane === "worktree" ? grouped : null
 
-  // Null for a group that is not a checkout's, which is every other panel's.
-  const worktreeId = groupWorktreeId(shown.group)
+  if (!shown) return null
 
   // `shown` speaks in strip ids, which is what this whole component handles:
   // the items are keyed by them, the strip marks and hands back one, and
@@ -78,10 +93,14 @@ export function GroupTabs({ pane }: { pane: Pane }) {
       items={items}
       activeId={shown.active}
       trailing={
-        pane === "worktree" && worktreeId ? (
+        place ? (
           <IconButton
-            label="New chat in this worktree"
-            onClick={() => void create(worktreeId)}
+            label={
+              place.worktreeId
+                ? "New chat in this worktree"
+                : "New chat in this project"
+            }
+            onClick={() => void create(place)}
           >
             <Plus />
           </IconButton>

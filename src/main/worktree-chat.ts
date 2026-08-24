@@ -6,6 +6,7 @@ import {
   type ChatAskOption,
   type ChatAskQuestion,
   type ChatPermission,
+  type ChatPlace,
   type WorktreeChat,
   type WorktreeChatAnswer,
   type WorktreeChatAsk,
@@ -52,6 +53,16 @@ import {
  * SDK. `ask` is the one that does, and in the other four a prompt is still a
  * turn that stalls — which is why they name their refusals rather than leaving
  * anything merely unlisted.
+ *
+ * **A chat can also be in a project's own working tree** — `worktreeId: null` on
+ * the record — and that is the case the paragraph above does not cover: there is
+ * no isolation, because the directory *is* the branch the user has checked out.
+ * The permissions are not quietly narrowed for it, since narrowing them would
+ * make `Edits` mean two things depending on where it was picked; what changes is
+ * that nothing claims isolation any more. The turn is told where it really is
+ * (`SYSTEM_PROMPTS`), the caption under the composer says the project rather
+ * than the branch, and the picker is the user's to set — `Plan` and `Ask` are
+ * there for exactly this.
  *
  * The workspace's MCP servers are handed over, which is the thing no other
  * agent-in-an-editor has: the databases, the saved requests and the notes, in
@@ -107,6 +118,9 @@ export type WorktreeChatSource = {
   mcpConfig: () => Promise<McpHandover | null>
   /** The directory a worktree id names, or null when the record has gone. */
   worktreeDir: (worktreeId: string) => Promise<string | null>
+  /** The directory a project names, or null when it has left the workspace —
+   * what a chat with no worktree runs in. */
+  folderDir: (folderId: string) => Promise<string | null>
 
   chats: () => Promise<WorktreeChat[]>
   saveChats: (chats: WorktreeChat[]) => Promise<void>
@@ -446,10 +460,30 @@ export function withUserServers(
  * list says what a tool does, not that the databases and requests it reaches
  * belong to the workspace this checkout is part of.
  */
-const SYSTEM_PROMPT = [
-  "You are a chat in a `git worktree` checkout inside TabOmni, a desktop studio: this directory is a working tree of the user's project on a branch of its own, so edits and commands here cannot disturb the branch they have checked out elsewhere.",
-  "The workspace's databases, saved HTTP requests and notes are the `tabomni-*` MCP tools, and they belong to the whole workspace rather than to this checkout; prefer them over guessing.",
-].join(" ")
+const WORKSPACE_PROMPT =
+  "The workspace's databases, saved HTTP requests and notes are the `tabomni-*` MCP tools, and they belong to the whole workspace rather than to this directory; prefer them over guessing."
+
+/**
+ * One per kind of place, because the first sentence of the worktree one is a
+ * claim and not a description.
+ *
+ * "Edits here cannot disturb the branch you have checked out elsewhere" is the
+ * whole argument for pre-approving edits, and it is *false* in a project's own
+ * working tree — that directory is the branch the user has checked out. Telling
+ * a model it is isolated when it is not is the one line here worth getting
+ * right: it decides how freely the turn reaches for `Bash` and how much it
+ * bothers to ask.
+ */
+const SYSTEM_PROMPTS = {
+  worktree: [
+    "You are a chat in a `git worktree` checkout inside TabOmni, a desktop studio: this directory is a working tree of the user's project on a branch of its own, so edits and commands here cannot disturb the branch they have checked out elsewhere.",
+    WORKSPACE_PROMPT,
+  ].join(" "),
+  folder: [
+    "You are a chat in a project inside TabOmni, a desktop studio: this directory is the user's own working tree on whatever branch they have checked out, so edits and commands here change the files they are working in. There is no isolation to fall back on — prefer the smallest change that does the job, and say what you are about to do before doing anything wide-reaching.",
+    WORKSPACE_PROMPT,
+  ].join(" "),
+}
 
 export class WorktreeChats {
   /** A turn per chat, keyed by chat id. Several chats can be answering at once
@@ -506,17 +540,18 @@ export class WorktreeChats {
   }
 
   /**
-   * A new, empty chat in a worktree.
+   * A new, empty chat in a checkout, or in a project's own working tree.
    *
    * Made up front rather than on the first message, because the row has to exist
    * for somebody to type into: the tab is opened by clicking `+`, and a tab that
    * only appears once you have said something is a `+` that does nothing.
    */
-  async create(worktreeId: string): Promise<WorktreeChat> {
+  async create(place: ChatPlace): Promise<WorktreeChat> {
     const now = new Date().toISOString()
     const chat: WorktreeChat = {
       id: randomUUID(),
-      worktreeId,
+      folderId: place.folderId,
+      worktreeId: place.worktreeId,
       // Named by its first message, once there is one. Until then this is what
       // the tab says — Conductor's own new tab says the same thing.
       title: "Untitled",
@@ -570,11 +605,30 @@ export class WorktreeChats {
     const chat = chats.find((entry) => entry.id === id)
     if (!chat) throw new Error("That chat no longer exists.")
 
-    const cwd = await this.source.worktreeDir(chat.worktreeId)
+    /*
+     * Deliberately not a `worktreeDir(…) ?? folderDir(…)` chain.
+     *
+     * That is the resolve `terminalCreate` does, and it is wrong here: a chat
+     * whose checkout has been removed would fall back to running its next turn
+     * in the project's own working tree — with edits pre-approved, in the branch
+     * the user actually has open, because a directory this chat was never
+     * pointed at happens to be next in the chain. A shell landing in the project
+     * is a surprising `pwd`; a turn landing there is a diff.
+     */
+    const cwd = chat.worktreeId
+      ? await this.source.worktreeDir(chat.worktreeId)
+      : chat.folderId
+        ? await this.source.folderDir(chat.folderId)
+        : null
     if (!cwd) {
-      // The checkout has been removed under the chat. The conversation is still
+      // The place has gone out from under the chat. The conversation is still
       // readable — it is on disk — but there is nowhere to run a turn.
-      this.finish(id, "That worktree has been removed.")
+      this.finish(
+        id,
+        chat.worktreeId
+          ? "That worktree has been removed."
+          : "That project is no longer in the workspace."
+      )
       return
     }
 
@@ -593,7 +647,9 @@ export class WorktreeChats {
       // and a turn takes whatever it said when the message was sent. Through
       // `chatOptions`, which is where a record older than either field is
       // brought up to date.
-      chatOptions(chat.options)
+      chatOptions(chat.options),
+      // Which of the two the turn is told it is in — see `SYSTEM_PROMPTS`.
+      chat.worktreeId ? SYSTEM_PROMPTS.worktree : SYSTEM_PROMPTS.folder
     )
   }
 
@@ -701,7 +757,10 @@ export class WorktreeChats {
     cwd: string,
     prompt: string,
     resume: boolean,
-    options: WorktreeChatOptions
+    options: WorktreeChatOptions,
+    /** Which of `SYSTEM_PROMPTS` this place is. Handed in rather than read off
+     * the record again, so the retry below cannot pick the other one. */
+    system: string
   ): Promise<void> {
     // Falls back rather than trusting the record: options come off disk, and a
     // chat written by a newer build naming a mode this one has never heard of
@@ -737,8 +796,8 @@ export class WorktreeChats {
         mcpConfig: mcp?.path ?? null,
         strictMcp: true,
         appendSystemPrompt: permission.prompt
-          ? `${SYSTEM_PROMPT} ${permission.prompt}`
-          : SYSTEM_PROMPT,
+          ? `${system} ${permission.prompt}`
+          : system,
         // Only where the mode says so, and its absence is what stops the other
         // four ever pausing: handing this over is what makes the CLI ask.
         ...(permission.asks
@@ -766,7 +825,7 @@ export class WorktreeChats {
            * failure is still reported rather than run twice.
            */
           if (error !== null && !resume && isSessionTaken(error)) {
-            void this.run(id, cwd, prompt, true, options)
+            void this.run(id, cwd, prompt, true, options, system)
             return
           }
           this.finish(id, error)

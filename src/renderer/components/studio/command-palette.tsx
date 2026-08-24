@@ -370,17 +370,18 @@ function useEntries(query: string): Group[] {
     // conversation nobody has on screen is found again, and selecting one is
     // what opens its tab.
     const chatEntries: Entry[] = chats.map((chat) => {
-      const worktree = worktrees.find(
-        (candidate) => candidate.id === chat.worktreeId
-      )
-      const branch = worktree?.branch
+      // The branch rather than the project: two checkouts of one repository are
+      // what a chat has to be told apart by. A chat in the project's own working
+      // tree has no branch to name, so it is named for the project.
+      const where = chat.worktreeId
+        ? worktrees.find((candidate) => candidate.id === chat.worktreeId)
+            ?.branch
+        : folders.find((candidate) => candidate.id === chat.folderId)?.name
       return {
         value: PREFIX.worktree + chat.id,
         label: chat.title,
-        // The branch rather than the project: two checkouts of one repository
-        // are what a chat has to be told apart by.
-        hint: branch,
-        keywords: [chat.title, ...(branch ? [branch] : [])],
+        hint: where,
+        keywords: [chat.title, ...(where ? [where] : [])],
         icon: <MessageSquare className="size-3.5 shrink-0" />,
         open: async () => {
           useWorktreeChats.getState().select(chat.id)
