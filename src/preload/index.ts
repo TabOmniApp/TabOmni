@@ -120,6 +120,7 @@ const api: DesktopApi = {
   saveCookies: (cookies) => ipcRenderer.invoke(IPC.saveCookies, cookies),
   httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
 
+  agentModels: () => ipcRenderer.invoke(IPC.agentModels),
   listWorktreeChats: () => ipcRenderer.invoke(IPC.listWorktreeChats),
   createWorktreeChat: (place) =>
     ipcRenderer.invoke(IPC.createWorktreeChat, place),

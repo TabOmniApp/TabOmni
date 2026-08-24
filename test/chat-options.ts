@@ -17,10 +17,26 @@ import { check, finish, section } from "./harness"
 section("a record with nothing on it")
 
 check(
-  "no options at all is the default",
+  "no options at all is whatever a new chat gets",
   chatOptions(undefined).permission === "edits" &&
-    chatOptions(undefined).model === null &&
+    chatOptions(undefined).model === "default" &&
     chatOptions(undefined).effort === null
+)
+
+/*
+ * The one migration here that changes what a turn runs on.
+ *
+ * A record with no `options` was written before there was a toolbar, so nobody
+ * ever chose anything for it — and what "nobody chose" means is now the CLI's
+ * own `default` row rather than a `--model` left off entirely. The difference
+ * matters because leaving it off runs the turn on whatever
+ * `~/.claude/settings.json` says, which is how every chat in the app came to be
+ * on Opus without anything on screen saying so. A record that *does* say
+ * `model: null` chose to inherit, and keeps it.
+ */
+check(
+  "a record that chose to inherit keeps inheriting",
+  chatOptions({ model: null, effort: null, permission: "edits" }).model === null
 )
 
 section("the plan toggle this replaced")

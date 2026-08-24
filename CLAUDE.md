@@ -280,8 +280,26 @@ has a toolbar**, inside its own box: a model, an effort and a permission, held
 per chat as `options` on the record (`WorktreeChatOptions` in `@shared/api`,
 `setWorktreeChatOptions` writing it) and read at send time, so the checkout being
 refactored is on Opus at `max` and the chat asking where a function is called is
-on Haiku at `low`. `null` for either of the first two leaves the user's own
-`claude` deciding, which is not the same as naming today's default here.
+on Haiku at `low`. **The model rows are the user's own `claude`'s**, not a list
+in this file: `agentModels` (`main/agent-models.ts`, one `claude` and no tokens —
+`supportedModels()` is a control request over the SDK's stdin channel, held for
+the run, `~2.7s` cold and almost all of that the login shell) answers with the
+`value`, `displayName`, `description` and effort levels of every model that
+account offers, which is how the picker knows about `Opus (1M context)` and a
+Fable that wants credits on the machine that has them and not on the one that
+does not. `CHAT_MODEL_FALLBACK` is the three aliases a picker draws when the ask
+failed, and `AgentModel.efforts` is three-valued on purpose — a list, `[]` for a
+model that takes none (Haiku 4.5), and **null for nobody having asked** — because
+`[]` on a fallback row would take the effort picker away from every model. The
+effort picker is per model over `chatEfforts` and is not drawn at all where the
+model takes none, and picking a model clears an effort it does not accept.
+**A new chat opens on `default`, not on `null`** (`DEFAULT_CHAT_OPTIONS`): null
+passes no `--model`, which runs the turn on whatever `~/.claude/settings.json`
+says, and that is how every chat here came to be on Opus with nothing on screen
+saying so — 596 of 596 messages, against 81% in the same user's terminal. `null`
+is still a row, last, called `Inherit`, and a record that says it keeps it; a
+record with no options at all gets what a new chat gets (`test/chat-options.ts`
+says which of those two is which).
 **Permission is one picker rather than a picker and a plan toggle** —
 `Plan` / `Read only` / `Ask` / `Edits` / `Full access`, since plan mode _is_ a
 permission and two controls over one question can be put into a state neither
@@ -307,8 +325,9 @@ through it, so the toolbar cannot say `Edits` over a turn that ran as a plan.
 **What a turn looks like.** A turn's working is **folded** into one line — `7
 tool calls, 13 messages, 1 subagent`, with a mark per kind of tool — and its
 answer is not: everything the turn produced except its last word goes behind the
-fold, except an error and a refusal, which are the turn saying it did _less_ than
-was asked and cannot be behind something somebody has to know to open.
+fold, except an error and a refusal — which are the turn saying it did _less_ than
+was asked and cannot be behind something somebody has to know to open — and what
+the turn **cost**, which is about the turn rather than in it.
 `lib/worktree-chat/activity.ts` is the pure half (`blocksOf`/`countsOf`/
 `summaryOf`, tested in `test/chat-activity.ts`), `chat-activity.tsx` draws it
 closed by default with the open state its own rather than the store's, and
@@ -328,6 +347,27 @@ not append-only**: `recordResult` patches the held lines synchronously and only
 those, because every other write there is a read-modify-write with an `await` in
 the middle — safe for an append, not for a change to a line the same turn is
 appending after.
+
+**What a turn cost is a line of the chat** — `Opus 5 · 39.1k prompt, 96% cached ·
+1.9k out · $0.31`, `role: "usage"` in `@shared/api`, written by the same `append`
+as every other line and drawn unfolded. The numbers were read and dropped, which
+left the app unable to say why an afternoon of turns came to what it came to: the
+CLI's transcript is not this app's to read, so nothing kept them. `usageOf` in
+`main/claude-agent.ts` takes them off the result line's **`modelUsage`** and not
+its `usage`, which the SDK documents as the main loop alone — `Task` is
+pre-approved, so a turn that ran a subagent spent what the subagent spent — with
+`thinking` the one figure that has to come off `usage` and is therefore a floor.
+The **cached share** is on the line rather than in the hover, because that is
+what actually decides the price: the prompt is the same size either way, a read
+is billed at a tenth and a write at a quarter over, and the same trivial turn in
+this repo measured $0.0049 warm against $0.0788 cold. A `0% cached` turn that is
+not a chat's first is this app having asked for a prefix nothing else shares —
+its own `appendSystemPrompt`, its own tool list, or an hour since the last turn
+that shared one. A line rather than a field on the record because a chat holds
+several turns on several models; the chat's total is summed off those lines
+(`lib/worktree-chat/usage.ts`, pure, `test/chat-usage.ts`) and drawn beside the
+caption under the composer, and a chat with no usage lines has no total rather
+than a total of zero.
 
 **Asking.** `ask` is the mode that stops: `READ_TOOLS` stay pre-approved, so
 reading never interrupts, and a write, a command or a tool this app never listed

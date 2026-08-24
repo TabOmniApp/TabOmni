@@ -4,7 +4,7 @@ import {
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 
-import type { AssistantMessage } from "../shared/api"
+import type { AssistantMessage, TurnUsage } from "../shared/api"
 import { claudeBinary } from "./claude-bin"
 import { environment, locate } from "./shell-env"
 
@@ -154,6 +154,16 @@ export type AgentHandlers = {
    * same thing. Matched by `toolId`, which is the CLI's own.
    */
   onToolResult: (toolId: string, result: string, failed: boolean) => void
+  /**
+   * What the turn spent, from the result line that ends it.
+   *
+   * Reported at all because it is otherwise invisible: the numbers arrive once,
+   * on one message, and a host that reads past them has no way to answer "why
+   * did that turn cost what it did" afterwards — the transcript the CLI keeps is
+   * not this app's to read. Called at most once, and before `onDone`, so the
+   * cost lands in the conversation ahead of an error rather than after it.
+   */
+  onUsage: (usage: TurnUsage) => void
   /** The turn is over. `error` is null when it succeeded. Called exactly once. */
   onDone: (error: string | null) => void
 }
@@ -262,7 +272,7 @@ export async function runAgentTurn(
     try {
       for await (const message of conversation) {
         settle(true)
-        read(message, handlers.onMessage, handlers.onToolResult, done)
+        read(message, handlers, done)
       }
       // The stream ended without a result line — nothing said the turn failed,
       // so nothing here says so either.
@@ -385,17 +395,19 @@ export function lineId(): string {
 /**
  * One message from the SDK, narrowed to what a chat draws.
  *
- * Everything else it sends — the init line, the token counts, the status and
- * progress events — is read and not passed on. What is drawn is the assistant's
- * own blocks, the tool results that come back in the `user` messages between
- * them, and the result that ends the turn.
+ * Everything else it sends — the init line, the status and progress events — is
+ * read and not passed on. What is drawn is the assistant's own blocks, the tool
+ * results that come back in the `user` messages between them, and the result
+ * that ends the turn, which is also the one message carrying what the turn
+ * spent.
  */
 function read(
   message: SDKMessage,
-  onMessage: (message: AssistantMessage) => void,
-  onToolResult: (toolId: string, result: string, failed: boolean) => void,
+  handlers: AgentHandlers,
   done: (error: string | null) => void
 ): void {
+  const { onMessage, onToolResult } = handlers
+
   if (message.type === "assistant") {
     for (const block of message.message.content) {
       if (block.type === "text" && block.text.trim()) {
@@ -455,8 +467,64 @@ function read(
     const error = failed
       ? said || `The turn ended as "${message.subtype}".`
       : null
+    // Before the error line and before `done`: what a turn spent is worth
+    // knowing most about the turn that failed, and a cost written after the
+    // failure would read as the cost of something that came next.
+    handlers.onUsage(usageOf(message))
     if (error) onMessage({ id: lineId(), role: "error", text: error })
     done(error)
+  }
+}
+
+/**
+ * What the turn spent, out of the result line.
+ *
+ * `modelUsage` rather than `usage`, because the SDK documents the latter as the
+ * main agent loop alone: a turn that ran a subagent spent what the subagent
+ * spent, `Task` is pre-approved here, and a cost that quietly omitted it would
+ * be wrong in exactly the case somebody is looking it up for. Summed across
+ * models for the same reason — compaction and a subagent on another model are
+ * both this turn — and labelled with whichever of them did the most input,
+ * since that is the one the toolbar was talking about.
+ *
+ * Cumulative-across-turns is not a worry here: the SDK says so of
+ * streaming-input sessions, and this app spawns a process per turn with a
+ * string prompt, so each result is its own turn's.
+ *
+ * `thinking` is the exception that comes off `usage`, which is the only place
+ * the SDK breaks the output down; being main-loop only makes it a floor, and a
+ * floor answers the question it is read for — whether reasoning is where the
+ * output went.
+ */
+export function usageOf(message: SDKMessage & { type: "result" }): TurnUsage {
+  const models = Object.entries(message.modelUsage ?? {})
+
+  const total = models.reduce(
+    (sum, [, use]) => ({
+      input: sum.input + (use.inputTokens || 0),
+      cacheWrite: sum.cacheWrite + (use.cacheCreationInputTokens || 0),
+      cacheRead: sum.cacheRead + (use.cacheReadInputTokens || 0),
+      output: sum.output + (use.outputTokens || 0),
+    }),
+    { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 }
+  )
+
+  const busiest = models.reduce<[string, number] | null>(
+    (best, [name, use]) => {
+      const read = (use.inputTokens || 0) + (use.cacheReadInputTokens || 0)
+      return best === null || read > best[1] ? [name, read] : best
+    },
+    null
+  )
+
+  const cost = message.total_cost_usd
+  return {
+    model: busiest?.[0] ?? null,
+    ...total,
+    thinking: message.usage?.output_tokens_details?.thinking_tokens ?? 0,
+    // A crashed turn reports zero for everything, and a zero drawn as `$0.00`
+    // is this app claiming a turn was free rather than that nobody counted it.
+    costUsd: typeof cost === "number" && cost > 0 ? cost : null,
   }
 }
 

@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils"
 import { useWorktrees } from "@/lib/worktree/store"
 import { blocksOf } from "@/lib/worktree-chat/activity"
 import { placeOf, useWorktreeChats } from "@/lib/worktree-chat/store"
+import { totalOf, usageDetail, usageLine } from "@/lib/worktree-chat/usage"
 import { ChatAsk } from "./chat-ask"
 import { ChatComposer } from "./chat-composer"
 import { ChatActivity } from "./chat-activity"
@@ -175,6 +176,10 @@ function Conversation({
 
   const lines = messages ?? []
   const empty = lines.length === 0
+  // The chat's own running cost, added up from the turns' own lines rather than
+  // kept anywhere — see `totalOf`. Null for a chat with no usage lines at all,
+  // which is every chat written before there were any.
+  const total = totalOf(lines)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -245,18 +250,33 @@ function Conversation({
               acceptable is that this is a branch of its own. It has to follow
               the permission rather than describe the usual one — a caption that
               lies about the turn is worse than none, in either direction. */}
-          <p
-            className={cn(
-              "px-1 text-[0.7rem]",
-              options.permission === "full"
-                ? "text-destructive"
-                : "text-muted-foreground"
+          <div className="flex items-baseline justify-between gap-3 px-1 text-[0.7rem]">
+            <p
+              className={cn(
+                "min-w-0",
+                options.permission === "full"
+                  ? "text-destructive"
+                  : "text-muted-foreground"
+              )}
+            >
+              {ask
+                ? "The turn is waiting on your answer. Stop ends it instead."
+                : captionFor(options.permission, isolated)}
+            </p>
+
+            {/* Beside the caption rather than at the end of the transcript: the
+                per-turn lines are up there, and what belongs here is the one
+                number somebody compares against `/cost` in a terminal — this
+                chat, so far. */}
+            {total && (
+              <p
+                title={usageDetail(total)}
+                className="shrink-0 text-muted-foreground/80 tabular-nums"
+              >
+                {usageLine(total)}
+              </p>
             )}
-          >
-            {ask
-              ? "The turn is waiting on your answer. Stop ends it instead."
-              : captionFor(options.permission, isolated)}
-          </p>
+          </div>
         </div>
       </div>
     </div>

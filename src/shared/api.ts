@@ -377,6 +377,56 @@ export type AssistantMessage =
    * that went one way because somebody picked an option.
    */
   | { id: string; role: "ask"; text: string }
+  /**
+   * What the turn cost, written down as the last line of it.
+   *
+   * A line of the conversation rather than a field on the record, for the
+   * reason every other line is one: a chat holds several turns and each of them
+   * cost its own amount, and a total on the record could not say which turn ran
+   * on Opus and which on Haiku. Summing the lines is how a chat's total is got
+   * (`lib/worktree-chat/usage.ts`), which also means a chat written before this
+   * existed reads back as a chat with nothing to say about its cost rather than
+   * as one that cost nothing.
+   */
+  | { id: string; role: "usage"; usage: TurnUsage }
+
+/**
+ * What one turn spent, in the numbers that explain the spending.
+ *
+ * **Why the cache halves are separate.** A turn's prompt is the same size
+ * either way — this app's own system prompt, the tool list and every line of
+ * the conversation so far — and the whole of the difference between a cheap turn
+ * and an expensive one is which side of the cache it landed on: a prompt read
+ * from the cache is billed at a tenth, and one written to it at a quarter more
+ * than full price. So `cacheRead` and `cacheWrite` are the pair worth reading,
+ * and one `input` total would have hidden it. A turn showing 40k written and
+ * nothing read is this app having asked for a prefix nobody had asked for yet —
+ * a different system prompt, a different tool list, or an hour since the last
+ * turn that shared one.
+ *
+ * Taken from the SDK's `modelUsage` rather than its `usage`, which is
+ * documented as the main loop alone: a turn that spawned a subagent spent what
+ * the subagent spent, and a `Task` is on the pre-approved list.
+ */
+export type TurnUsage = {
+  /** The model the turn actually ran on, which the toolbar's own `null` does
+   * not say — that leaves the user's `claude` to decide, and this is what it
+   * decided. Null when the SDK reported no per-model usage at all. */
+  model: string | null
+  /** Prompt tokens neither cache held. */
+  input: number
+  /** Prompt tokens written to the cache, at 1.25x. */
+  cacheWrite: number
+  /** Prompt tokens read from the cache, at 0.1x. */
+  cacheRead: number
+  output: number
+  /** Of `output`, what went on reasoning. The SDK reports this for the main
+   * loop only, so it is a floor rather than a total. */
+  thinking: number
+  /** The SDK's own estimate for the turn, in USD, or null where it reported
+   * none — a crashed turn carries zeroes it would be wrong to draw as free. */
+  costUsd: number | null
+}
 
 /**
  * One thing that happened while a turn was being answered.
@@ -384,8 +434,10 @@ export type AssistantMessage =
  * A turn is one `query()` of `@anthropic-ai/claude-agent-sdk`, so what arrives
  * is the SDK's own message stream, narrowed to the three things a pane draws: a
  * message, a tool it called, and the end of the turn. Anything else in that
- * stream — the init line, a tool's result, the token counts, the status and
- * progress events — is read by `main/claude-agent.ts` and not passed on.
+ * stream — the init line, the status and progress events — is read by
+ * `main/claude-agent.ts` and not passed on. A tool's result and the turn's
+ * token counts are passed on, as the two events below that are not a line of
+ * the answer.
  */
 export type AssistantEvent =
   /** One assistant message, as markdown. A turn can produce several. */
@@ -432,6 +484,15 @@ export type AssistantEvent =
    * including when `claude` itself could not be started. Any ask still pending
    * is gone with it: the process that would have taken the answer has ended. */
   | { type: "done"; error: string | null }
+  /**
+   * What the turn cost, once it is over.
+   *
+   * Its own event arriving just before `done` rather than a field on it,
+   * because it is a line of the conversation and `done` is not: the same
+   * `append` writes it to the chat's file, and a `done` carrying it would have
+   * been the one event that both ends a turn and adds to it.
+   */
+  | { type: "usage"; usage: TurnUsage }
 
 /** One of the choices in a question the model asked. */
 export type ChatAskOption = {
@@ -862,19 +923,136 @@ export const CHAT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const
 export type ChatEffort = (typeof CHAT_EFFORTS)[number]
 
 /**
- * The models a chat can be put on.
+ * One model the user's own `claude` will answer on.
  *
- * Aliases rather than full names — `opus` is whichever Opus that `claude` is
- * the latest of — because pinning `claude-opus-5` here would mean this list
- * going stale every time the CLI learns a newer one. An alias it does not know
- * fails the turn loudly, which is why these are a list and not a text field.
+ * **Asked of the CLI rather than written down here.** This was a list of four
+ * aliases in this file, and the trouble with it is not that it went stale — it
+ * is that it was never right for anybody in particular: which models an install
+ * offers is a property of that account and that CLI version, so one machine's
+ * list has `Opus (1M context)` and a Fable that needs credits while another's
+ * has neither, and a hand-written `fable` was an alias no row on this machine's
+ * list actually names. `agentModels` asks, and `CHAT_MODEL_FALLBACK` is what a
+ * picker draws when the asking failed.
+ *
+ * `value` is what goes to `--model` and `label`/`description` are the CLI's own
+ * words for it, so the picker cannot describe a model differently from the tool
+ * that runs it. `efforts` is per model and not a constant: Haiku 4.5 supports
+ * no effort levels at all, and an effort picker offering `max` over it is a
+ * control that does nothing.
  */
-export const CHAT_MODELS: { id: string; label: string }[] = [
-  { id: "opus", label: "Opus" },
-  { id: "sonnet", label: "Sonnet" },
-  { id: "fable", label: "Fable" },
-  { id: "haiku", label: "Haiku" },
+export type AgentModel = {
+  /** What `--model` is given. An alias (`opus`), a full id, or the CLI's own
+   * `default` row. */
+  value: string
+  /** `Opus (1M context)` — the CLI's `displayName`. */
+  label: string
+  /** `Opus 5 with 1M context · Best for everyday, complex tasks`. */
+  description: string
+  /**
+   * The levels this model accepts, weakest first.
+   *
+   * Three states rather than two, and the third is the point: a list is what
+   * the CLI said, `[]` is the CLI saying this model takes no effort at all
+   * (Haiku 4.5 does), and **null is nobody having been able to ask** — a
+   * fallback row, or a build that read this off something older. Only the
+   * second of the three takes the effort picker away; see `chatEfforts`.
+   */
+  efforts: ChatEffort[] | null
+  /** Flag to render a `NEW` badge in the model picker. */
+  isNew?: boolean
+  /** Flag to render a star icon for recommended/favorite model. */
+  isFavorite?: boolean
+  /** Explicit sort order for the model picker. */
+  order?: number
+}
+
+/**
+ * What the picker offers when the CLI could not be asked or as initial preset.
+ */
+export const CHAT_MODEL_FALLBACK: AgentModel[] = [
+  {
+    value: "fable",
+    label: "Fable 5",
+    description: "Creative writing and expressive generation",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    order: 1,
+  },
+  {
+    value: "opus",
+    label: "Opus 5",
+    description: "Frontier intelligence and deep reasoning",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    isNew: true,
+    order: 2,
+  },
+  {
+    value: "opus-4.8-1m",
+    label: "Opus 4.8 1M",
+    description: "Extended 1M context window with high reasoning",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    isFavorite: true,
+    order: 3,
+  },
+  {
+    value: "opus-4.7-1m",
+    label: "Opus 4.7 1M",
+    description: "Large 1M context with strong capabilities",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    order: 4,
+  },
+  {
+    value: "opus-4.6-1m",
+    label: "Opus 4.6 1M",
+    description: "1M context window for large codebases",
+    efforts: ["low", "medium", "high", "max"],
+    order: 5,
+  },
+  {
+    value: "sonnet-5-1m",
+    label: "Sonnet 5 1M",
+    description: "High speed, deep reasoning with 1M context",
+    efforts: ["low", "medium", "high", "max"],
+    order: 6,
+  },
+  {
+    value: "sonnet-4.6-1m",
+    label: "Sonnet 4.6 1M",
+    description: "Fast code intelligence with 1M context",
+    efforts: ["low", "medium", "high"],
+    order: 7,
+  },
+  {
+    value: "sonnet",
+    label: "Sonnet 4.6",
+    description: "Balanced speed and intelligence for daily tasks",
+    efforts: ["low", "medium", "high"],
+    order: 8,
+  },
+  {
+    value: "haiku",
+    label: "Haiku 4.5",
+    description: "Fastest response time for lightweight tasks",
+    efforts: [],
+    order: 9,
+  },
 ]
+
+/**
+ * The effort levels to offer over one model.
+ *
+ * Both sides of the same ignorance: a model this app has no row for — a chat
+ * carrying a `--model` from a newer build, or a fallback row whose levels nobody
+ * could ask about — gets all of them, because refusing a level the CLI would
+ * have taken is worse than offering one it will not. Only a model the CLI
+ * actually said takes none gets none, and that is what takes the picker away.
+ */
+export function chatEfforts(
+  models: AgentModel[],
+  model: string | null
+): ChatEffort[] {
+  const found = models.find((entry) => entry.value === model)
+  return found?.efforts ?? [...CHAT_EFFORTS]
+}
 
 /**
  * How much a turn in this chat may do.
@@ -940,10 +1118,23 @@ export type WorktreeChatOptions = {
   plan?: boolean
 }
 
-/** A chat with nothing chosen: the CLI's own model and effort, and free to
- * edit, which is what the panel did before there was a toolbar. */
+/**
+ * What a new chat opens on.
+ *
+ * **`default` rather than null**, which is the one of these three that changed
+ * and the reason it did: null passes no `--model` at all, so the turn runs on
+ * whatever `~/.claude/settings.json` says — and somebody who set `"model":
+ * "opus"` for their terminal had every chat in this app on Opus with nothing on
+ * screen saying so. `default` is the CLI's own first row, which is the model it
+ * recommends for the account; a chat that genuinely wants the global setting
+ * can still pick `Inherit` and get null back.
+ *
+ * `effort` stays null for the reason it always was: the CLI's own default is a
+ * judgement about the model, and naming a level here would be this app
+ * overriding it for every chat.
+ */
 export const DEFAULT_CHAT_OPTIONS: WorktreeChatOptions = {
-  model: null,
+  model: "default",
   effort: null,
   permission: "edits",
 }
@@ -1523,6 +1714,16 @@ export type DesktopApi = {
   listCookies: () => Promise<HttpCookie[]>
   saveCookies: (cookies: HttpCookie[]) => Promise<void>
 
+  /**
+   * The models the user's own `claude` offers, for the composer's picker.
+   *
+   * Asked of the CLI over the agent SDK's control channel rather than being a
+   * list in the contract — see `AgentModel`. It costs a `claude` process and no
+   * tokens, and main holds the answer for the run, so a renderer may call it as
+   * often as a picker opens. Empty where the CLI could not be asked, which is
+   * the picker's cue to draw `CHAT_MODEL_FALLBACK`.
+   */
+  agentModels: () => Promise<AgentModel[]>
   /** Every chat in every worktree — the listing; the lines are read one chat
    * at a time. */
   listWorktreeChats: () => Promise<WorktreeChat[]>
@@ -1803,6 +2004,7 @@ export const IPC = {
   listCookies: "http:list-cookies",
   saveCookies: "http:save-cookies",
   httpSend: "http:send",
+  agentModels: "agent:models",
   listWorktreeChats: "worktree-chats:list",
   createWorktreeChat: "worktree-chats:create",
   readWorktreeChat: "worktree-chats:read",

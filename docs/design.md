@@ -242,11 +242,11 @@ it opens on a click.
 
 What is folded is everything a turn produced except its **last word**: the tool
 calls, the thinking, and the narration between them ("let me read the composer
-first"), which reads as working precisely because the answer came after it. Two
-things are never folded — an **error** and a **refusal** — for the reason the old
-switch already made an exception of refusals: both are the turn saying it did
-_less_ than was asked, and that cannot be behind something somebody has to know
-to open. A turn still being answered has no last word yet, so all of it is
+first"), which reads as working precisely because the answer came after it.
+Three things are never folded — an **error**, a **refusal**, and what the turn
+**cost** — the first two for the reason the old switch already made an exception
+of refusals: both are the turn saying it did _less_ than was asked, and that
+cannot be behind something somebody has to know to open. The third is below. A turn still being answered has no last word yet, so all of it is
 working; a turn that only talked has no fold at all. `lib/worktree-chat/
 activity.ts` is the whole of that and it is pure, because every case it has is a
 shape of transcript rather than anything on screen — `test/chat-activity.ts`.
@@ -291,6 +291,56 @@ its tool calls and nothing else; `read` takes the `thinking` blocks now. Only a
 turn that was actually thinking has any, which is the effort picked on the
 composer's toolbar — so a chat on Haiku at `low` draws none rather than drawing
 empty ones.
+
+#### What a turn cost
+
+**Every turn ends with a line saying what it spent**, and it is not folded:
+
+```
+Opus 5 · 39.1k prompt, 96% cached · 1.9k out · $0.31
+```
+
+The numbers were being read and dropped — the SDK reports them once, on the
+result line, and `read` passed over them — which left the app unable to answer
+the one question a hosted chat is asked about itself: why an afternoon of turns
+came to what it came to. The CLI's own transcript is not this app's to read (see
+Conversations, removed), so if the app does not keep them nothing does.
+
+**Why the cached share is on the line rather than behind it.** A turn's prompt
+barely changes size: this app's system prompt, the tool list, and the
+conversation so far. What changes by an order of magnitude is which side of the
+cache it lands on — a prompt read back is billed at a tenth, one written at a
+quarter more than full price. The same trivial turn in this repository, measured
+on Haiku: **$0.0049** where the prefix was already cached, **$0.0788** where it
+was not. So `96% cached` is the number worth reading, and `0% cached` on a turn
+that is not the first of a chat is the app having asked for a prefix nothing else
+shares — its own `--append-system-prompt`, its own `--allowedTools`, or an hour
+since the last turn that shared one, the cache being 1h TTL.
+
+The model is on the line for the other half of the same question. The toolbar's
+model and effort are `null` by default, which leaves the user's own `claude`
+deciding — and what it decides is whatever their global settings say, so a chat
+can run on Opus for a week with nothing on screen having said so.
+
+`usageOf` in `main/claude-agent.ts` reads it off `modelUsage` rather than
+`usage`, which the SDK documents as the main agent loop alone: `Task` is
+pre-approved, and a turn that ran a subagent spent what the subagent spent. The
+per-model figures are summed and the label is whichever model read the most, so
+a turn that compacted on Haiku is still an Opus turn. `thinking` is the one
+figure that comes off `usage`, the only place the SDK breaks the output down; it
+is main-loop only, so it is a floor, and a floor answers what it is read for —
+whether reasoning is where the output went.
+
+It is a **line of the conversation** (`role: "usage"`), written and read back
+with the rest, rather than a field on the record. A chat holds several turns and
+each cost its own amount on its own model; a total on the record could not say
+which. The chat's own total is summed from those lines
+(`lib/worktree-chat/usage.ts`, pure and tested in `test/chat-usage.ts`) and drawn
+beside the caption under the composer — the one number to compare against
+`/cost` in a terminal. A chat with no usage lines has no total rather than a
+total of zero, which is what every chat written before this reads back as. A
+crashed turn reports zeroes, and `$0.00` for it would be the app calling a
+failure free, so it says `nothing counted` instead.
 
 It is also the **only** `claude` the app runs. What this document's old
 "only one" rule was actually against is still refused: features calling the CLI
@@ -368,12 +418,53 @@ where a function is called wants Haiku at `low`. A turn is built from whatever
 they said when the message was sent, and a turn already in flight keeps what it
 started with — they are its argument list, and there is nothing to change it to.
 
-The model and effort pickers offer **Default**, and it is the one they start on:
-`null` means whichever model and effort the user's own `claude` is configured
-for. Naming today's default here instead would be this app quietly overriding a
-setting of theirs, and a list of full model names would go stale every time the
-CLI learned a newer one — so the entries are aliases (`opus`, `sonnet`), which
-the CLI resolves and refuses loudly when it cannot.
+**The model rows are the user's own `claude`'s.** They were four aliases written
+into `@shared/api`, and the trouble with a written list is not that it goes stale
+— it is that it was never right for anybody in particular. Which models an
+install offers is a property of the account and the CLI version behind it: this
+machine answers with six, including `Opus (1M context)` and a Fable that says
+_Requires usage credits_, and one of the four aliases that used to be in the list
+(`fable`) is a name no row on it actually carries. A picker offering a model the
+account cannot use fails a turn after somebody has typed a message; one hiding a
+model they are paying for is worse.
+
+So `agentModels` asks (`main/agent-models.ts`, `agent:models` in the contract).
+It costs a `claude` process and **no tokens**: `supportedModels()` is a control
+request over the SDK's own stdin channel — the same channel `canUseTool` answers
+on — so the CLI answers it out of what it knows about the account without an API
+call. The prompt handed to `query()` is an iterable that never yields, which is
+what keeps it that way; the answer is held for the app run, since it changes when
+somebody installs a different CLI and not between two openings of a menu.
+Measured: ~500ms for the control request, ~2.7s for the whole call cold, almost
+all of that the login shell being asked where `claude` is. A row is the CLI's
+`displayName` over its own `description`, because "which model" is a question
+about the trade-off and the trade-off is the sentence — `Haiku 4.5 · Fastest for
+quick answers` — and the digits down the right are this app's, the same nine keys
+the CLI's own picker offers. Where the ask failed, `CHAT_MODEL_FALLBACK` draws
+three aliases and nothing invented.
+
+**Effort is per model.** The CLI says which levels each one takes, and Haiku 4.5
+takes none — so the effort picker beside it is not drawn at all rather than drawn
+disabled: a control that cannot be used is a question about why, and the answer
+is a property of the model chosen one button to the left. Picking a model also
+clears an effort it does not accept, or a chat moved onto Haiku would keep `high`
+for ever with no picker left to change it back. `AgentModel.efforts` is
+three-valued for the case in between: a list is what the CLI said, `[]` is a
+model that takes none, and **null is nobody having asked** — a fallback row, or a
+model this build has never heard of — which gets every level, because refusing
+one the CLI would have taken is worse than offering one it ignores
+(`chatEfforts`, `test/chat-models.ts`).
+
+**A new chat opens on `default` rather than on nothing.** `null` means no
+`--model` at all, which leaves the turn on whatever `~/.claude/settings.json`
+says — and that is not a neutral default: on the machine this was written on it
+meant **596 of 596** chat messages ran on Opus, against 81% in the same user's own
+terminal, with nothing on screen having said so. `default` is the CLI's own first
+row, the model it recommends for that account. `null` is still there as the last
+row, `Inherit`, described as "whatever your own `claude` is set to", because it is
+a thing somebody can genuinely want; a record that says `model: null` keeps it,
+and a record with no options at all — written before there was a toolbar, so
+nobody ever chose — gets what a new chat gets.
 
 **Permission is one picker, not a picker and a toggle.** There was a plan toggle
 beside the other two and it is gone into this: plan mode _is_ a permission — the
