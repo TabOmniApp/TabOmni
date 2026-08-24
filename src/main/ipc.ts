@@ -16,6 +16,8 @@ import {
   HTTP_ENVIRONMENT_KEY,
   IPC,
   MCP_SETTING_KEYS,
+  MCP_USER_SERVERS_KEY,
+  mcpUserServerNames,
   type DatabaseConnectionInput,
   type FileIndexEntry,
   type UpdateDatabaseInput,
@@ -55,6 +57,7 @@ import { systemUsage } from "./system-usage"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
 import { TerminalManager } from "./terminal"
 import { TsServers } from "./tsserver"
+import { chosen, readUserMcpServers } from "./user-mcp"
 import { DirectoryWatchers } from "./watch"
 
 /**
@@ -353,7 +356,29 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    */
   const worktreeChats = new WorktreeChats(
     {
-      mcpConfig: () => mcp.configPath(),
+      /*
+       * The file a turn is pointed at, and the user's own servers in it.
+       *
+       * Composed here rather than in either half, for the reason everything
+       * else in this file is: `mcp.ts` has no opinion about `~/.claude.json`
+       * and `worktree-chat.ts` has none about where a setting lives. What each
+       * is handed is the finished answer.
+       */
+      mcpConfig: async () => {
+        const entries = await readUserMcpServers()
+        const wanted = chosen(
+          entries,
+          mcpUserServerNames(await store.getSetting(MCP_USER_SERVERS_KEY))
+        )
+        const path = await mcp.configPath(
+          Object.fromEntries(wanted.map((entry) => [entry.name, entry.config]))
+        )
+        // Null when there was nothing to write, which is also the only case
+        // where the names would be pointing into a file that is not there.
+        return path
+          ? { path, userServers: wanted.map((one) => one.name) }
+          : null
+      },
       worktreeDir: (worktreeId) => store.resolveWorktreeDir(worktreeId),
       chats: () => store.listWorktreeChats(),
       saveChats: (chats) => store.saveWorktreeChats(chats),
@@ -765,6 +790,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     store.setSetting(key, value)
   )
 
+  // The listing only — a server's own config is stripped here rather than in
+  // `user-mcp.ts`, the way a database's password is: `env` holds the tokens
+  // somebody's `claude mcp add` was given, and the renderer has no use for them.
+  ipcMain.handle(IPC.listUserMcpServers, async () =>
+    (await readUserMcpServers()).map(({ name, scope, project, detail }) => ({
+      name,
+      scope,
+      project,
+      detail,
+    }))
+  )
+
   ipcMain.handle(IPC.listDatabases, () => store.listDatabases())
 
   ipcMain.handle(
@@ -983,15 +1020,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
       await mkdir(dirname(target), { recursive: true })
 
-      const error = await addWorktree(dir, target, branch, from)
-      if (error) return { error }
+      const added = await addWorktree(dir, target, branch, from)
+      if (added.error) return { error: added.error }
 
       const worktree: WorktreeRecord = {
         id: randomUUID(),
         folderId,
         branch,
         path: target,
-        from,
+        // Only when this run cut the branch. A reused one was cut from whatever
+        // it was cut from the first time, which nothing here knows, and
+        // `WorktreeWelcome` already draws a missing `from` as the branch alone.
+        ...(added.reused ? {} : { from }),
         createdAt: new Date().toISOString(),
       }
       await store.saveWorktrees([...(await store.listWorktrees()), worktree])

@@ -505,25 +505,62 @@ export async function worktrees(dir: string): Promise<Worktree[]> {
 }
 
 /**
- * Adds a worktree at `path`, on a new branch `branch` cut from `from`.
+ * Adds a worktree at `path` on `branch`, cutting it from `from` when it is new.
  *
- * `-b` rather than checking out an existing branch: two checkouts of one branch
- * is a state git refuses anyway, and the point of a new worktree here is a
- * place to do something that has not been done yet. Resolves to an error
- * message rather than throwing — a branch name already taken and a path that
- * exists are both ordinary answers a caller has to show, not faults.
+ * `-b` only for a branch that does not exist yet. It used to be unconditional,
+ * and the failure that argues against it is the ordinary one: `removeWorktree`
+ * keeps the branch on purpose, so removing a checkout and making it again under
+ * the same name met `fatal: a branch named 'x' already exists` — every time,
+ * with nothing offered from here to get past it. A branch that is already there
+ * is checked out instead, which is also the answer somebody re-making a checkout
+ * wants: the commits are still on it, and they land back where they left off.
+ *
+ * `from` is **ignored** in that case rather than reset onto the branch. A
+ * checkout that silently rewound to `HEAD` would throw away the work that made
+ * the branch worth keeping; a field that went unused is the smaller surprise,
+ * and `reused` is what lets the caller not record a lineage this run did not
+ * give it.
+ *
+ * Two checkouts of one branch is still refused, because git refuses it — this
+ * only reaches a branch nothing has checked out.
+ *
+ * Resolves to an error message rather than throwing: a path that exists and a
+ * branch checked out elsewhere are both ordinary answers a caller has to show,
+ * not faults.
  */
 export async function addWorktree(
   dir: string,
   path: string,
   branch: string,
   from: string
-): Promise<string | null> {
+): Promise<{ error: string | null; reused: boolean }> {
+  const reused = await branchExists(dir, branch)
   try {
-    await git(dir, ["worktree", "add", "-b", branch, path, from])
-    return null
+    await git(
+      dir,
+      reused
+        ? ["worktree", "add", path, branch]
+        : ["worktree", "add", "-b", branch, path, from]
+    )
+    return { error: null, reused }
   } catch (error) {
-    return messageOf(error)
+    return { error: messageOf(error), reused }
+  }
+}
+
+/**
+ * Whether `branch` is already a local branch here.
+ *
+ * `show-ref --verify` against the full ref rather than `branch --list`, whose
+ * argument is a glob: a branch named `fix-*` would otherwise answer for every
+ * name that matched it, and the reply decides whether `-b` is passed.
+ */
+async function branchExists(dir: string, branch: string): Promise<boolean> {
+  try {
+    await git(dir, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -535,7 +572,9 @@ export async function addWorktree(
  * confirmed removing — a second refusal surfacing as an error they cannot act
  * on from here is worse than doing what they asked. The branch is **not**
  * deleted: the commits are the work, and removing a directory is not a
- * reason to throw them away.
+ * reason to throw them away. What makes that survivable is `addWorktree`
+ * checking an existing branch out rather than insisting on `-b` — without it,
+ * keeping the branch meant its name could never be used from here again.
  */
 export async function removeWorktree(
   dir: string,

@@ -238,10 +238,16 @@ contract, the `show-tasks` menu command and `⌘E`. Nothing reads
 outlived its panel.
 
 **A project's rows are its `git worktree` checkouts**, and clicking one opens a
-chat in it — `main/git.ts` has the operations (`worktrees`, `addWorktree` with
-`-b`, `removeWorktree` with `--force` but keeping the branch), and
+chat in it — `main/git.ts` has the operations (`worktrees`, `addWorktree`,
+`removeWorktree` with `--force` but keeping the branch), and
 `parseWorktrees`/`worktreeSlug` are the pure halves with `test/worktrees.ts`
-behind them. They live under `~/.tabomni/workspace/worktrees/<folderId>/<slug>`
+behind them. `addWorktree` passes **`-b` only for a branch that is not there
+yet** and checks an existing one out instead: it was `-b` unconditionally, and
+with `removeWorktree` keeping the branch on purpose that made removing a checkout
+and re-making it under the same name a permanent `fatal: a branch named 'x'
+already exists`. `from` is ignored for a reused branch rather than reset onto it,
+and the `reused` flag is why the record then leaves `from` unset.
+`test/worktree-git.ts` drives both over a real repository. They live under `~/.tabomni/workspace/worktrees/<folderId>/<slug>`
 rather than beside the repository, so removing them all leaves a project's
 directory untouched. `terminalCreate` resolves
 `resolveWorktreeDir(id) ?? resolveFolderDir(folderId)` — an **id**, never a path,
@@ -284,6 +290,31 @@ may do. A record older than the picker carries `plan: true`, and `chatOptions` i
 `@shared/api` is the one place that is read: both sides of the contract go
 through it, so the toolbar cannot say `Edits` over a turn that ran as a plan.
 
+**What a turn looks like.** A turn's working is **folded** into one line — `7
+tool calls, 13 messages, 1 subagent`, with a mark per kind of tool — and its
+answer is not: everything the turn produced except its last word goes behind the
+fold, except an error and a refusal, which are the turn saying it did _less_ than
+was asked and cannot be behind something somebody has to know to open.
+`lib/worktree-chat/activity.ts` is the pure half (`blocksOf`/`countsOf`/
+`summaryOf`, tested in `test/chat-activity.ts`), `chat-activity.tsx` draws it
+closed by default with the open state its own rather than the store's, and
+`showToolCalls`/`showThinking` now decide what is _inside_ the fold. A **tool
+row** is four things rather than a string — a mark, the model's own
+`description` where the tool carries one, the file as a chip with its file-type
+icon, and what came back — because they are read at different speeds;
+`chat-marks.tsx` holds the glyphs, in its own file for the reason
+`section-marks.tsx` is. Three of those came from main throwing less away:
+`describeCall` in `main/claude-agent.ts` pulls the path, the description and the
+argument apart instead of collapsing the input to one string (which also stopped
+every subagent row being 120 characters of the prompt's JSON — `Task` names
+none of the keys `summarise` looks for), the `thinking` blocks are read again
+after a spell where nothing drew them, and a tool's **result** is filled into
+the row already on screen. That last one is **the only line in a chat that is
+not append-only**: `recordResult` patches the held lines synchronously and only
+those, because every other write there is a read-modify-write with an `await` in
+the middle — safe for an append, not for a change to a line the same turn is
+appending after.
+
 **Asking.** `ask` is the mode that stops: `READ_TOOLS` stay pre-approved, so
 reading never interrupts, and a write, a command or a tool this app never listed
 comes back through the SDK's `canUseTool` as a card above the composer
@@ -316,7 +347,10 @@ types the `@` the menu already answers. The workspace's
 MCP servers come with it: the config, the three
 `tabomni-*` servers pre-approved by name (plus `ToolSearch`),
 `--strict-mcp-config`, and two `delete_*` tools refused — a branch is
-not where a saved request lives, so isolation does not cover deleting one. The
+not where a saved request lives, so isolation does not cover deleting one. A
+server from the user's own `claude` joins them only by being switched on in
+Settings › MCP, copied into that config rather than inherited from it (see
+**MCP: the workspace as tools** below). The
 config alone was not enough and looked like it was: `--mcp-config` says the
 tools exist, `--allowed-tools` says they may be called without a prompt nobody
 is there to answer. An `--append-system-prompt` says the `tabomni-*` tools
@@ -482,8 +516,31 @@ A request or folder written is announced (`http:changed` → `reread` on the API
 store, which also closes a tab whose record has gone), which matters because
 that panel saves the whole collection at once — a window holding a stale list
 would write it back over the agent's request.
-`test/mcp.ts` drives it over a real socket. See the MCP section of
-`docs/design.md`.
+`test/mcp.ts` drives it over a real socket.
+
+**The user's own `claude` servers can be added to that config**, one switch each
+under `Your own servers` in the same dialog. `--strict-mcp-config` still holds
+and is the reason this exists: a turn sees the file this app wrote and nothing
+else, so the ClickUp somebody set up in the terminal was unreachable from the
+chat editing the branch the ticket is about, with nothing on screen saying why.
+`main/user-mcp.ts` reads `~/.claude.json` — the top-level `mcpServers` and
+`projects.<dir>.mcpServers` both, since a checkout is inside none of those
+directories and matching by one would hide exactly the servers a chat wants —
+and the ones switched on are **copied** into `~/.tabomni/mcp.json` beside the
+three, never inherited, with this app's own written last so a name it
+pre-approves cannot be taken. A repository's `.mcp.json` is deliberately not
+read. The setting is one key holding a JSON array of names
+(`MCP_USER_SERVERS_KEY`), and `mcpUserServerNames` in `@shared/api` is the one
+place that encoding lives, since the dialog and main both read it; anything that
+does not parse is none of them. What a server is to a turn is **per permission
+mode** and is `withUserServers` in `main/worktree-chat.ts`: pre-approved under
+`edits`, **refused outright** under `plan`/`read` (nothing says which of a
+server's tools read and which file a ticket, and unlisted is askable, which in
+those modes is a stall), on neither list under `ask` so the card comes up, and
+nothing under `full`. `ipc.ts` strips a server's own config — it holds the
+tokens — before the listing crosses to the renderer, the way a database's
+password is stripped. `test/user-mcp.ts` covers the pure halves. See the MCP
+section of `docs/design.md`.
 
 The four kinds are Explorer, Database, API and Notes — `SECTION_IDS` in
 `lib/sections.ts` is the list and `components/studio/section-marks.tsx` puts a

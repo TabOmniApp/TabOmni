@@ -144,6 +144,16 @@ export type AgentHandlers = {
    * no idea which chat it is running.
    */
   onMessage: (message: AssistantMessage) => void
+  /**
+   * What a tool call came back with, for a line already sent through
+   * `onMessage`.
+   *
+   * Apart from `onMessage` because it changes a line rather than adding one —
+   * the result of a call belongs on the row that call already drew, and a second
+   * row saying "and then it returned" is a transcript twice as long saying the
+   * same thing. Matched by `toolId`, which is the CLI's own.
+   */
+  onToolResult: (toolId: string, result: string, failed: boolean) => void
   /** The turn is over. `error` is null when it succeeded. Called exactly once. */
   onDone: (error: string | null) => void
 }
@@ -252,7 +262,7 @@ export async function runAgentTurn(
     try {
       for await (const message of conversation) {
         settle(true)
-        read(message, handlers.onMessage, done)
+        read(message, handlers.onMessage, handlers.onToolResult, done)
       }
       // The stream ended without a result line — nothing said the turn failed,
       // so nothing here says so either.
@@ -375,13 +385,15 @@ export function lineId(): string {
 /**
  * One message from the SDK, narrowed to what a chat draws.
  *
- * Everything else it sends — the init line, a tool's result, the token counts,
- * the status and progress events — is read and not passed on. The two that are
- * drawn are the assistant's own blocks and the result that ends the turn.
+ * Everything else it sends — the init line, the token counts, the status and
+ * progress events — is read and not passed on. What is drawn is the assistant's
+ * own blocks, the tool results that come back in the `user` messages between
+ * them, and the result that ends the turn.
  */
 function read(
   message: SDKMessage,
   onMessage: (message: AssistantMessage) => void,
+  onToolResult: (toolId: string, result: string, failed: boolean) => void,
   done: (error: string | null) => void
 ): void {
   if (message.type === "assistant") {
@@ -389,14 +401,45 @@ function read(
       if (block.type === "text" && block.text.trim()) {
         onMessage({ id: lineId(), role: "assistant", text: block.text })
       }
+      // Only when the model was actually thinking, which is what the effort on
+      // the toolbar decides — a turn at `low` sends none of these and draws no
+      // rows for them, rather than empty ones.
+      if (block.type === "thinking" && block.thinking.trim()) {
+        onMessage({ id: lineId(), role: "thinking", text: block.thinking })
+      }
       if (block.type === "tool_use") {
         onMessage({
           id: lineId(),
           role: "tool",
           name: block.name,
-          summary: summarise(block.input),
+          ...describeCall(block.name, block.input),
+          // The CLI's own id, kept so the result can find this line again.
+          toolId: block.id,
         })
       }
+    }
+    return
+  }
+
+  /*
+   * A tool's result comes back as a `user` message the CLI wrote, not the
+   * user's own.
+   *
+   * This is the one place the two are confusable and the reason nothing else in
+   * this branch is drawn: what arrives here is the transcript's record of the
+   * conversation continuing, and the only part of it a chat has not already
+   * drawn is what the tools said.
+   */
+  if (message.type === "user") {
+    const content = message.message.content
+    if (typeof content === "string") return
+    for (const block of content) {
+      if (block.type !== "tool_result") continue
+      onToolResult(
+        block.tool_use_id,
+        resultLine(block.content),
+        block.is_error === true
+      )
     }
     return
   }
@@ -449,4 +492,85 @@ export function summarise(input: unknown): string {
 export function collapse(text: string): string {
   const line = text.replaceAll(/\s+/g, " ").trim()
   return line.length > 120 ? `${line.slice(0, 119)}…` : line
+}
+
+/**
+ * A tool call as the three things a row draws it from.
+ *
+ * Pulled out of `summarise` rather than folded into it, because a row wants the
+ * pieces apart: the file goes in a chip with its own icon, the model's
+ * `description` is the sentence the row leads with, and the argument is the
+ * muted mono text after it. One string could not have been split back up —
+ * "is this a path" is not a question to ask of text somebody's command wrote.
+ *
+ * `Task` is the reason `summary` is not always `summarise`: its input is a
+ * description, a whole prompt and a subagent type, none of which the key list
+ * names, so every subagent row was the JSON of the entire prompt collapsed to
+ * 120 characters. What a row wants there is which agent ran.
+ */
+export function describeCall(
+  name: string,
+  input: unknown
+): { summary: string; title?: string; path?: string } {
+  const record =
+    typeof input === "object" && input !== null
+      ? (input as Record<string, unknown>)
+      : {}
+
+  const text = (key: string): string | undefined => {
+    const value = record[key]
+    return typeof value === "string" && value.trim() ? value : undefined
+  }
+
+  const path = text("file_path") ?? text("notebook_path")
+  const title = text("description")
+  const summary =
+    name === "Task"
+      ? (text("subagent_type") ?? "")
+      : // Nothing at all rather than `summarise`'s `{}`: a row that says the
+        // empty object says less than a row that says only the tool's name.
+        Object.keys(record).length === 0
+        ? ""
+        : summarise(record)
+
+  return {
+    summary,
+    ...(title ? { title: collapse(title) } : {}),
+    ...(path ? { path } : {}),
+  }
+}
+
+/**
+ * What a tool call came back with, in one line.
+ *
+ * A count rather than the output itself once there is more than a line of it:
+ * a `Read` returns the file, and a row that tried to show it would be the file
+ * in the transcript. One line is shown as it stands, because "the command
+ * printed nothing" and "the command printed `3`" are the two answers somebody
+ * scanning the rows is actually looking for.
+ *
+ * Lines rather than bytes because that is the unit the tools themselves work
+ * in — `Read` is given a line count and refuses past one — so it is the number
+ * the next call will be phrased in.
+ */
+export function resultLine(content: unknown): string {
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((block) => {
+              const record = block as Record<string, unknown>
+              return typeof record?.text === "string" ? record.text : ""
+            })
+            .join("\n")
+        : ""
+
+  const trimmed = text.trim()
+  if (!trimmed) return ""
+
+  const lines = trimmed.split("\n")
+  return lines.length === 1
+    ? collapse(lines[0]!)
+    : `${lines.length.toLocaleString()} lines`
 }

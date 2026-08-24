@@ -319,8 +319,53 @@ export type ProcessExit = {
 export type AssistantMessage =
   | { id: string; role: "user"; text: string }
   | { id: string; role: "assistant"; text: string }
-  /** A tool call, drawn as one line: what it was and what it was about. */
-  | { id: string; role: "tool"; name: string; summary: string }
+  /**
+   * The model's own reasoning, drawn as one folded line.
+   *
+   * Kept apart from `assistant` rather than run in with it: it is what the model
+   * thought on the way to the answer, not the answer, and a chat that ran the
+   * two together would be a reply nobody can find the end of. There was a
+   * `showThinking` setting for this and it was removed when nothing drew these;
+   * it is back with them.
+   */
+  | { id: string; role: "thinking"; text: string }
+  /**
+   * A tool call, drawn as one line: what it was, what it was about, and what
+   * came back.
+   *
+   * **The one line in a chat that is not append-only.** A call is written when
+   * it goes out, because that is when there is something to draw, and its
+   * result arrives afterwards — so `result` is filled in on the line that is
+   * already on screen, found by `toolId`. The alternative was holding the row
+   * back until the result came, which is a chat that shows nothing while the
+   * thing worth watching is happening.
+   *
+   * Every field after `summary` is optional because a chat is read back from
+   * disk: a line written before any of them existed has none, and it still has
+   * to draw.
+   */
+  | {
+      id: string
+      role: "tool"
+      name: string
+      /** The argument that says which thing it was about — a path, a command, a
+       * statement. */
+      summary: string
+      /** The CLI's own id for the call, which is what its result finds it by. */
+      toolId?: string
+      /** What the tool call said it was for, in the model's words: the
+       * `description` a `Bash` or a `Task` carries. */
+      title?: string
+      /** The file it was about, absolute, when it was about one — so a row can
+       * draw the name with its file-type icon rather than a path that is forty
+       * characters of checkout before it says anything. */
+      path?: string
+      /** One line about what came back: `631 lines`, or the output itself when
+       * it was one line. Absent while the call is still running. */
+      result?: string
+      /** Set when the tool call came back an error. */
+      failed?: boolean
+    }
   | { id: string; role: "error"; text: string }
   /**
    * Something the turn stopped to ask, and what was said back.
@@ -345,9 +390,27 @@ export type AssistantMessage =
 export type AssistantEvent =
   /** One assistant message, as markdown. A turn can produce several. */
   | { type: "text"; text: string }
+  /** The model's reasoning on the way to one of those. */
+  | { type: "thinking"; text: string }
   /** A tool the assistant called, drawn as a line rather than in full: the
    * arguments are usually a SQL statement or a request name. */
-  | { type: "tool"; name: string; summary: string }
+  | {
+      type: "tool"
+      name: string
+      summary: string
+      toolId?: string
+      title?: string
+      path?: string
+    }
+  /**
+   * What a tool call came back with, for the line already drawn for it.
+   *
+   * Its own event rather than a second `tool`, because it changes a row instead
+   * of adding one — the only event here that does. A `toolId` nothing is waiting
+   * on is ignored, which is what happens to the result of a call whose line was
+   * written by a build that had no ids.
+   */
+  | { type: "tool-result"; toolId: string; result: string; failed: boolean }
   /**
    * The turn has stopped and is waiting to be answered.
    *
@@ -487,6 +550,75 @@ export const MCP_SETTING_KEYS: Record<McpServerName, string> = {
   database: "mcp.database",
   api: "mcp.api",
   notes: "mcp.notes",
+}
+
+/**
+ * One server the user's own `claude` is configured with, offered to a chat here.
+ *
+ * A chat in this app runs with `--strict-mcp-config`, so the CLI's own servers
+ * are not picked up — that is deliberate and stays: a conversation this app
+ * hosts should hold what this app handed it, not whatever config a directory
+ * happened to be under. This is the other half of that decision. The servers
+ * are *listed* rather than loaded, each is off until somebody says otherwise,
+ * and the ones switched on are copied into the config this app writes. Naming
+ * them one at a time is the same argument the three panels make: letting an
+ * agent read your issue tracker is not agreeing to everything else you have
+ * configured.
+ *
+ * Read from `~/.claude.json`, which is where `claude mcp add` writes — both the
+ * user's own servers and the ones added under a project.
+ */
+export type UserMcpServer = {
+  /** Its name in the CLI's config, which is also the tool prefix a turn sees:
+   * `mcp__clickup__create_task`. */
+  name: string
+  /** `user` for one configured for every directory, `project` for one added
+   * under a particular one. */
+  scope: "user" | "project"
+  /** The directory a `project` server was configured under, for the row to say
+   * where it came from. Null for a user one. */
+  project: string | null
+  /** One line for the row: the transport and where it goes. */
+  detail: string
+}
+
+/**
+ * The names switched on, as a JSON array of strings.
+ *
+ * One key rather than a key per server, unlike `MCP_SETTING_KEYS`: those three
+ * are a fixed list this app ships and these are whatever the user has
+ * configured, so there is no set of keys to write down in advance. Absent, or
+ * anything that does not parse, is none of them — the same default the three
+ * have, for the same reason.
+ *
+ * By name, so a server the user later repoints goes on being the one that was
+ * allowed. Renaming it in their config is what turns it back off, which is the
+ * right way round: a name is what they approved.
+ */
+export const MCP_USER_SERVERS_KEY = "mcp.userServers"
+
+/**
+ * That setting, read.
+ *
+ * Here rather than in either process, and runtime rather than a type, for the
+ * reason `chatOptions` is: both sides read the same key — the dialog to draw
+ * the switches, main to decide what a turn is handed — and an encoding written
+ * twice is two things that agree until one of them is changed.
+ *
+ * Anything that is not an array of strings is none of them: the absent key, a
+ * half-written value and whatever a future shape turns out to be, all at once.
+ * The failure it is written against is the one that matters here — a setting
+ * this app cannot read must not come out as "everything".
+ */
+export function mcpUserServerNames(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((name): name is string => typeof name === "string")
+  } catch {
+    return []
+  }
 }
 
 export type TerminalOutput = {
@@ -1163,6 +1295,17 @@ export type DesktopApi = {
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
 
+  /**
+   * The MCP servers the user's own `claude` is configured with, for Settings ›
+   * MCP to list beside this app's three.
+   *
+   * Read fresh on every call rather than cached at launch: `claude mcp add` is
+   * a command somebody runs in the dock's Terminal while this window is open,
+   * and a list that needed a relaunch to notice would be the wrong answer at
+   * exactly the moment it is being looked at.
+   */
+  listUserMcpServers: () => Promise<UserMcpServer[]>
+
   /** Every database or connection in the workspace. */
   listDatabases: () => Promise<DatabaseRecord[]>
   /**
@@ -1582,6 +1725,7 @@ export const IPC = {
   fileAtHead: "git:file-at-head",
   getSetting: "settings:get",
   setSetting: "settings:set",
+  listUserMcpServers: "mcp:user-servers",
   dbQuery: "db:query",
   dbExec: "db:exec",
   dbReset: "db:reset",

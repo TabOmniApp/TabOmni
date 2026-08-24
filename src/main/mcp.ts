@@ -173,28 +173,45 @@ export class McpServers {
 
   /**
    * The config a starting session is pointed at with `--mcp-config`, or null
-   * when every server is switched off — in which case the session is started
+   * when there is nothing to put in it — in which case the session is started
    * with no flag at all rather than with an empty config.
    *
    * A file rather than the JSON inline on the command line: the URL carries
    * this run's secret, and a command line is readable by every process on the
-   * machine while a file in `~/.tabomni` is not.
+   * machine while a file in `~/.tabomni` is not. That argument now covers
+   * `extra` as well, and more sharply: a server the user configured carries its
+   * own credentials in `env`, and this file is the one place they are copied
+   * to. Mode `0600`, like the secret it was written for.
+   *
+   * `extra` is the servers from the user's own `claude` that Settings has
+   * switched on (`user-mcp.ts`) — copied in rather than inherited, which is the
+   * distinction `--strict-mcp-config` is there to keep. This app's own three
+   * are written last, so a user server that happens to be called
+   * `tabomni-notes` cannot take the name the tool list pre-approves.
    */
-  async configPath(): Promise<string | null> {
+  async configPath(
+    extra: Record<string, unknown> = {}
+  ): Promise<string | null> {
     const on: McpServerName[] = []
     for (const name of MCP_SERVER_NAMES) {
       if (await this.source.enabled(name)) on.push(name)
     }
-    if (on.length === 0) return null
 
-    const port = await this.start()
-    const mcpServers: Json = {}
-    for (const name of on) {
-      mcpServers[`tabomni-${name}`] = {
-        type: "http",
-        url: `http://${HOST}:${port}/${this.token}/${name}`,
+    const mcpServers: Json = { ...extra }
+    // Only started when something is actually being served from it: three
+    // panels switched off and one ClickUp switched on is a config that needs no
+    // loopback server at all.
+    if (on.length > 0) {
+      const port = await this.start()
+      for (const name of on) {
+        mcpServers[`tabomni-${name}`] = {
+          type: "http",
+          url: `http://${HOST}:${port}/${this.token}/${name}`,
+        }
       }
     }
+
+    if (Object.keys(mcpServers).length === 0) return null
 
     const file = path.join(dataDir(), "mcp.json")
     // Readable by this user and nobody else: it holds the secret.
