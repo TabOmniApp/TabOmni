@@ -1,6 +1,5 @@
 import type { GitChange } from "@shared/api"
 import { useChanges } from "@/lib/files/changes"
-import { useFiles } from "@/lib/files/store"
 import { GIT_LABELS, GIT_LETTERS, GIT_TONES } from "@/lib/files/git-status"
 import { nameOf, parentOf, relativeTo } from "@/lib/files/paths"
 import type { FileRoot } from "@/lib/files/roots"
@@ -67,11 +66,13 @@ function ChangeRow({ change, root }: { change: GitChange; root: FileRoot }) {
           // And the tab it opens is the checkout's one diff tab, not a tab of
           // this file's own.
           useChanges.getState().openPath(root.id, change.path)
-          // And the diff is what it opens as. `views` is the per-path field the
-          // tree's "open with" writes, so this is the same choice made from a
-          // different place — and `Diff | Edit` in the header above the diff is
-          // what changes it back, without an effect here to undo the click.
-          void useFiles.getState().setView(change.path, "diff")
+          // And nothing else: the pane draws a file as a diff by asking for it
+          // (`preferred` on `FilePane`), not by this writing `views` on the way
+          // past. That write was a frame behind the path — the pane rendered the
+          // new file as its own default viewer first, which for a `.md` is the
+          // text editor — and a click that flickers through another editor is
+          // the one thing a review list must not do. `Diff | Edit` in the header
+          // is still what changes it, and still writes `views`.
         }}
       >
         {/*

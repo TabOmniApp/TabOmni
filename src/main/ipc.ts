@@ -36,6 +36,7 @@ import {
   type WorktreeRecord,
 } from "../shared/api"
 import { descendantFolderIds } from "../shared/tree"
+import { agentModels } from "./agent-models"
 import { WorktreeChats } from "./worktree-chat"
 import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
@@ -395,6 +396,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     (event) => send(IPC.worktreeChatEvent, event)
   )
 
+  // Asked of the user's own `claude` and held for the run — see
+  // `agent-models.ts`. Not a handler that touches any of the managers above,
+  // which is why it takes no argument and keeps no state here.
+  ipcMain.handle(IPC.agentModels, () => agentModels())
   ipcMain.handle(IPC.listWorktreeChats, () => worktreeChats.list())
 
   ipcMain.handle(IPC.createWorktreeChat, (_event, place: ChatPlace) =>

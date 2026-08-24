@@ -17,19 +17,19 @@ export type SqlEditorProps = {
 }
 
 /**
- * The console's editor, behind the boundary that keeps Monaco lazy.
+ * The console's editor, behind the boundary that keeps the editing stack lazy.
  *
- * Every editor in the studio is loaded this way — see `lib/monaco.ts`. The
+ * Every editor in the studio is loaded this way — see `lib/editor.ts`. The
  * fallback is an empty box rather than a spinner: the chunk is read from disk
  * on the `app://` origin, so what it covers is a parse, not a download, and
  * anything more would flash.
  */
-const SqlEditorMonaco = lazy(() => import("./sql-editor-monaco"))
+const SqlEditorCodeMirror = lazy(() => import("./sql-editor-codemirror"))
 
 export function SqlEditor(props: SqlEditorProps) {
   return (
     <Suspense fallback={<div className="h-full" />}>
-      <SqlEditorMonaco {...props} />
+      <SqlEditorCodeMirror {...props} />
     </Suspense>
   )
 }

@@ -300,7 +300,7 @@ function Workbench() {
    * On the capture phase like the studio's other three, so a focused editor
    * cannot swallow it, with the one exception the letter makes: in a rich-text
    * editor `⌘B` is bold and stays bold (`isEditingRichText`). Nothing else on
-   * screen wants the key — Monaco has no binding for it, and off macOS a
+   * screen wants the key — the code editor has no binding for it, and off macOS a
    * terminal is refused by `isStudioShortcut` itself, where `Ctrl+B` is tmux's
    * prefix and readline's backward-char.
    */

@@ -56,7 +56,7 @@ function inTerminal(target: EventTarget | null): boolean {
  * Asked of the element rather than of the editor libraries: `contenteditable`
  * is what they all have in common, and it is also true of anything else that
  * accepts rich text, which is the right answer for those too. A plain `<input>`
- * or Monaco is not one — neither does anything with `⌘B` — so the sidebar keeps
+ * or a code editor is not one — neither does anything with `⌘B` — so the sidebar keeps
  * the key while a name is being typed or a file edited, exactly as it does in
  * the editor this borrows the shortcut from.
  */

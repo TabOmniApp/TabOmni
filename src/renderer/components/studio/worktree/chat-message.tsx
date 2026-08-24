@@ -1,4 +1,10 @@
-import { Brain, FileText, ShieldCheck, TriangleAlert } from "lucide-react"
+import {
+  Brain,
+  Coins,
+  FileText,
+  ShieldCheck,
+  TriangleAlert,
+} from "lucide-react"
 
 import type { AssistantMessage } from "@shared/api"
 import { iconFor } from "@/lib/files/icons"
@@ -6,6 +12,7 @@ import { nameOf } from "@/lib/files/paths"
 import { useSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import { AGENT_TOOL } from "@/lib/worktree-chat/activity"
+import { usageDetail, usageLine } from "@/lib/worktree-chat/usage"
 import { MarkdownView } from "../markdown-view"
 import { MentionText } from "./chat-composer"
 import { toolLabel, toolMark } from "./chat-marks"
@@ -81,6 +88,27 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
       >
         <ShieldCheck className="size-3 shrink-0 translate-y-0.5" />
         <span className="truncate">{of.text}</span>
+      </div>
+    )
+  }
+
+  if (of.role === "usage") {
+    /*
+     * What the turn cost, at the end of it.
+     *
+     * Outside `showToolCalls` and outside the fold: the cost of a turn is not
+     * part of its working — it is the one line that is about the turn rather
+     * than in it — and a number somebody has to open a fold to find is a number
+     * nobody reads until the bill arrives. One row, muted, with the three prompt
+     * figures on the hover line.
+     */
+    return (
+      <div
+        title={usageDetail(of.usage)}
+        className="flex items-baseline gap-1.5 px-1 text-[0.7rem] text-muted-foreground/80"
+      >
+        <Coins className="size-3 shrink-0 translate-y-0.5" />
+        <span className="truncate">{usageLine(of.usage)}</span>
       </div>
     )
   }

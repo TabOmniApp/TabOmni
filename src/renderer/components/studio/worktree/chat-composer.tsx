@@ -22,14 +22,15 @@ import {
   SignalMedium,
   Sparkles,
   Square,
+  Star,
   Check as CheckIcon,
 } from "lucide-react"
 
 import {
-  CHAT_EFFORTS,
-  CHAT_MODELS,
   CHAT_PERMISSIONS,
+  chatEfforts,
   DEFAULT_CHAT_OPTIONS,
+  type AgentModel,
   type ChatEffort,
   type ChatPermission,
   type WorktreeChatOptions,
@@ -40,9 +41,13 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
 import { relativeTo } from "@/lib/files/paths"
 import { cn } from "@/lib/utils"
+import { orderedModels, useAgentModels } from "@/lib/worktree-chat/models"
 import { chatMentions, primeMentions } from "@/lib/worktree-chat/mentions"
 import {
   insertMention,
@@ -137,6 +142,10 @@ export function ChatComposer({
     items: PlainMention[]
     selected: number
   } | null>(null)
+
+  // The user's own `claude`'s list, for the two pickers that need it — the
+  // model's rows and, per model, which effort levels exist at all.
+  const models = useAgentModels()
 
   const field = useRef<HTMLTextAreaElement>(null)
   const mirror = useRef<HTMLDivElement>(null)
@@ -384,12 +393,20 @@ export function ChatComposer({
           {onOptions && (
             <>
               <ModelMenu
+                models={models}
                 model={options.model}
-                onPick={(model) => onOptions({ ...options, model })}
-              />
-              <EffortMenu
                 effort={options.effort}
-                onPick={(effort) => onOptions({ ...options, effort })}
+                onPick={(model, effort) =>
+                  onOptions({
+                    ...options,
+                    model,
+                    effort:
+                      model !== null &&
+                      chatEfforts(models, model).includes(effort as ChatEffort)
+                        ? effort
+                        : null,
+                  })
+                }
               />
               <PermissionMenu
                 permission={options.permission}
@@ -501,79 +518,204 @@ function ToolbarButton({
   )
 }
 
-/** `--model`, or the CLI's own. */
+/**
+ * `--model`, out of the list the user's own `claude` answered with.
+ *
+ * **The rows are the CLI's, not this app's.** Which models an install offers is
+ * a property of the account behind it — `Opus (1M context)`, a Fable that wants
+ * credits — so a picker written here could only be wrong in one of two
+ * directions: offering a model the account cannot use, which fails a turn after
+ * somebody has typed a message, or hiding one they are paying for. See
+ * `lib/worktree-chat/models.ts` and `main/agent-models.ts`.
+ *
+ * Each row is the CLI's own `displayName` over its own `description`, because
+ * "which model" is a question about the trade-off and the trade-off is the
+ * sentence: `Haiku 4.5 · Fastest for quick answers` is the answer, and `Haiku`
+ * is only its name. The digits down the right are this app's — the same nine
+ * keys the CLI's own picker offers, and they work.
+ *
+ * **`Inherit` is last and is the one row that is not a model.** It is `null` on
+ * the record, which passes no `--model` at all and leaves the turn on whatever
+ * `~/.claude/settings.json` says. It used to be what a new chat opened on, and
+ * the reason it is not any more is that it made every chat in the app run on
+ * whatever somebody had set for their terminal — Opus, silently, for weeks. It
+ * stays because it is a thing somebody can genuinely want, and because chats
+ * written before this are on it.
+ */
 function ModelMenu({
+  models,
   model,
+  effort,
   onPick,
 }: {
+  models: AgentModel[]
   model: string | null
-  onPick: (model: string | null) => void
+  effort: ChatEffort | null
+  onPick: (model: string | null, effort: ChatEffort | null) => void
 }) {
-  const chosen = CHAT_MODELS.find((entry) => entry.id === model)
+  const rows = orderedModels(models)
+  const chosen = rows.find((entry) => entry.value === model)
+  // Held only so the digit shortcuts can close it: a click is Base UI's own
+  // business, and a menu still open after the pick it was asked for reads as a
+  // key that did nothing.
+  const [open, setOpen] = useState(false)
+
+  const buttonLabel =
+    model === null
+      ? "Inherit"
+      : chosen
+        ? effort && chatEfforts(models, model).includes(effort)
+          ? `${chosen.label} · ${EFFORT_LABELS[effort]}`
+          : chosen.label
+        : (model ?? "Model")
 
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         render={
           <ToolbarButton
             icon={<Sparkles />}
-            label={chosen?.label ?? "Model"}
-            title="Which model answers"
+            // The raw value where no row matches it: a chat can be carrying a
+            // `--model` this CLI no longer lists, and the honest answer is what
+            // the record says rather than the name of some other model.
+            label={buttonLabel}
+            title="Which model answers and how much thinking it gets"
             on={model !== null}
           />
         }
       />
-      <DropdownMenuContent align="start" className="w-44">
-        <DropdownMenuItem onClick={() => onPick(null)}>
-          Default
-          {model === null && <Check />}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        {CHAT_MODELS.map((entry) => (
-          <DropdownMenuItem key={entry.id} onClick={() => onPick(entry.id)}>
-            {entry.label}
-            {model === entry.id && <Check />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
+      <DropdownMenuContent
+        align="start"
+        className="w-72"
+        // The digits, for the rows that have one. Base UI's own typeahead is
+        // over the labels, so a number reaches here unclaimed.
+        onKeyDown={(event) => {
+          const at = Number(event.key)
+          if (!at || at > rows.length) return
+          event.preventDefault()
+          const target = rows[at - 1]!
+          const targetEfforts = chatEfforts(models, target.value)
+          const nextEffort =
+            effort && targetEfforts.includes(effort) ? effort : null
+          onPick(target.value, nextEffort)
+          setOpen(false)
+        }}
+      >
+        {rows.map((entry) => {
+          const levels = chatEfforts(models, entry.value)
+          const supportsEffort = levels.length > 0
+          const isSelected = model === entry.value
 
-/** `--effort`. The icon fills up with the level, which is what the word beside
- * it means and the only part of it readable at a glance. */
-function EffortMenu({
-  effort,
-  onPick,
-}: {
-  effort: ChatEffort | null
-  onPick: (effort: ChatEffort | null) => void
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <ToolbarButton
-            icon={<EffortIcon effort={effort} />}
-            label={effort ? EFFORT_LABELS[effort] : "Effort"}
-            title="How much thinking each turn gets"
-            on={effort !== null}
-          />
-        }
-      />
-      <DropdownMenuContent align="start" className="w-44">
-        <DropdownMenuItem onClick={() => onPick(null)}>
-          Default
-          {effort === null && <Check />}
-        </DropdownMenuItem>
+          if (supportsEffort) {
+            return (
+              <DropdownMenuSub key={entry.value}>
+                <DropdownMenuSubTrigger
+                  onClick={() => {
+                    const nextEffort =
+                      effort && levels.includes(effort) ? effort : null
+                    onPick(entry.value, nextEffort)
+                  }}
+                  className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
+                >
+                  <div className="flex size-4 shrink-0 items-center justify-center">
+                    {isSelected && (
+                      <CheckIcon className="size-3.5 text-foreground" />
+                    )}
+                  </div>
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span className="truncate text-xs font-normal">
+                      {entry.label}
+                    </span>
+                    {entry.isNew && (
+                      <span className="rounded border border-muted-foreground/40 px-1 py-[0.5px] text-[9px] leading-tight font-semibold tracking-tight text-muted-foreground uppercase">
+                        NEW
+                      </span>
+                    )}
+                  </div>
+                  {isSelected && effort && (
+                    <span className="text-[11px] font-normal text-muted-foreground/80">
+                      {EFFORT_LABELS[effort]}
+                    </span>
+                  )}
+                  {entry.isFavorite && (!isSelected || !effort) && (
+                    <Star className="size-3.5 shrink-0 text-muted-foreground/70" />
+                  )}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-36">
+                  <DropdownMenuItem
+                    onClick={() => onPick(entry.value, null)}
+                    className="flex cursor-pointer items-center justify-between px-2 py-1.5 text-xs"
+                  >
+                    <span>Default</span>
+                    {isSelected && effort === null && (
+                      <CheckIcon className="size-3.5 text-foreground" />
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  {levels.map((level) => (
+                    <DropdownMenuItem
+                      key={level}
+                      onClick={() => onPick(entry.value, level)}
+                      className="flex cursor-pointer items-center justify-between px-2 py-1.5 text-xs"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <EffortIcon effort={level} />
+                        {EFFORT_LABELS[level]}
+                      </span>
+                      {isSelected && effort === level && (
+                        <CheckIcon className="size-3.5 text-foreground" />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )
+          }
+
+          return (
+            <DropdownMenuItem
+              key={entry.value}
+              onClick={() => onPick(entry.value, null)}
+              className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
+            >
+              <div className="flex size-4 shrink-0 items-center justify-center">
+                {isSelected && (
+                  <CheckIcon className="size-3.5 text-foreground" />
+                )}
+              </div>
+              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span className="truncate text-xs font-normal">
+                  {entry.label}
+                </span>
+                {entry.isNew && (
+                  <span className="rounded border border-muted-foreground/40 px-1 py-[0.5px] text-[9px] leading-tight font-semibold tracking-tight text-muted-foreground uppercase">
+                    NEW
+                  </span>
+                )}
+              </div>
+              {entry.isFavorite && (
+                <Star className="size-3.5 shrink-0 text-muted-foreground/70" />
+              )}
+            </DropdownMenuItem>
+          )
+        })}
         <DropdownMenuSeparator />
-        {CHAT_EFFORTS.map((level) => (
-          <DropdownMenuItem key={level} onClick={() => onPick(level)}>
-            <EffortIcon effort={level} />
-            {EFFORT_LABELS[level]}
-            {effort === level && <Check />}
-          </DropdownMenuItem>
-        ))}
+        <DropdownMenuItem
+          onClick={() => onPick(null, null)}
+          className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
+        >
+          <div className="flex size-4 shrink-0 items-center justify-center">
+            {model === null && (
+              <CheckIcon className="size-3.5 text-foreground" />
+            )}
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-xs font-normal">Inherit</span>
+            <span className="truncate text-[10px] text-muted-foreground">
+              Whatever your own `claude` is set to
+            </span>
+          </div>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

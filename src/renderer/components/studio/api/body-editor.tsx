@@ -10,14 +10,14 @@ export type BodyEditorProps = {
   placeholder?: string
 }
 
-/** The request body's editor, behind the boundary that keeps Monaco lazy —
- * see `lib/monaco.ts`. */
-const BodyEditorMonaco = lazy(() => import("./body-editor-monaco"))
+/** The request body's editor, behind the boundary that keeps the editing stack
+ * lazy — see `lib/editor.ts`. */
+const BodyEditorCodeMirror = lazy(() => import("./body-editor-codemirror"))
 
 export function BodyEditor(props: BodyEditorProps) {
   return (
     <Suspense fallback={<div className="h-full" />}>
-      <BodyEditorMonaco {...props} />
+      <BodyEditorCodeMirror {...props} />
     </Suspense>
   )
 }

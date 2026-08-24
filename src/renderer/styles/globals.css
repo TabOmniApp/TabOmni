@@ -148,12 +148,15 @@
  * falls or the hue disappears into the black, and the accents move lighter so
  * they clear the surface they sit on.
  *
- * **Its surfaces are true greys, and that is the one place this palette breaks
- * the rule above it.** The studio's largest dark surface is not a panel of
- * ours — it is a Monaco editor, and Monaco's `vs-dark` paints `#1e1e1e`, which
- * is a flat neutral and cannot be re-tinted without shipping a hand-written
- * theme for every grammar. So the chrome matches the editor rather than the
- * other way round: `--background` *is* `#1e1e1e` (`oklch(0.235 0 0)`), and
+ * **Its surfaces are true greys.** The studio's largest dark surface is a code
+ * editor, and this was written when that editor was Monaco: its `vs-dark` paints
+ * a flat `#1e1e1e` that could not be re-tinted without a hand-written theme for
+ * every grammar, so the chrome matched the editor rather than the other way
+ * round. The editor is CodeMirror now and paints no ground of its own — it is
+ * transparent over whatever pane holds it (`lib/editor.ts`) — so this is a
+ * choice rather than a constraint, and it is kept: a neutral ladder is what the
+ * whole dark studio has been drawn against. `--background` *is* `#1e1e1e`
+ * (`oklch(0.235 0 0)`), and
  * every surface stacked on it is neutral at the same steps the tinted ladder
  * used, so an open file stops reading as a hole cut in the panel around it. A
  * terminal pane and the window's own first-paint colour are the same value for

@@ -13,10 +13,11 @@ import type { AssistantMessage } from "@shared/api"
  * **What counts as working.** Everything a turn produced except its last word:
  * the tool calls, the thinking, and the narration between them ("let me check
  * the composer first"), which reads as working precisely because the answer
- * came after it. Two things are never folded — an error, and a refusal — for
- * the reason the old switch made an exception for refusals too: both are the
- * turn telling you it did *less* than you asked, and that cannot be behind a
- * fold somebody has to know to open.
+ * came after it. Three things are never folded — an error, a refusal, and what
+ * the turn cost — the first two for the reason the old switch made an exception
+ * for refusals: both are the turn telling you it did *less* than you asked, and
+ * that cannot be behind a fold somebody has to know to open. The third is
+ * `alwaysShown`'s own paragraph.
  *
  * The whole of this is pure and tested in `test/chat-activity.ts`, because the
  * cases that matter are the shapes of a transcript rather than anything on
@@ -62,9 +63,11 @@ export function blocksOf(messages: AssistantMessage[]): ChatBlock[] {
      * A turn still being answered has none — everything so far is working, and
      * a fold that closed over the answer the moment it arrived would be the
      * pane hiding what it just finished writing. So this is the index to fold
-     * *up to*, and while a turn is running that is all of it.
+     * *up to*, and while a turn is running that is all of it: see
+     * `answerIndexOf`, which is what "last word" has to mean for a turn that
+     * carried on working after saying something.
      */
-    const answer = lastIndexOf(turn.lines, (line) => line.role === "assistant")
+    const answer = answerIndexOf(turn.lines)
 
     let run: AssistantMessage[] = []
     const flush = () => {
@@ -99,9 +102,21 @@ export function blocksOf(messages: AssistantMessage[]): ChatBlock[] {
   return blocks
 }
 
-/** A line that is never folded: the turn saying it did less than was asked. */
+/**
+ * A line that is never folded.
+ *
+ * Two of the three are the turn saying it did *less* than was asked, and the
+ * third is what it cost — which is not part of the working either: a turn's own
+ * price is about the turn rather than in it, and it is on the line for the turns
+ * that never got as far as an answer too, which is where the fold would
+ * otherwise have swallowed it.
+ */
 function alwaysShown(line: AssistantMessage): boolean {
-  return line.role === "error" || (line.role === "ask" && refused(line))
+  return (
+    line.role === "error" ||
+    line.role === "usage" ||
+    (line.role === "ask" && refused(line))
+  )
 }
 
 /** The wording `main/worktree-chat.ts` composes a refusal with. Matched rather
@@ -174,12 +189,25 @@ function turnsOf(messages: AssistantMessage[]): {
   return turns
 }
 
-function lastIndexOf(
-  lines: AssistantMessage[],
-  matches: (line: AssistantMessage) => boolean
-): number {
+/**
+ * Where a turn's last word starts, or `-1` while it has not said one.
+ *
+ * The last thing the turn *said* only counts as its answer while it is still the
+ * last thing there is: a tool call after it means the narration was working
+ * after all, and the turn has gone back to it. Taking the last assistant line
+ * regardless left every line a running turn produced after its latest sentence
+ * outside the fold — a tool row, then another, growing down the pane under a
+ * summary that was not counting them.
+ *
+ * Lines that are never folded do not count as something coming after: a usage
+ * line lands under a finished turn's answer, and an error or a refusal is drawn
+ * on its own wherever it happened.
+ */
+function answerIndexOf(lines: AssistantMessage[]): number {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (matches(lines[index]!)) return index
+    const line = lines[index]!
+    if (line.role === "assistant") return index
+    if (!alwaysShown(line)) return -1
   }
   return -1
 }

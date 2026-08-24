@@ -808,6 +808,11 @@ export class WorktreeChats {
         onMessage: (message) => void this.append(id, message),
         onToolResult: (toolId, result, failed) =>
           this.recordResult(id, toolId, result, failed),
+        // A line like any other, so it is written down and read back with the
+        // rest of the conversation rather than held for the window that
+        // happened to be open when the turn ended.
+        onUsage: (usage) =>
+          void this.append(id, { id: lineId(), role: "usage", usage }),
         onDone: (error) => {
           /*
            * The CLI already has this session — start the turn again as a
@@ -1007,7 +1012,9 @@ export class WorktreeChats {
               ? { chatId: id, type: "decision", text: message.text }
               : message.role === "thinking"
                 ? { chatId: id, type: "thinking", text: message.text }
-                : { chatId: id, type: "text", text: message.text }
+                : message.role === "usage"
+                  ? { chatId: id, type: "usage", usage: message.usage }
+                  : { chatId: id, type: "text", text: message.text }
       )
     }
 

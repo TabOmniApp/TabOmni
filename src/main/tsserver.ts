@@ -7,15 +7,19 @@ import type { TsDefinition, TsHover } from "../shared/api"
 /**
  * What makes hovering an import say something.
  *
- * The Explorer's editor is Monaco, whose TypeScript worker knows exactly one
- * file: no `tsconfig.json`, no `node_modules`, no other file in the repository.
- * That is enough to colour and to parse and nothing else — hovering an import
- * gets `any`, and go-to-definition on it goes nowhere. What answers those
- * properly is a TypeScript *server*, which is why one runs here.
+ * Nothing in the renderer can see past the file in front of it. The editor
+ * parses that file — enough to colour it, fold it and match its brackets — and
+ * knows nothing of `tsconfig.json`, `node_modules`, or any other file in the
+ * repository, so hovering an import says nothing and go-to-definition on it goes
+ * nowhere. What answers those properly is a TypeScript *server*, which is why
+ * one runs here. It was true when the editor was Monaco, whose bundled
+ * TypeScript worker knew exactly one file; it is more true now that the editor
+ * is CodeMirror and there is no worker at all.
  *
  * **tsserver directly, not a language server.** `typescript-language-server` is
  * a translation layer over exactly this process, and translating LSP into
- * tsserver's own protocol only to translate it back into Monaco's providers is
+ * tsserver's own protocol only to translate it back into the editor's own hover
+ * and definition sources is
  * a dependency to carry, install and keep in step for no answer it could give
  * that this cannot. tsserver's protocol is newline-delimited JSON in and
  * `Content-Length`-framed JSON out — the whole client is the file you are
@@ -226,8 +230,8 @@ class TsServer {
    * The file as it stands in the editor, unsaved edits included.
    *
    * Whole-file rather than a range: tsserver's `change` takes a span, and
-   * computing one from what Monaco reports would mean holding a second copy of
-   * the document here to diff against. The files people read are small enough
+   * computing one from what the editor reports would mean holding a second copy
+   * of the document here to diff against. The files people read are small enough
    * that the copy is cheaper than the bookkeeping — and `reload` with content
    * is exactly what it is for.
    */

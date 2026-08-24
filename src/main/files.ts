@@ -30,8 +30,8 @@ import type { FileContent, FileEntry, FileIndexEntry } from "../shared/api"
 /**
  * Past this, a file is reported rather than opened.
  *
- * The editor is Monaco in a renderer, and a megabyte-per-line minified bundle
- * is what actually hangs it — but a size is the only cheap thing to check
+ * The editor is a code editor in a renderer, and a megabyte-per-line minified
+ * bundle is what actually hangs it — but a size is the only cheap thing to check
  * before the read, and 2 MB is comfortably above any file somebody opens to
  * read.
  */

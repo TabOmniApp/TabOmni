@@ -378,19 +378,25 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
                   title: event.title,
                   path: event.path,
                 }
-              : event.type === "decision"
+              : event.type === "usage"
                 ? {
                     id: `s${Date.now()}-${Math.random()}`,
-                    role: "ask",
-                    text: event.text,
+                    role: "usage",
+                    usage: event.usage,
                   }
-                : event.type === "done" && event.error
+                : event.type === "decision"
                   ? {
                       id: `s${Date.now()}-${Math.random()}`,
-                      role: "error",
-                      text: event.error,
+                      role: "ask",
+                      text: event.text,
                     }
-                  : null
+                  : event.type === "done" && event.error
+                    ? {
+                        id: `s${Date.now()}-${Math.random()}`,
+                        role: "error",
+                        text: event.error,
+                      }
+                    : null
 
       if (!line) return
       set({

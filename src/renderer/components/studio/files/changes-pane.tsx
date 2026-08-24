@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import { FolderGit2 } from "lucide-react"
 
 import {
@@ -9,6 +10,8 @@ import {
 } from "@/components/ui/empty"
 import { useChanges } from "@/lib/files/changes"
 import { fileRootsOf } from "@/lib/files/roots"
+import { useFiles } from "@/lib/files/store"
+import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio } from "@/lib/store"
 import { useWorktrees } from "@/lib/worktree/store"
 import { SECTION_ACCENT } from "../section-marks"
@@ -56,9 +59,39 @@ export function ChangesPane() {
   )
 
   // Whether this pane is the one on screen — what `FilePane` needs to know
-  // before it builds a Monaco. See `FileWorkspace` for why the tab being active
+  // before it builds an editor. See `FileWorkspace` for why the tab being active
   // is not the same question.
   const shown = useStudio((state) => state.pane) === "changes"
+
+  /*
+   * ⌘S saves the file this pane is reading.
+   *
+   * Here rather than in the editor, which is where it was. Monaco's diff took
+   * the key itself — the widget was focusable even read-only, so a command bound
+   * on it fired — and CodeMirror's read-only merge view is genuinely not
+   * editable, so nothing in it holds focus to bind a key on. This is the same
+   * claim `FileWorkspace` makes for a file tab, in the pane that knows which
+   * path is on screen: the file can be dirty from its `Edit` view, and ⌘S is
+   * muscle memory rather than a property of the pane it was pressed in.
+   *
+   * On the capture phase and with `preventDefault`, the way the palette claims
+   * ⌘P — unclaimed, Chromium reads it as "save this page" and offers to write
+   * the studio to disk as HTML.
+   */
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!isStudioShortcut(event, "s")) return
+      if (!path || !shown) return
+
+      event.preventDefault()
+      void useFiles.getState().save(path)
+    }
+
+    window.addEventListener("keydown", onKeyDown, { capture: true })
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true })
+    }
+  }, [path, shown])
 
   if (!root) {
     return (
@@ -82,7 +115,11 @@ export function ChangesPane() {
     )
   }
 
-  return <FilePane path={path} visible={shown} />
+  // `preferred` rather than a write into `views` when a row is clicked: the pane
+  // is what knows a file is a diff here, and saying it on the way in is what
+  // stops the frame where the new path was drawn as its own default viewer.
+  // `Diff | Edit` in the header still writes `views`, which wins over this.
+  return <FilePane path={path} visible={shown} preferred="diff" />
 }
 
 function Notice({ title, detail }: { title: string; detail: string }) {
