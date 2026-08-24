@@ -100,6 +100,7 @@ const api: DesktopApi = {
 
   getSetting: (key) => ipcRenderer.invoke(IPC.getSetting, key),
   setSetting: (key, value) => ipcRenderer.invoke(IPC.setSetting, key, value),
+  listUserMcpServers: () => ipcRenderer.invoke(IPC.listUserMcpServers),
 
   dbQuery: (databaseId, sql, params) =>
     ipcRenderer.invoke(IPC.dbQuery, databaseId, sql, params),

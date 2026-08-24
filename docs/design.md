@@ -149,20 +149,33 @@ agents can work on one project at once without standing on each other's files,
 index and branch.
 
 `main/git.ts` holds the operations: `worktrees()` reads
-`git worktree list --porcelain`, `addWorktree()` is `add -b`, `removeWorktree()`
+`git worktree list --porcelain`, `addWorktree()` is `add`, `removeWorktree()`
 is `remove --force`. `parseWorktrees` and `worktreeSlug` are the pure halves and
 are tested (`test/worktrees.ts`), because the shape of git's output and the
 turning of a branch name into a path segment are the two parts that break
-quietly.
+quietly; `test/worktree-git.ts` drives the two operations over a real repository,
+which is where the arguments git is handed are the whole of the behaviour.
 
-**Three decisions in those operations.** `add -b` always makes a new branch: two
-checkouts of one branch is a state git refuses anyway, and a new worktree is a
-place to do something not yet done. `remove --force` goes ahead over uncommitted
-changes — it is called from a row somebody already confirmed, and a refusal they
-cannot act on from here is worse — but the **branch is kept**, because the
-commits are the work and removing a directory is not a reason to drop them. And
-`listWorktrees` reconciles against git on every read, so a checkout removed by
-hand drops out of the record rather than leaving a list that lies.
+**Three decisions in those operations.** `add` passes **`-b` only for a branch
+that does not exist yet** (`branchExists`, a `show-ref --verify` rather than the
+glob `branch --list` takes), and checks an existing one out as it stands. It used
+to be `-b` unconditionally, on the argument that two checkouts of one branch is a
+state git refuses anyway and a new worktree is a place to do something not yet
+done — and the second half of that is what did not hold. `remove --force` goes
+ahead over uncommitted changes — it is called from a row somebody already
+confirmed, and a refusal they cannot act on from here is worse — but the **branch
+is kept**, because the commits are the work and removing a directory is not a
+reason to drop them. Those two together were a trap: removing a checkout and
+making it again under the same name met `fatal: a branch named 'x' already
+exists`, every time, with nothing offered from the dialog to get past it. Reusing
+the branch is also the answer somebody re-making a checkout wants, since the
+commits are still on it. `from` is **ignored** for a reused branch rather than
+reset onto it — a checkout that silently rewound to `HEAD` would throw away the
+work that made the branch worth keeping — and the `reused` it comes back with is
+why the record leaves `from` unset in that case rather than claiming a lineage
+this run did not give it. And `listWorktrees` reconciles against git on every
+read, so a checkout removed by hand drops out of the record rather than leaving a
+list that lies.
 
 ### Its chat is `claude -p`
 
@@ -181,6 +194,69 @@ The rows and the composer are its own — `ChatMessage` and `ChatComposer`, besi
 the pane in `components/studio/worktree/`. They were the assistant panel's until
 that panel was removed (see The assistant, removed) and came here with it, which
 is where they belong now: this is the only chat in the app.
+
+#### What a turn looks like
+
+**A turn's working is folded, and its answer is not.** A finished turn is read
+for what it concluded; the seven tool calls under it are read when something
+looks wrong, which is a different visit five minutes later. `showToolCalls` used
+to answer that by hiding the rows outright, which serves neither: the switch has
+to be found and flipped between the two readings, and nothing on screen says
+there is anything behind it. So the pane draws one line — `7 tool calls, 13
+messages, 1 subagent`, with a mark per _kind_ of tool that ran — and the whole of
+it opens on a click.
+
+What is folded is everything a turn produced except its **last word**: the tool
+calls, the thinking, and the narration between them ("let me read the composer
+first"), which reads as working precisely because the answer came after it. Two
+things are never folded — an **error** and a **refusal** — for the reason the old
+switch already made an exception of refusals: both are the turn saying it did
+_less_ than was asked, and that cannot be behind something somebody has to know
+to open. A turn still being answered has no last word yet, so all of it is
+working; a turn that only talked has no fold at all. `lib/worktree-chat/
+activity.ts` is the whole of that and it is pure, because every case it has is a
+shape of transcript rather than anything on screen — `test/chat-activity.ts`.
+
+**A tool row is four things rather than a string**: a mark saying which kind of
+tool it was, what the model said it was doing, the file it was about as a chip
+with its own file-type icon, and what came back. They are apart because they are
+read at different speeds — the marks are scanned, the chips are looked for, and
+the argument is read only when one of the first two caught the eye — and a single
+line of `Read /Users/…/worktrees/<uuid>/…/x.tsx` defeats all three. The lead is
+the model's own `description` where a tool carries one, so a `Bash` row says
+"Check IPC wiring for attachments" rather than "Bash". `chat-marks.tsx` holds
+the glyphs, in its own file for the reason `section-marks.tsx` is: the same mark
+is drawn on the row and on the closed fold above it.
+
+Three of those four are things `main/claude-agent.ts` had been throwing away.
+`describeCall` pulls the file, the description and the argument apart instead of
+collapsing the input to one string — one string could not have been split back
+up, since "is this a path" is not a question to ask of text somebody's command
+wrote — and it is also what stopped every subagent row being 120 characters of
+the prompt's JSON: `Task` carries a description, a whole prompt and a subagent
+type, and what a row wants is which agent ran.
+
+**A tool's result is the one line in a chat that is not append-only.** The row is
+written when the call goes out, because that is when there is something to watch;
+the result arrives afterwards and is filled into the row already on screen, found
+by the CLI's own `toolId`. Holding the row back until the result came would be a
+pane showing nothing while the interesting part happens. `resultLine` reduces
+what came back to a count once it is more than a line — a `Read` returns the
+file, and a row that showed it would be the file in the transcript — and shows a
+single line as it stands, since "the command printed nothing" and "the command
+printed `3`" are the two answers somebody scanning for is actually after.
+`recordResult` in `main/worktree-chat.ts` patches the held lines synchronously
+and only those, which is the note worth reading before touching it: every other
+write there is a read-modify-write with an `await` in the middle, and that is
+safe for an append and not for a change to a line the same turn is appending
+after.
+
+**Thinking is back**, as one folded line each (`showThinking`, under the key it
+was always written to). It was dropped when a turn was read for its messages and
+its tool calls and nothing else; `read` takes the `thinking` blocks now. Only a
+turn that was actually thinking has any, which is the effort picked on the
+composer's toolbar — so a chat on Haiku at `low` draws none rather than drawing
+empty ones.
 
 It is also the **only** `claude` the app runs. What this document's old
 "only one" rule was actually against is still refused: features calling the CLI
@@ -991,13 +1067,17 @@ There are four sections: **Appearance** (the theme, which the `d` key still
 toggles — the header's moon button was removed when this row took its place, and
 with it the last clickable thing in the title bar), **Tabs** (the placement
 above, and whether tabs are gathered under the folder each belongs to — see
-Grouped tabs), **Chat** (whether a turn's tool calls are drawn) and **MCP** (what
-an agent turn may reach, below). That switch was already a setting, written by a
-chat view's own header under `claudeGui.showToolCalls`, and it now governs the
-rows both `claude -p` surfaces share (`ChatMessage`). Its key is unchanged,
-because a rename would quietly hand somebody's choice back to the default —
-which is also why `claudeGui.showThinking` is left lying on disk unread: print
-mode reports messages and tool calls and nothing else, so that switch went.
+Grouped tabs), **Chat** (whether a turn's tool calls and its thinking are drawn)
+and **MCP** (what an agent turn may reach, below). Both switches were already
+settings, written by a chat view's own header under `claudeGui.showToolCalls`
+and `claudeGui.showThinking`, and both keys are unchanged, because a rename
+would quietly hand somebody's choice back to the default. `showThinking` spent a
+while written and unread — a turn was taken for its messages and its tool calls
+and nothing else, so there were no reasoning blocks to draw and a switch over
+nothing is worse than no switch — and reading it again from where it was left is
+the whole point of never having deleted it. See The chat view below for what the
+two now decide, which is what is _inside_ the fold rather than how much of the
+pane a turn takes.
 
 The dialog has no Save. A preference applies as it is picked, which makes the
 studio behind the dialog its own preview — picking Vertical tabs moves the strip
@@ -1129,6 +1209,74 @@ refused: a wrong secret, a longer path, a `GET`, an
 `Origin`, half a JSON body. Calling into the class would have proved none of
 those, and each one is a place where a server that "works" is one the CLI
 silently declines to use.
+
+### The user's own servers
+
+`--strict-mcp-config` means a turn here sees the file this app wrote and nothing
+else — not the servers in `~/.claude.json`, not a `.mcp.json` in the repository.
+That is deliberate and it stays: a conversation the app is hosting should hold
+what the app was told to hand it, rather than whatever config the directory it
+started in happened to be under.
+
+What that cost was the obvious next thing somebody wants. The issue tracker they
+already set up in the terminal is not reachable from the chat editing the branch
+the issue is about, and the flag that makes it so is invisible from the outside —
+the chat simply does not have the tools, with nothing saying why.
+
+So the servers are **listed and offered**, one switch each, under **Your own
+servers** in Settings › MCP. `main/user-mcp.ts` reads `~/.claude.json` — the
+top-level `mcpServers` for the user scope, and `projects.<dir>.mcpServers` for
+the ones added under a directory — and the ones switched on are **copied** into
+`~/.tabomni/mcp.json` beside this app's three. Copied, not inherited: every
+server in that file is one this app put there, which is what keeps the strict
+flag meaning something. This app's own three are written last, so a user server
+called `tabomni-notes` cannot take a name the tool list pre-approves.
+
+A **project-scoped** server is offered here too, rather than matched against the
+directory a chat is in. A checkout lives under
+`~/.tabomni/workspace/worktrees/`, so it is inside none of the directories the
+CLI would match — a server added under the very project a branch belongs to
+would never be found — and matching would also mean the list changed as the left
+column was clicked around, for a switch that belongs to the workspace. A
+`.mcp.json` in a repository is not read at all: that file is the project's own,
+checked in and shared, and copying a server out of it because a checkout
+happened to be selected is the inheriting this refuses. `claude mcp add` is what
+says yes to it.
+
+The setting is one key holding a **JSON array of names** (`mcp.userServers`),
+not a key per server, because these are whatever the user configured rather than
+a fixed list this app ships. `mcpUserServerNames` in `@shared/api` is the one
+place that encoding lives, for the reason `chatOptions` is there: the dialog
+draws the switches from it and main decides a turn from it. Anything that does
+not parse is none of them — a setting this app cannot read must not come out as
+"everything". By name, so a server the user repoints goes on being the one that
+was allowed, and one they `claude mcp remove` stops being handed over while the
+name stays stored, so putting it back does not mean approving it again.
+
+**What one is to a turn is per permission mode**, and that is `withUserServers`
+in `main/worktree-chat.ts` rather than a fourth thing to remember:
+
+- `Edits` pre-approves them by server name, the way the `tabomni-*` three are.
+- `Plan` and `Read only` **refuse** them outright — the whole server, not some of
+  it. Nothing in a config file says which of a server's tools read and which
+  file a ticket, and a read-only turn that finds out by calling one was never
+  read-only. Named rather than left off the allow list, for the reason every
+  refusal there is named: unlisted is _askable_, and in a mode with nobody to ask
+  that is a turn that stalls.
+- `Ask` leaves them on neither list, which is exactly how the card reaches the
+  screen.
+- `Full access` has no allow list at all and nothing is asked.
+
+The config carries whatever the CLI's own does, `env` included — which is the
+sharper version of the argument the file was already written for. It is the one
+place someone's server credentials are copied to, and it is mode `0600` in
+`~/.tabomni`. Only the listing crosses to the renderer: `ipc.ts` strips the
+config field by field on the way out, the way a database's password is stripped.
+
+`test/user-mcp.ts` covers the three pure halves — a config with both scopes and
+the same server in two projects, the malformed shapes that must not throw in a
+dialog, the line a row shows, the setting read back, and each of the four things
+a mode does with a server.
 
 ## The assistant, removed
 

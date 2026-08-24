@@ -328,6 +328,30 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
         }
       }
 
+      /*
+       * The one event that changes a line instead of adding one.
+       *
+       * Matched on `toolId` rather than on position, because several calls can
+       * be outstanding at once and they come back in whatever order the tools
+       * finish in. A `toolId` no line carries is dropped: that is the result of
+       * a call whose row was written by a build that had no ids.
+       */
+      if (event.type === "tool-result") {
+        const held = get().messages[chatId]
+        if (!held) return
+        set({
+          messages: {
+            ...get().messages,
+            [chatId]: held.map((line) =>
+              line.role === "tool" && line.toolId === event.toolId
+                ? { ...line, result: event.result, failed: event.failed }
+                : line
+            ),
+          },
+        })
+        return
+      }
+
       const line: AssistantMessage | null =
         event.type === "text"
           ? {
@@ -335,26 +359,35 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
               role: "assistant",
               text: event.text,
             }
-          : event.type === "tool"
+          : event.type === "thinking"
             ? {
                 id: `s${Date.now()}-${Math.random()}`,
-                role: "tool",
-                name: event.name,
-                summary: event.summary,
+                role: "thinking",
+                text: event.text,
               }
-            : event.type === "decision"
+            : event.type === "tool"
               ? {
                   id: `s${Date.now()}-${Math.random()}`,
-                  role: "ask",
-                  text: event.text,
+                  role: "tool",
+                  name: event.name,
+                  summary: event.summary,
+                  toolId: event.toolId,
+                  title: event.title,
+                  path: event.path,
                 }
-              : event.error
+              : event.type === "decision"
                 ? {
                     id: `s${Date.now()}-${Math.random()}`,
-                    role: "error",
-                    text: event.error,
+                    role: "ask",
+                    text: event.text,
                   }
-                : null
+                : event.type === "done" && event.error
+                  ? {
+                      id: `s${Date.now()}-${Math.random()}`,
+                      role: "error",
+                      text: event.error,
+                    }
+                  : null
 
       if (!line) return
       set({

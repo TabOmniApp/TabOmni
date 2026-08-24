@@ -8,9 +8,11 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import { useWorktrees } from "@/lib/worktree/store"
+import { blocksOf } from "@/lib/worktree-chat/activity"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
 import { ChatAsk } from "./chat-ask"
 import { ChatComposer } from "./chat-composer"
+import { ChatActivity } from "./chat-activity"
 import { ChatMessage } from "./chat-message"
 import { WorktreeWelcome } from "./worktree-welcome"
 
@@ -150,9 +152,13 @@ function Conversation({
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-3">
-            {lines.map((line) => (
-              <ChatMessage key={line.id} of={line} />
-            ))}
+            {blocksOf(lines).map((block) =>
+              block.kind === "activity" ? (
+                <ChatActivity key={block.id} of={block} />
+              ) : (
+                <ChatMessage key={block.id} of={block.line} />
+              )
+            )}
             {/* At the end of the transcript rather than over it: it is the turn
                 asking, so it belongs where the turn had got to. */}
             {ask && (

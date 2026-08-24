@@ -24,7 +24,10 @@ import { useWorktrees } from "@/lib/worktree/store"
  *
  * `from` defaults to `HEAD` rather than `main`. A worktree is nearly always cut
  * from what is checked out right now, and a repository whose trunk is called
- * something else should not have to correct a guess.
+ * something else should not have to correct a guess. It goes unused when the
+ * branch already exists — `addWorktree` checks that one out as it stands — which
+ * the hint under the field says, since a field silently ignored is worse than a
+ * field with a caveat.
  */
 export function NewWorktreeDialog({
   folderId,
@@ -107,7 +110,9 @@ export function NewWorktreeDialog({
             <p className="text-xs text-muted-foreground">
               Anything git accepts — <code className="font-mono">HEAD</code>,{" "}
               <code className="font-mono">main</code>,{" "}
-              <code className="font-mono">origin/main</code>.
+              <code className="font-mono">origin/main</code>. Ignored if the
+              branch already exists: that one is checked out as it stands, so
+              nothing on it is lost.
             </p>
           </div>
 

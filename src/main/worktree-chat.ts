@@ -60,6 +60,13 @@ import {
  * conversation this app is hosting, and two `delete_*` tools refused. See
  * `ALLOWED_TOOLS` and `DISALLOWED_TOOLS`.
  *
+ * A server the user has configured in their own `claude` can be added to that
+ * config from Settings › MCP — copied in by name, never inherited, which is
+ * what keeps the strict flag meaning something. What one is to a turn is per
+ * mode and is `withUserServers`, not a fourth thing to remember: pre-approved
+ * where writing is, refused outright in the two read-only modes, and a card in
+ * `ask`.
+ *
  * **What the chat's own toolbar decides** is on the record rather than here:
  * `WorktreeChatOptions` is a model, an effort and a permission per chat, and a
  * turn is built from whatever it said when the message was sent. Only the last
@@ -76,9 +83,28 @@ type Live = {
   starting: boolean
 }
 
+/**
+ * The MCP config a turn is handed, and what is in it.
+ *
+ * The names come back beside the path because the two halves are answered in
+ * different places and have to agree: `mcp.ts` writes the file, and this file
+ * decides what a turn may call without asking. A config naming a server no tool
+ * list mentions is the gap that was already fixed once for the workspace's own
+ * three — the tools exist and the turn stalls trying to use them — so a server
+ * added to the file has to arrive with its name attached.
+ */
+export type McpHandover = {
+  /** The file `--mcp-config` is pointed at. */
+  path: string
+  /** The user's own servers written into it, by config name — `clickup` for
+   * tools called `mcp__clickup__…`. Empty for a config holding only this app's
+   * own three. */
+  userServers: string[]
+}
+
 export type WorktreeChatSource = {
   /** The MCP config for the servers that are switched on, or null. */
-  mcpConfig: () => Promise<string | null>
+  mcpConfig: () => Promise<McpHandover | null>
   /** The directory a worktree id names, or null when the record has gone. */
   worktreeDir: (worktreeId: string) => Promise<string | null>
 
@@ -292,6 +318,9 @@ const PERMISSIONS: Record<
     /** Whether a turn may stop and put the question on screen. The one mode
      * that does is the reason `canUseTool` is wired at all. */
     asks?: boolean
+    /** What a server switched on from the user's own `claude` config is to this
+     * mode. See `withUserServers`. */
+    userServers: "allow" | "refuse" | "ask"
   }
 > = {
   plan: {
@@ -299,12 +328,14 @@ const PERMISSIONS: Record<
     refused: [...WRITE_REFUSED, ...REFUSED_ASKING],
     mode: "acceptEdits",
     prompt: PLAN_PROMPT,
+    userServers: "refuse",
   },
   read: {
     allowed: READ_TOOLS,
     refused: [...WRITE_REFUSED, ...REFUSED_ASKING],
     mode: "acceptEdits",
     prompt: READ_PROMPT,
+    userServers: "refuse",
   },
   /*
    * The one that stops and asks.
@@ -333,11 +364,13 @@ const PERMISSIONS: Record<
     mode: "manual",
     prompt: ASK_PROMPT,
     asks: true,
+    userServers: "ask",
   },
   edits: {
     allowed: ALLOWED_TOOLS,
     refused: [...DISALLOWED_TOOLS, ...REFUSED_ASKING],
     mode: "acceptEdits",
+    userServers: "allow",
   },
   /*
    * Nothing is asked, including about tools this app never listed.
@@ -357,7 +390,52 @@ const PERMISSIONS: Record<
   full: {
     refused: [...DISALLOWED_TOOLS, ...REFUSED_ASKING],
     mode: "bypassPermissions",
+    // Nothing to say: this is the mode with no allow list, and a refusal here
+    // would be the one thing `Full access` promises not to do.
+    userServers: "ask",
   },
+}
+
+/**
+ * A mode's two tool lists, with the user's own servers folded in.
+ *
+ * Written as a function over the table rather than as more entries in it,
+ * because what a third-party server is to a mode does not follow from the
+ * mode's own lists: those name tools this app ships and knows the shape of, and
+ * a server somebody added is a name with an unknown set behind it.
+ *
+ * - **`allow`** — pre-approved by server name, the way the `tabomni-*` three
+ *   are, so a tool added to it later is covered without a release here.
+ * - **`refuse`** — the read-only pair. The whole server goes, not some of it:
+ *   nothing in a config file says which of `clickup`'s tools read and which
+ *   file a ticket, and a read-only mode that lets a turn find out by calling one
+ *   is not read-only. Named rather than left off `READ_TOOLS` for the reason
+ *   every refusal here is named — unlisted is *askable*, and in a mode with
+ *   nobody to ask that is a turn that stalls.
+ * - **`ask`** — neither list, which is exactly how a question reaches the
+ *   screen. In `ask` mode that is the point: the card comes up and somebody
+ *   answers it. In `full` there is no allow list at all and nothing is asked.
+ *
+ * `allowed` stays undefined when the mode has none, since an empty array is a
+ * list that allows nothing rather than the absence of one.
+ */
+export function withUserServers(
+  permission: { allowed?: string[]; refused: string[]; userServers: string },
+  servers: string[]
+): { allowed?: string[]; refused: string[] } {
+  const tools = servers.map((name) => `mcp__${name}`)
+  if (tools.length === 0 || permission.userServers === "ask") {
+    return { allowed: permission.allowed, refused: permission.refused }
+  }
+  return permission.userServers === "allow"
+    ? {
+        allowed: permission.allowed ? [...permission.allowed, ...tools] : tools,
+        refused: permission.refused,
+      }
+    : {
+        allowed: permission.allowed,
+        refused: [...permission.refused, ...tools],
+      }
 }
 
 /**
@@ -630,6 +708,13 @@ export class WorktreeChats {
     // would otherwise run with `undefined` for the whole argument list.
     const permission = PERMISSIONS[options.permission] ?? PERMISSIONS.edits
 
+    // The config and the tool lists out of one read, so the servers written
+    // into the file are the ones the lists were built from. Asked per turn
+    // rather than held, because Settings can be changed between two messages in
+    // the same chat.
+    const mcp = await this.source.mcpConfig()
+    const tools = withUserServers(permission, mcp?.userServers ?? [])
+
     const run = await runAgentTurn(
       {
         cwd,
@@ -642,12 +727,14 @@ export class WorktreeChats {
         effort: options.effort,
         // Every one of these four out of one entry, so a turn cannot be
         // assembled half in one mode and half in another. See `PERMISSIONS`.
-        allowedTools: permission.allowed,
-        disallowedTools: permission.refused,
+        allowedTools: tools.allowed,
+        disallowedTools: tools.refused,
         permissionMode: permission.mode,
-        // The workspace's own servers, and only those: a chat here is the app's
-        // rather than the user's `claude`.
-        mcpConfig: await this.source.mcpConfig(),
+        // Strict, still: what is in that file is what this app put there — its
+        // own servers, plus whichever of the user's `claude` servers Settings
+        // switched on. Nothing is inherited from the directory the CLI happens
+        // to be started in. See `user-mcp.ts`.
+        mcpConfig: mcp?.path ?? null,
         strictMcp: true,
         appendSystemPrompt: permission.prompt
           ? `${SYSTEM_PROMPT} ${permission.prompt}`
@@ -660,6 +747,8 @@ export class WorktreeChats {
       },
       {
         onMessage: (message) => void this.append(id, message),
+        onToolResult: (toolId, result, failed) =>
+          this.recordResult(id, toolId, result, failed),
         onDone: (error) => {
           /*
            * The CLI already has this session — start the turn again as a
@@ -795,6 +884,48 @@ export class WorktreeChats {
    * composer had already put on screen. The only window that could receive it
    * is the one that typed it, and that window has it.
    */
+  /**
+   * What a tool call came back with, onto the line that call already wrote.
+   *
+   * **Synchronous over the held lines, and only those.** Every other write here
+   * is a read-modify-write with an `await` in the middle, and that is safe for
+   * an append because the store's queue serialises the files; it is not safe for
+   * a change to a line the same turn is appending after. Between a turn's first
+   * message and its last the lines are in memory by definition — `append` put
+   * them there — so a patch that finds nothing held is a patch for a chat no
+   * turn is running in, which is a result for a call that cannot still be
+   * outstanding.
+   *
+   * A call whose line has no `toolId` is left alone: that is a line written
+   * before ids existed, read back off disk, and there is nothing to match it by.
+   */
+  private recordResult(
+    id: string,
+    toolId: string,
+    result: string,
+    failed: boolean
+  ): void {
+    const messages = this.messages.get(id)
+    if (!messages) return
+
+    let found = false
+    const next = messages.map((line) => {
+      if (found || line.role !== "tool" || line.toolId !== toolId) return line
+      found = true
+      return { ...line, result, failed }
+    })
+    if (!found) return
+    this.messages.set(id, next)
+
+    this.emit({ chatId: id, type: "tool-result", toolId, result, failed })
+
+    // Written without awaiting, like the line itself: losing the record of what
+    // a tool returned is not worth abandoning a turn over.
+    void this.source.writeChat(id, next).catch((error: unknown) => {
+      console.error("Could not write the chat", error)
+    })
+  }
+
   private async append(id: string, message: AssistantMessage): Promise<void> {
     const messages = [...(await this.read(id)), message]
     this.messages.set(id, messages)
@@ -807,12 +938,17 @@ export class WorktreeChats {
               type: "tool",
               name: message.name,
               summary: message.summary,
+              toolId: message.toolId,
+              title: message.title,
+              path: message.path,
             }
           : message.role === "error"
             ? { chatId: id, type: "done", error: message.text }
             : message.role === "ask"
               ? { chatId: id, type: "decision", text: message.text }
-              : { chatId: id, type: "text", text: message.text }
+              : message.role === "thinking"
+                ? { chatId: id, type: "thinking", text: message.text }
+                : { chatId: id, type: "text", text: message.text }
       )
     }
 

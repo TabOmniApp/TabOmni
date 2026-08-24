@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useTheme } from "next-themes"
 import {
   Dialog,
@@ -226,16 +226,34 @@ function TabsSection() {
 function ChatSection() {
   const showToolCalls = useSettings((state) => state.showToolCalls)
   const setShowToolCalls = useSettings((state) => state.setShowToolCalls)
+  const showThinking = useSettings((state) => state.showThinking)
+  const setShowThinking = useSettings((state) => state.setShowThinking)
 
   return (
-    <Card>
-      <Row
-        title="Tool calls"
-        description="Every file read, command run and edit made, in the order the agent made them."
-      >
-        <Switch checked={showToolCalls} onCheckedChange={setShowToolCalls} />
-      </Row>
-    </Card>
+    <div className="space-y-4">
+      <Card>
+        <Row
+          title="Tool calls"
+          description="Every file read, command run and edit made, in the order the agent made them."
+        >
+          <Switch checked={showToolCalls} onCheckedChange={setShowToolCalls} />
+        </Row>
+        <Row
+          title="Thinking"
+          description="What the model worked through on the way to an answer, one folded line each. Only a turn that was actually thinking has any — that is the effort picked on the chat toolbar."
+        >
+          <Switch checked={showThinking} onCheckedChange={setShowThinking} />
+        </Row>
+      </Card>
+
+      {/* Both are on by default now that a turn's working is folded into one
+          line rather than laid out in full — these decide what is inside the
+          fold, not how much of the pane it takes. */}
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        A turn shows its answer with everything it did on the way gathered into
+        a single line above it. Click that line to open it.
+      </p>
+    </div>
   )
 }
 
@@ -252,24 +270,108 @@ function McpSection() {
   const mcp = useSettings((state) => state.mcp)
   const setMcpEnabled = useSettings((state) => state.setMcpEnabled)
 
+  // Re-read every time the section is shown rather than at launch: `claude mcp
+  // add` is run in the dock's Terminal, and the moment somebody comes here is
+  // the moment they expect to find what they just added.
+  const loadUserServers = useSettings((state) => state.loadUserServers)
+  useEffect(() => {
+    void loadUserServers()
+  }, [loadUserServers])
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <Card>
+          {MCP_ROWS.map(({ server, title, description }) => (
+            <Row key={server} title={title} description={description}>
+              <Switch
+                checked={mcp[server]}
+                onCheckedChange={(next) => setMcpEnabled(server, next)}
+              />
+            </Row>
+          ))}
+        </Card>
+
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          A session picks these up when it starts, so a session already running
+          keeps whatever it was started with — restart it to change what it can
+          reach. Turning one off stops the tools working straight away, running
+          session or not.
+        </p>
+      </div>
+
+      <UserServers />
+    </div>
+  )
+}
+
+/**
+ * The servers the user's own `claude` has, offered one at a time.
+ *
+ * A chat here runs with a config this app wrote and `--strict-mcp-config`, so
+ * nothing in the CLI's own config reaches it — which is right, and is also why
+ * this list exists: the alternative to a switch per server is either inheriting
+ * a config this app never saw or telling somebody their issue tracker is
+ * unreachable from the chat editing the branch the issue is about. Switching
+ * one on copies it into the config a turn is handed. Nothing here is read
+ * except to list it: the `env` a server carries stays in main.
+ *
+ * A word about what a read-only chat does with them, because it is the one
+ * thing that is not obvious from a switch: `Plan` and `Read only` refuse these
+ * outright. Nothing in a config file says which of a server's tools read and
+ * which file a ticket, and a read-only turn that finds out by calling one was
+ * never read-only.
+ */
+function UserServers() {
+  const servers = useSettings((state) => state.userServers)
+  const loaded = useSettings((state) => state.userServersLoaded)
+  const enabled = useSettings((state) => state.mcpUserServers)
+  const setMcpUserServer = useSettings((state) => state.setMcpUserServer)
+
   return (
     <div className="space-y-4">
-      <Card>
-        {MCP_ROWS.map(({ server, title, description }) => (
-          <Row key={server} title={title} description={description}>
-            <Switch
-              checked={mcp[server]}
-              onCheckedChange={(next) => setMcpEnabled(server, next)}
-            />
-          </Row>
-        ))}
-      </Card>
+      <div className="space-y-1">
+        <p className="text-sm leading-none font-medium">Your own servers</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          The MCP servers your <code>claude</code> is configured with. Off until
+          you say otherwise, and switched on one at a time: a chat here is
+          handed what this app was told to hand it, never whatever config a
+          directory happens to be under.
+        </p>
+      </div>
+
+      {servers.length === 0 ? (
+        <p className="rounded-lg border border-dashed p-4 text-xs leading-relaxed text-muted-foreground">
+          {loaded
+            ? "None configured. `claude mcp add` in the dock's Terminal adds one, and it will be listed here."
+            : "Reading your Claude Code config…"}
+        </p>
+      ) : (
+        <Card>
+          {servers.map((server) => (
+            <Row
+              key={server.name}
+              title={server.name}
+              description={
+                server.scope === "project"
+                  ? `${server.detail} · added under ${server.project}`
+                  : server.detail
+              }
+            >
+              <Switch
+                checked={enabled.includes(server.name)}
+                onCheckedChange={(next) => setMcpUserServer(server.name, next)}
+              />
+            </Row>
+          ))}
+        </Card>
+      )}
 
       <p className="text-xs leading-relaxed text-muted-foreground">
-        A session picks these up when it starts, so a session already running
-        keeps whatever it was started with — restart it to change what it can
-        reach. Turning one off stops the tools working straight away, running
-        session or not.
+        A server added under a project is offered here too. A checkout lives
+        outside the project it is a branch of, so matching by directory would
+        hide exactly the servers a chat wants — and a switch here belongs to the
+        whole workspace rather than to one checkout.
       </p>
     </div>
   )
