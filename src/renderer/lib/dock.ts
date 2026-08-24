@@ -10,7 +10,7 @@ import { create } from "zustand"
  * opened. The sections are the upper half; this is the lower one.
  *
  * The `Terminal` tab is Conductor's own, and an ad-hoc shell is all it is: the
- * work an agent does happens in a worktree's chat, so a shell is somewhere to
+ * work an agent does happens in a project's chat, so a shell is somewhere to
  * run `git log` beside it rather than a surface being demoted into a corner.
  * There was a Terminal *panel* — a pane, a tab strip, a chat view over the
  * transcript — and it is gone; this is what replaced it. One shell per project,

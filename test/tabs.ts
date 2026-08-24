@@ -132,6 +132,25 @@ check("a request id names the api panel", kindOf(a1) === "api")
 check("a chat id names the worktree panel", kindOf(x1) === "worktree")
 check("an unprefixed id names none", kindOf("public.users") === null)
 
+/**
+ * Every pane, not the three that happened to be spelled out above.
+ *
+ * `kindOf` was a hand-written list of five against a `PREFIX` map of six, and
+ * the missing one was `changes` — which made that tab unselectable and
+ * uncloseable, silently, because both callers give up on a null. The checks
+ * above did not catch it because they name the panels one at a time. This one
+ * cannot miss a panel: it is the map.
+ */
+check(
+  "every panel's own prefix names it back",
+  (Object.keys(PREFIX) as (keyof typeof PREFIX)[]).every(
+    (pane) => kindOf(`${PREFIX[pane]}whatever`) === pane
+  ),
+  Object.keys(PREFIX).filter(
+    (pane) => kindOf(`${PREFIX[pane as keyof typeof PREFIX]}whatever`) !== pane
+  )
+)
+
 check("the prefix comes back off", bare(t1, "database") === "public.users")
 check(
   // A schema-qualified name is the id here, and `bare` must take the prefix

@@ -39,9 +39,8 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = ["projects"]
 type RememberedColumn = {
   sidebar: boolean
   collapsed: string[]
-  /** Both optional: written by a build whose Explorer could not follow a
-   * checkout, and so had neither of them. */
-  checkout?: Record<string, string>
+  /** Optional: written by a build whose Explorer drew every project at once,
+   * and so had none. */
   activeFolderId?: string | null
   /** Optional for the same reason: the column held only the projects then. */
   shutSections?: string[]
@@ -52,19 +51,10 @@ function isRememberedColumn(value: unknown): value is RememberedColumn {
   return (
     typeof record?.sidebar === "boolean" &&
     isStringArray(record?.collapsed) &&
-    (record.checkout === undefined || isIdMap(record.checkout)) &&
     (record.activeFolderId === undefined ||
       record.activeFolderId === null ||
       typeof record.activeFolderId === "string") &&
     (record.shutSections === undefined || isStringArray(record.shutSections))
-  )
-}
-
-function isIdMap(value: unknown): value is Record<string, string> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Object.values(value).every((entry) => typeof entry === "string")
   )
 }
 
@@ -98,27 +88,10 @@ type ProjectsState = {
    * Which projects are drawn shut.
    *
    * Collapsed rather than expanded ids, so a folder added later opens rather
-   * than hiding the worktrees filed under it.
+   * than hiding the chats filed under it.
    */
   collapsed: string[]
   toggleFolder: (folderId: string) => void
-
-  /**
-   * Which checkout each project is being **read in** — the worktree id, or
-   * absent for the project's own working tree.
-   *
-   * This is what Explorer draws: one tree per project, showing the branch that
-   * is being worked in rather than every checkout at once. A worktree is a
-   * whole copy of the project, so listing them side by side was three copies of
-   * one repository in one tree — the question somebody has open is "the files
-   * of the thing I am working on", and the thing they are working on is the row
-   * they clicked in this column.
-   *
-   * Per project rather than one for the whole workspace: two projects are open
-   * at once on purpose (a frontend and its API), and a single selection would
-   * mean picking a branch in one of them silently moved the other.
-   */
-  checkout: Record<string, string>
 
   /**
    * The project being worked in, or null before anything has been clicked.
@@ -128,16 +101,11 @@ type ProjectsState = {
    * above and below it is a list to scroll past. The workspace still holds them
    * all — that is what the column is, and clicking a row there is what moves
    * this.
-   *
-   * Which *checkout* of it is `checkout` above, kept per project so coming back
-   * to one lands on the branch it was left on rather than on its main working
-   * tree.
    */
   activeFolderId: string | null
 
-  /** Works in a project, in one of its checkouts — null for its own working
-   * tree. The one call the column's rows make. */
-  setActive: (folderId: string, worktreeId?: string | null) => void
+  /** Works in a project. The one call the column's rows make. */
+  setActive: (folderId: string) => void
 
   /** Reads the remembered column. Idempotent: Strict Mode mounts twice. */
   restore: () => Promise<void>
@@ -147,38 +115,20 @@ export const useProjects = create<ProjectsState>((set, get) => {
   let restorePromise: Promise<void> | null = null
 
   function rememberColumn() {
-    const { sidebar, collapsed, checkout, activeFolderId, shutSections } = get()
-    remember(COLUMN_KEY, {
-      sidebar,
-      collapsed,
-      checkout,
-      activeFolderId,
-      shutSections,
-    })
+    const { sidebar, collapsed, activeFolderId, shutSections } = get()
+    remember(COLUMN_KEY, { sidebar, collapsed, activeFolderId, shutSections })
   }
 
   return {
-    // Open by default: it is the way to every project and every worktree, and
+    // Open by default: it is the way to every project and every chat, and
     // closed only because somebody closed it.
     sidebar: true,
     collapsed: [],
-    checkout: {},
     activeFolderId: null,
 
-    setActive(folderId, worktreeId = null) {
-      const { checkout, activeFolderId } = get()
-      const next = { ...checkout }
-      if (worktreeId === null) delete next[folderId]
-      else next[folderId] = worktreeId
-
-      if (
-        activeFolderId === folderId &&
-        (checkout[folderId] ?? null) === worktreeId
-      ) {
-        return
-      }
-
-      set({ activeFolderId: folderId, checkout: next })
+    setActive(folderId) {
+      if (get().activeFolderId === folderId) return
+      set({ activeFolderId: folderId })
       rememberColumn()
     },
 
@@ -216,12 +166,10 @@ export const useProjects = create<ProjectsState>((set, get) => {
           set({
             sidebar: stored.sidebar,
             collapsed: stored.collapsed,
-            // Neither is checked against a list here: the folders and the
-            // worktrees are both read after this, and `shownRoot` falls back —
-            // to the first project, and to a project's own working tree — for
-            // an id that names nothing. A checkout removed while the app was
-            // shut is a tree that opens on the project rather than on an error.
-            checkout: stored.checkout ?? {},
+            // Not checked against a list here: the folders are read after
+            // this, and `shownRoot` falls back to the first project for an id
+            // that names nothing. A project removed while the app was shut is
+            // a tree that opens on another one rather than on an error.
             activeFolderId: stored.activeFolderId ?? null,
             shutSections: stored.shutSections ?? [],
           })

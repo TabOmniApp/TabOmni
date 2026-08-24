@@ -20,6 +20,8 @@ import {
   githubDiffTheme,
 } from "@/lib/files/diff-chrome"
 import { languageExtension, languageForFile } from "@/lib/editor-languages"
+import { reviewGutter, setReviewMarks } from "@/lib/files/review-marks"
+import { useReview } from "@/lib/files/review"
 import {
   acquireDoc,
   docSharing,
@@ -76,6 +78,7 @@ export default function CodeMirrorFileDiff({
   sideBySide,
   whitespace,
   original,
+  reviewRootId = null,
 }: {
   path: string
   /** The working tree's text as the tab read it. Only used if no pane is already
@@ -90,6 +93,16 @@ export default function CodeMirrorFileDiff({
   /** What `HEAD` has, or null for a file it does not have — a new file, whose
    * diff is the whole of it added. */
   original: string | null
+  /**
+   * The checkout being reviewed, or null for a diff that is not a review.
+   *
+   * A root id, not a flag, because a comment belongs to one: the `Changes` pane
+   * hands its own down, and the `Diff` half of a file tab's toggle hands
+   * nothing — the same diff, without the column. Reviewing is what the
+   * `Changes` tab is *for*, and a `+` in every diff in the app would offer a
+   * review with nowhere to submit it.
+   */
+  reviewRootId?: string | null
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   /** Every view this diff is made of — one for inline, two for side by side —
@@ -98,12 +111,26 @@ export default function CodeMirrorFileDiff({
   const { resolvedTheme } = useTheme()
   const isDark = resolvedTheme === "dark"
 
+  /*
+   * The review column, and what it is drawing.
+   *
+   * The id goes through a ref for the same reason the theme does: it is read
+   * while the view is built, and a change to it has to rebuild the view — which
+   * the effect's own dependency below is what does — rather than re-run the
+   * builder on every render.
+   */
+  const reviewRef = useRef(reviewRootId ?? null)
   const themeRef = useRef(isDark)
   const whitespaceRef = useRef(whitespace)
   useEffect(() => {
+    reviewRef.current = reviewRootId ?? null
     themeRef.current = isDark
     whitespaceRef.current = whitespace
   })
+
+  /** The side comments are left on — the working file. `views[1]` split,
+   * `views[0]` inline, and nothing at all when this diff is not a review. */
+  const markedRef = useRef<EditorView | null>(null)
 
   useEffect(() => {
     const host = hostRef.current
@@ -125,6 +152,23 @@ export default function CodeMirrorFileDiff({
       optionsConf.of(marks ? highlightWhitespace() : []),
       languageConf.of([]),
     ]
+
+    /** The review column, on the working side only: a comment is about the file
+     * as it is now, and the commit has no lines to fix. Empty for a diff that is
+     * not a review, which is what keeps the `+` out of a file tab's `Diff`. */
+    const rootId = reviewRef.current
+    const review = (): Extension[] =>
+      rootId === null
+        ? []
+        : [
+            reviewGutter({
+              pick: (line, extend) =>
+                useReview.getState().pick({ rootId, path }, line, extend),
+              drag: (anchor, line) =>
+                useReview.getState().stretch({ rootId, path }, anchor, line),
+              settle: () => useReview.getState().settle(),
+            }),
+          ]
 
     // The unchanged bands, folded away. A file where every line moved is a file
     // whose diff is the file, and folding it is what makes the handful of real
@@ -166,6 +210,9 @@ export default function CodeMirrorFileDiff({
             ...panelChrome(),
             ...common(),
             githubDiffTheme(dark),
+            // After the number column, so it sits against the code the way a
+            // forge draws it — a gutter's place is where it appears.
+            ...review(),
             docSharing(path, { editable: false }),
           ],
         },
@@ -185,6 +232,7 @@ export default function CodeMirrorFileDiff({
             // number column beside the old and new ones.
             githubDiffGutters(),
             githubDiffTheme(dark),
+            ...review(),
             docSharing(path, { editable: false }),
             unifiedMergeView({
               original: committed,
@@ -212,6 +260,7 @@ export default function CodeMirrorFileDiff({
     }
 
     viewsRef.current = views
+    markedRef.current = views[views.length - 1] ?? null
 
     let alive = true
     void languageExtension(languageForFile(path)).then((language) => {
@@ -224,6 +273,7 @@ export default function CodeMirrorFileDiff({
     return () => {
       alive = false
       viewsRef.current = []
+      markedRef.current = null
       destroy()
       // Let go rather than drop: the text editor may be holding the same buffer.
       releaseDoc(path)
@@ -235,7 +285,34 @@ export default function CodeMirrorFileDiff({
     // may already exist, and re-seeding it on every keystroke elsewhere would
     // rebuild the pane under the reader.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, original, sideBySide, isDark])
+  }, [path, original, sideBySide, isDark, reviewRootId])
+
+  /*
+   * What the review column draws, pushed in.
+   *
+   * Declared after the builder above and depending on everything it depends on,
+   * which is what puts the marks back after a rebuild: React runs a component's
+   * effects in order, so the view exists by the time this one asks for it. The
+   * alternative was a generation counter and a render to carry it.
+   */
+  const threads = useReview((state) => state.threads)
+  const pending = useReview((state) => state.pending)
+  useEffect(() => {
+    const view = markedRef.current
+    if (!view || !reviewRootId) return
+
+    view.dispatch({
+      effects: setReviewMarks.of({
+        threads: threads.filter(
+          (thread) => thread.rootId === reviewRootId && thread.path === path
+        ),
+        // Only while it is about *this* file: one range is picked at a time
+        // across the whole review, and a range picked in the file before this
+        // one is not a range to tint in this one.
+        pending: pending && pending.path === path ? pending : null,
+      }),
+    })
+  }, [threads, pending, path, reviewRootId, original, sideBySide, isDark])
 
   useEffect(() => {
     for (const view of viewsRef.current) {

@@ -9,7 +9,7 @@
  * a hue, an icon and a label belong to one of these four whatever is listing it,
  * which is why the type outlived every bar that was named after it.
  *
- * `Pane` in `lib/store.ts` is this plus `worktree` — a checkout's chat is
+ * `Pane` in `lib/store.ts` is this plus `worktree` — a project's chat is
  * opened from the left column and draws in a pane with no list of its own.
  * The two were one union while every pane had a way in of its own; then one did
  * not, so the subset is spelled out and the compiler finds what assumed

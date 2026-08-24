@@ -3,7 +3,6 @@ import { create } from "zustand"
 import type { FileEntry, FileIndexEntry, GitFileState } from "@shared/api"
 import { useStudio } from "../store"
 import { useProjects } from "../projects"
-import { useWorktrees } from "../worktree/store"
 import { fileRoots, rootOf } from "./roots"
 import { isRememberedTabs, recall, remember } from "../tab-memory"
 import { isInside, movedPath, parentOf } from "./paths"
@@ -99,6 +98,57 @@ export function isDeleted(
   return isMissing(state, filePath)
 }
 
+/**
+ * How a file was reached, which is what decides whether its tab is kept.
+ *
+ * A single click in the tree is somebody *looking* at a file — the common case,
+ * and the one that used to leave twenty tabs behind after ten minutes of
+ * reading. Everything else — a double click, the palette, a definition jumped
+ * to, a file just created — is somebody opening one, and opens a tab of its own.
+ */
+export type OpenOptions = { preview?: boolean }
+
+/**
+ * Where a file lands in the strip, and whether its tab is the preview one.
+ *
+ * The rule is the editors' own: **one** preview tab, holding whatever was last
+ * only looked at, and the next look takes its place rather than adding a tab
+ * beside it. A file that already has a tab is left exactly as it is — a kept tab
+ * stays kept and a preview stays a preview, so clicking around the tree cannot
+ * quietly demote a file somebody is editing.
+ *
+ * `replaced` is the tab that has to be flushed and forgotten, and is handed back
+ * rather than acted on here: this is the arithmetic, and writing a file is not.
+ *
+ * In place rather than appended, so the tab somebody is reading through stays
+ * where their eye left it — the strip's own order is `tabOrder` on the studio
+ * store, and it takes this slot as the position the panel gave the tab.
+ */
+export function opening(
+  state: { openIds: string[]; previewId: string | null },
+  filePath: string,
+  preview: boolean
+): { openIds: string[]; previewId: string | null; replaced: string | null } {
+  const { openIds, previewId } = state
+  if (openIds.includes(filePath)) return { openIds, previewId, replaced: null }
+
+  if (!preview)
+    return { openIds: [...openIds, filePath], previewId, replaced: null }
+
+  const slot = previewId === null ? -1 : openIds.indexOf(previewId)
+  if (slot === -1) {
+    return {
+      openIds: [...openIds, filePath],
+      previewId: filePath,
+      replaced: null,
+    }
+  }
+
+  const next = [...openIds]
+  next[slot] = filePath
+  return { openIds: next, previewId: filePath, replaced: previewId }
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -140,6 +190,21 @@ type FilesState = {
   /** Files with a tab open, oldest first. Ids here are absolute paths. */
   openIds: string[]
   selectedId: string | null
+  /**
+   * The one tab holding a file somebody has only looked at, or null.
+   *
+   * Drawn in italics and replaced by the next single click, which is the
+   * editors' own preview tab: reading through a repository is what fills a strip
+   * with tabs nobody asked for, and the fix everyone already knows is that a
+   * look is not an open. `keep` is what promotes one, and typing in it does the
+   * same — an edit is the point at which somebody plainly means to stay.
+   *
+   * Not remembered across a launch, unlike `openIds` and the selection: a tab
+   * that survived a restart is one the workspace kept, and coming back to find
+   * it evicted by the first click in the tree would be the memory doing less
+   * than nothing.
+   */
+  previewId: string | null
 
   /**
    * Every file in the workspace, for the search palette — empty until it is
@@ -195,8 +260,9 @@ type FilesState = {
   syncPaths: (paths: string[]) => Promise<void>
   collapseAll: () => void
 
-  /** Opens a file into the pane, reading it the first time. */
-  open: (filePath: string) => Promise<void>
+  /** Opens a file into the pane, reading it the first time. `preview` is a
+   * single click in the tree — see `opening`. */
+  open: (filePath: string, options?: OpenOptions) => Promise<void>
   /** Shows an open file another way — the tree's "open with". Reads whichever
    * half of it has not been read yet. */
   setView: (filePath: string, viewer: Viewer) => Promise<void>
@@ -210,7 +276,15 @@ type FilesState = {
    * happened to load it.
    */
   ensureLoaded: (filePath: string, viewer: Viewer) => Promise<void>
-  select: (filePath: string) => void
+  select: (filePath: string, options?: OpenOptions) => void
+  /**
+   * Keeps the preview tab: a double click, or the first keystroke in it.
+   *
+   * By path rather than "whatever is previewing", so a double click on a row
+   * that is not the preview is a no-op rather than a promotion of some other
+   * file's tab.
+   */
+  keep: (filePath: string) => void
   close: (filePath: string) => void
   closeOthers: (filePath: string) => void
   closeAll: () => void
@@ -339,8 +413,16 @@ export const useFiles = create<FilesState>((set, get) => {
     const inside = (target: string) =>
       roots.some((root) => isInside(root, target))
 
-    const { entries, expanded, openIds, selectedId, docs, images, views } =
-      get()
+    const {
+      entries,
+      expanded,
+      openIds,
+      selectedId,
+      previewId,
+      docs,
+      images,
+      views,
+    } = get()
     const keptOpen = openIds.filter(inside)
     if (
       keptOpen.length === openIds.length &&
@@ -369,23 +451,20 @@ export const useFiles = create<FilesState>((set, get) => {
         selectedId && keptOpen.includes(selectedId)
           ? selectedId
           : (keptOpen[0] ?? null),
+      previewId: previewId && keptOpen.includes(previewId) ? previewId : null,
     })
     rememberTabs()
   }
 
-  // A folder dropped from the workspace takes its files' tabs with it, and a
-  // worktree removed takes its own: the panel is not allowed to read there any
-  // more, so a tab onto it could only fail. Both are roots of the tree — see
-  // `lib/files/roots.ts` — and a checkout is inside no folder, so leaving them
-  // out here would close a worktree's tabs on the next thing that touched the
-  // studio store.
+  // A folder dropped from the workspace takes its files' tabs with it: the
+  // panel is not allowed to read there any more, so a tab onto it could only
+  // fail.
   function followRoots() {
-    // Not before both lists have been read: there is a moment during `init`
-    // where the studio is `loaded` and its folders have not arrived, and
-    // pruning against an empty list there would close every tab this store had
-    // just restored.
+    // Not before the list has been read: there is a moment during `init` where
+    // the studio is `loaded` and its folders have not arrived, and pruning
+    // against an empty list there would close every tab this store had just
+    // restored.
     if (!useStudio.getState().loaded) return
-    if (!useWorktrees.getState().loaded) return
 
     const roots = fileRoots().map((root) => root.path)
     prune(roots)
@@ -404,7 +483,6 @@ export const useFiles = create<FilesState>((set, get) => {
   }
 
   useStudio.subscribe(followRoots)
-  useWorktrees.subscribe(followRoots)
 
   return {
     entries: {},
@@ -417,6 +495,7 @@ export const useFiles = create<FilesState>((set, get) => {
 
     openIds: [],
     selectedId: null,
+    previewId: null,
     renaming: null,
     index: [],
     indexing: false,
@@ -470,11 +549,11 @@ export const useFiles = create<FilesState>((set, get) => {
         dir = above
       }
 
-      // Explorer draws one project, in one checkout, so revealing a file from
-      // anywhere else has to move that selection first — otherwise the chain
-      // would be opened under a root the tree is not drawing. `⌘P` indexes
-      // every root, which is what makes this reachable at all.
-      useProjects.getState().setActive(owner.folderId, owner.worktreeId)
+      // Explorer draws one project, so revealing a file from anywhere else
+      // has to move that selection first — otherwise the chain would be opened
+      // under a root the tree is not drawing. `⌘P` indexes every root, which is
+      // what makes this reachable at all.
+      useProjects.getState().setActive(owner.folderId)
 
       // Only the folders that were shut, and only their listings: revealing
       // runs on every tab click, and re-reading a chain that is already open
@@ -584,8 +663,8 @@ export const useFiles = create<FilesState>((set, get) => {
       set({ expanded: [] })
     },
 
-    async open(filePath) {
-      get().select(filePath)
+    async open(filePath, options) {
+      get().select(filePath, options)
       await load(filePath, viewOf(get(), filePath))
     },
 
@@ -598,19 +677,31 @@ export const useFiles = create<FilesState>((set, get) => {
       await load(filePath, viewer)
     },
 
-    select(filePath) {
+    select(filePath, options) {
       useStudio.getState().showPane("files")
       // The tree follows whatever lands in the pane, wherever it was picked —
       // a tab in the strip, the palette, a definition jumped to. `SideRow`
       // scrolls the row into view once the folders holding it are open, which
       // is what this is for.
       void get().reveal(filePath)
-      const { openIds } = get()
-      set({
-        selectedId: filePath,
-        openIds: openIds.includes(filePath) ? openIds : [...openIds, filePath],
-      })
+
+      const { openIds, previewId, replaced } = opening(
+        get(),
+        filePath,
+        options?.preview === true
+      )
+      // The evicted tab's editor unmounts with it, so this is the last moment
+      // its edits can be written — the same bargain `close` makes, and it is
+      // why a preview tab that has been typed into is not a preview any more.
+      if (replaced !== null) flush(replaced)
+
+      set({ selectedId: filePath, openIds, previewId })
       rememberTabs()
+    },
+
+    keep(filePath) {
+      if (get().previewId !== filePath) return
+      set({ previewId: null })
     },
 
     close(filePath) {
@@ -629,6 +720,10 @@ export const useFiles = create<FilesState>((set, get) => {
           selectedId === filePath
             ? (remaining[index] ?? remaining[index - 1] ?? null)
             : selectedId,
+        // The slot is empty again rather than handed to the neighbour that took
+        // the selection: that tab was opened on its own terms, and the next
+        // single click has to add a preview rather than evict it.
+        previewId: get().previewId === filePath ? null : get().previewId,
       })
       rememberTabs()
     },
@@ -637,13 +732,17 @@ export const useFiles = create<FilesState>((set, get) => {
       for (const openId of get().openIds) {
         if (openId !== filePath) flush(openId)
       }
-      set({ openIds: [filePath], selectedId: filePath })
+      set({
+        openIds: [filePath],
+        selectedId: filePath,
+        previewId: get().previewId === filePath ? filePath : null,
+      })
       rememberTabs()
     },
 
     closeAll() {
       for (const openId of get().openIds) flush(openId)
-      set({ openIds: [], selectedId: null })
+      set({ openIds: [], selectedId: null, previewId: null })
       rememberTabs()
     },
 
@@ -659,6 +758,10 @@ export const useFiles = create<FilesState>((set, get) => {
       const doc = get().docs[filePath]
       if (doc?.kind !== "text" || doc.text === text) return
       setDoc(filePath, { ...doc, text })
+      // Typed in, so it is no longer a file somebody is only looking at. Here
+      // rather than in the editor, because every route to a change — a
+      // keystroke, a paste, a format on save — goes through this one.
+      get().keep(filePath)
     },
 
     async save(filePath) {
@@ -705,13 +808,24 @@ export const useFiles = create<FilesState>((set, get) => {
       // The path is the identity here, so a rename is a different file as far
       // as every other part of this store is concerned: the tab, the document
       // and any listing under it are moved across by hand.
-      const { openIds, selectedId, docs, images, views, expanded, entries } =
-        get()
+      const {
+        openIds,
+        selectedId,
+        previewId,
+        docs,
+        images,
+        views,
+        expanded,
+        entries,
+      } = get()
       const moved = (filePath: string) => movedPath(filePath, target, renamed)
 
       set({
         openIds: openIds.map(moved),
         selectedId: selectedId === null ? null : moved(selectedId),
+        // Moved rather than dropped: renaming a file is not opening it, and the
+        // tab that was a preview before the rename is the same tab after it.
+        previewId: previewId === null ? null : moved(previewId),
         expanded: expanded.map(moved),
         docs: Object.fromEntries(
           Object.entries(docs).map(([filePath, doc]) => [moved(filePath), doc])
@@ -750,8 +864,16 @@ export const useFiles = create<FilesState>((set, get) => {
       // it, and none of them can be saved back to a path that is now in the
       // trash. Closed without flushing, deliberately: the file is gone, and a
       // write would put half of it back.
-      const { openIds, selectedId, expanded, docs, images, views, entries } =
-        get()
+      const {
+        openIds,
+        selectedId,
+        previewId,
+        expanded,
+        docs,
+        images,
+        views,
+        entries,
+      } = get()
       const gone = (filePath: string) => isInside(target, filePath)
 
       const remaining = openIds.filter((filePath) => !gone(filePath))
@@ -759,6 +881,7 @@ export const useFiles = create<FilesState>((set, get) => {
         openIds: remaining,
         selectedId:
           selectedId && gone(selectedId) ? (remaining[0] ?? null) : selectedId,
+        previewId: previewId && gone(previewId) ? null : previewId,
         expanded: expanded.filter((dir) => !gone(dir)),
         docs: Object.fromEntries(
           Object.entries(docs).filter(([filePath]) => !gone(filePath))

@@ -45,6 +45,9 @@ export type TabStripItem = {
   /** A word after the label, for a state the colour alone cannot carry:
    * `deleted` on a file that is no longer on disk. */
   note?: string
+  /** Drawn in italics: the editors' own mark for a preview tab — a file being
+   * looked at, which the next look replaces. `onKeep` is what promotes it. */
+  italic?: boolean
   /** What the menu's copy item puts on the clipboard, when it differs from
    * the label. */
   copyText?: string
@@ -76,6 +79,7 @@ export function TabStrip({
   orientation = "horizontal",
   trailing,
   onSelect,
+  onKeep,
   onClose,
   onCloseOthers,
   onCloseAll,
@@ -92,6 +96,10 @@ export function TabStrip({
    * even with no tabs open, so the strip doesn't vanish along with them. */
   trailing?: ReactNode
   onSelect: (id: string) => void
+  /** A double click on a tab, which is how a preview tab is kept. Omit for a
+   * strip whose tabs are all kept anyway — the second click is then the same
+   * select as the first, which is what it already was. */
+  onKeep?: (id: string) => void
   onClose: (id: string) => void
   onCloseOthers: (id: string) => void
   onCloseAll: () => void
@@ -336,6 +344,7 @@ export function TabStrip({
                   }}
                   onDragEnd={endDrag}
                   onClick={() => onSelect(item.id)}
+                  onDoubleClick={() => onKeep?.(item.id)}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter" && event.key !== " ") return
                     event.preventDefault()
@@ -375,7 +384,13 @@ export function TabStrip({
                     <DropLine side={vertical ? "bottom" : "right"} />
                   )}
                   {item.icon}
-                  <span className={cn("truncate font-mono", item.tone)}>
+                  <span
+                    className={cn(
+                      "truncate font-mono",
+                      item.italic && "italic",
+                      item.tone
+                    )}
+                  >
                     {item.label}
                   </span>
                   {item.note && (

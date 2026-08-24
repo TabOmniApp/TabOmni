@@ -7,6 +7,7 @@ import {
   closeOtherTabs,
   closeShownTab,
   closeTab,
+  keepTab,
   reorderTabs,
   selectTab,
   tabIds,
@@ -130,6 +131,7 @@ export function WorkspaceTabs({
         ) : undefined
       }
       onSelect={selectTab}
+      onKeep={keepTab}
       onClose={closeTab}
       onCloseOthers={closeOtherTabs}
       onCloseAll={closeAllTabs}

@@ -13,6 +13,11 @@ import { useSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import { AGENT_TOOL } from "@/lib/worktree-chat/activity"
 import { usageDetail, usageLine } from "@/lib/worktree-chat/usage"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { MarkdownView } from "../markdown-view"
 import { MentionText } from "./chat-composer"
 import { toolLabel, toolMark } from "./chat-marks"
@@ -143,8 +148,38 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
 function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
   const agent = of.name === AGENT_TOOL
 
-  return (
-    <div className="flex items-baseline gap-1.5 px-1 text-[0.7rem] text-muted-foreground">
+  /*
+   * An edit says how much it moved, not what the CLI said about it.
+   *
+   * The result of an `Edit` is a sentence — "The file /Users/…/review-panel.tsx
+   * has been updated. Here's the result of running `cat -n`…" — and it was the
+   * widest thing in the row: forty characters of a path the chip beside it was
+   * already showing, then a clause about `cat -n`. `+3 −1` is the same fact in
+   * the form a reader wants it, and the lines themselves are one click away.
+   *
+   * The sentence comes back when the call **failed**, which is the one time it
+   * is the thing worth reading — an edit that could not find its `old_string`
+   * says so there and nowhere else.
+   */
+  const stat = of.failed ? undefined : of.stat
+  const said = stat ?? of.result
+
+  /* A button when there is something to open and a plain row otherwise: `type`,
+   * the focus ring and `aria-expanded` come with the element rather than being
+   * attributes remembered by hand, and the hover treatment is what makes the one
+   * row in a turn that opens look as though it does. */
+  const openable = Boolean(of.change && of.path)
+  const Element = openable ? "button" : "div"
+
+  const row = (
+    <Element
+      {...(openable ? { type: "button" as const } : {})}
+      className={cn(
+        "flex w-full items-baseline gap-1.5 rounded px-1 text-left",
+        "text-[0.7rem] text-muted-foreground",
+        openable && "hover:bg-muted/60 hover:text-foreground"
+      )}
+    >
       {toolMark(of.name, "size-3 shrink-0 translate-y-0.5")}
 
       <span className="shrink-0 font-medium text-foreground/80">
@@ -154,9 +189,9 @@ function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
       {/* What came back, next to what it was — `Read` and `631 lines` are one
           fact, and putting the count at the end of the row would leave it
           against whichever argument happened to be longest. */}
-      {of.result && (
+      {said && (
         <span className={cn("shrink-0", of.failed && "text-destructive/80")}>
-          {of.result}
+          {said}
         </span>
       )}
 
@@ -181,7 +216,16 @@ function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
           </span>
         )
       )}
-    </div>
+    </Element>
+  )
+
+  if (!of.change || !of.path) return row
+
+  return (
+    <Popover>
+      <PopoverTrigger render={row} />
+      <ChangePopover path={of.path} stat={of.stat} change={of.change} />
+    </Popover>
   )
 }
 
@@ -208,5 +252,72 @@ function FileChip({ path }: { path: string }) {
       )}
       <span className="truncate">{nameOf(path)}</span>
     </span>
+  )
+}
+
+/**
+ * What an edit did: the file, how much moved, and the lines.
+ *
+ * A **popover** and not a tooltip, which is what this was first and what the
+ * shape of the content rules out: a tooltip in this app is the inverted
+ * `bg-primary` chip meant for a few words — a `-`/`+` block in one came out as a
+ * pale box with code in it — and it is also unscrollable, unselectable, and gone
+ * the moment the pointer leaves the row. This is code: it has to stay up, take a
+ * selection, and scroll.
+ *
+ * **It is the change the call made, not the file's diff**, and the header says
+ * which — those two answers drift apart the moment anything else touches the
+ * file, and a popover captioned "diff" that showed the first while somebody read
+ * it as the second would be worse than no popover. The file's diff against
+ * `HEAD` is a click away in `Changes`, and it is the one that knows what has
+ * happened since.
+ */
+function ChangePopover({
+  path,
+  stat,
+  change,
+}: {
+  path: string
+  stat?: string
+  change: string
+}) {
+  return (
+    /* Its own box, and every one of these overrides earns its place: the popover
+       is a column with `gap-2.5` and `p-2.5` around a `w-72`, which for three
+       stacked full-bleed rows is a gap where each border should be and a width
+       for a menu rather than for code. */
+    <PopoverContent
+      align="start"
+      className="w-[min(40rem,80vw)] gap-0 p-0 text-left"
+    >
+      <div className="flex items-baseline gap-2 border-b px-2 py-1">
+        <span className="min-w-0 flex-1 truncate font-mono text-[0.65rem] opacity-70">
+          {path}
+        </span>
+        {stat && <span className="shrink-0 text-[0.65rem]">{stat}</span>}
+      </div>
+
+      {/* The editors' own git colours and the same two glyphs, so somebody with
+          the `Changes` pane in their eye reads this without learning anything
+          new. `pre` rather than a list of rows: the indentation is the code's,
+          and it is half of what a change looks like. */}
+      <pre className="max-h-72 overflow-auto px-2 py-1.5 font-mono text-[0.65rem] leading-relaxed">
+        {change.split("\n").map((line, at) => (
+          <div
+            key={at}
+            className={cn(
+              line.startsWith("+") && "text-[#007100] dark:text-[#73c991]",
+              line.startsWith("-") && "text-[#ad0707] dark:text-[#c74e39]"
+            )}
+          >
+            {line}
+          </div>
+        ))}
+      </pre>
+
+      <p className="border-t px-2 py-1 text-[0.65rem] opacity-60">
+        What this call changed. The file&apos;s own diff is in Changes.
+      </p>
+    </PopoverContent>
   )
 }

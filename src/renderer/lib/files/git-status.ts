@@ -2,7 +2,6 @@ import { create } from "zustand"
 
 import type { GitFileState, GitStatusEntry } from "@shared/api"
 import { useStudio } from "../store"
-import { useWorktrees } from "../worktree/store"
 import { isInside } from "./paths"
 import { fileRoots, rootOf, type FileRoot } from "./roots"
 
@@ -16,9 +15,8 @@ import { fileRoots, rootOf, type FileRoot } from "./roots"
  * commit in the terminal repaints the tree without a `readdir`.
  *
  * One `git status` per **root**, which is the granularity git itself works at:
- * a workspace folder, and each `git worktree` checkout of it, since a checkout
- * is a repository of its own with its own branch and its own uncommitted work
- * (`lib/files/roots.ts`). It is asked for when the roots change, when
+ * one per workspace folder (`lib/files/roots.ts`). It is asked for when the
+ * roots change, when
  * Explorer's Refresh is pressed, and — debounced — whenever a watched directory
  * reports something, `.git` included: a commit made in the dock's shell is a
  * repaint of the whole tree, and nothing else would have told us about it.
@@ -101,7 +99,7 @@ type RootStatus = {
 }
 
 type GitStatusState = {
-  /** Keyed by `FileRoot.id`, which is `worktreeId ?? folderId`. */
+  /** Keyed by `FileRoot.id`, which is the folder's id. */
   byRoot: Record<string, RootStatus>
   /** Reads one root now. */
   refresh: (root: FileRoot) => Promise<void>
@@ -120,7 +118,7 @@ export const useGitStatus = create<GitStatusState>((set, get) => {
 
     async refresh(root) {
       const entries = await window.desktop
-        .gitStatus(root.folderId, root.worktreeId)
+        .gitStatus(root.folderId)
         .catch(() => [] as GitStatusEntry[])
 
       // Dropped if the root left the workspace while this was in flight, the
@@ -181,6 +179,23 @@ export function gitStateOf(
   return null
 }
 
+/**
+ * Whether this file has uncommitted work in it — which is whether a diff of it
+ * would say anything.
+ *
+ * `ignored` and a path git says nothing about are both "no", and for the same
+ * reason: the committed side and the working side are the same text, so the two
+ * columns would be one file drawn twice. Read by the pane header to decide
+ * whether `Diff | Edit` is a question worth putting on screen; the tree's
+ * right-click still offers `diff` for anything textual, on the argument in
+ * `lib/files/viewers.ts` — a *menu* that changes with the working tree is one
+ * nobody can learn, where a control over the pane is about what is on screen.
+ */
+export function hasGitChange(state: GitStatusState, filePath: string): boolean {
+  const git = gitStateOf(state, filePath)
+  return git !== null && git !== "ignored"
+}
+
 /** Which root a path belongs to, for the store that is keyed by one. */
 export function rootIdOf(filePath: string): string | null {
   return rootOf(filePath)?.id ?? null
@@ -189,7 +204,7 @@ export function rootIdOf(filePath: string): string | null {
 /**
  * A root arriving is what asks for its status, and one leaving is what forgets
  * it. This is also the launch read: `init` sets the folders once the manifest
- * is in, and `refresh` on the worktree store sets the checkouts.
+ * is in.
  */
 function follow() {
   const roots = fileRoots()
@@ -212,8 +227,4 @@ function follow() {
 
 useStudio.subscribe((studio, previous) => {
   if (studio.folders !== previous.folders) follow()
-})
-
-useWorktrees.subscribe((state, previous) => {
-  if (state.worktrees !== previous.worktrees) follow()
 })

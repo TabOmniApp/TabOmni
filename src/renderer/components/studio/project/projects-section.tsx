@@ -1,17 +1,9 @@
-import { useState } from "react"
-import {
-  ChevronRight,
-  GitBranch,
-  MessageSquare,
-  Plus,
-  Trash2,
-} from "lucide-react"
+import { ChevronRight, MessageSquare, Plus, Trash2 } from "lucide-react"
 
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import { cn } from "@/lib/utils"
@@ -20,12 +12,10 @@ import { useStudio } from "@/lib/store"
 import { IconButton } from "../icon-button"
 import { SideRow } from "../side-row"
 import { useShells } from "@/lib/shell/store"
-import { useWorktrees, worktreesOf } from "@/lib/worktree/store"
-import { useWorktreeChats } from "@/lib/worktree-chat/store"
-import { NewWorktreeDialog } from "../worktree/new-worktree-dialog"
+import { chatsOf, useWorktreeChats } from "@/lib/worktree-chat/store"
 
 /**
- * The workspace's projects, and the `git worktree` checkouts under each.
+ * The workspace's projects, and the chats held in each.
  *
  * One of the four sections the left column stacks — see `WorkspaceSidebar` for
  * why the other three are beside it rather than behind tabs on the right. It
@@ -33,23 +23,22 @@ import { NewWorktreeDialog } from "../worktree/new-worktree-dialog"
  * column, not to this section, and a row that lived in whichever section
  * happened to be first was a row in the wrong place.
  *
+ * A project's rows used to be its `git worktree` checkouts, with the chats
+ * hidden a level below them — one row per branch, and no way to see from this
+ * column what conversations a project actually held. That layer is gone, and
+ * what a project opens onto is the thing the column was always navigating to:
+ * its chats, listed, so a conversation from last week is one click rather than
+ * a tab strip somebody has to remember opening.
+ *
  * There was a **task** layer over this — a task was a name and a set of members
  * taken from any panel, listed here with a dashboard behind `Home` — and it is
- * gone, deleted rather than hidden. What is left is the thing the column was
- * always navigating: projects and their branches.
+ * gone, deleted rather than hidden.
  */
 export function ProjectsSection() {
   const collapsed = useProjects((state) => state.collapsed)
   const toggleFolder = useProjects((state) => state.toggleFolder)
 
   const folders = useStudio((state) => state.folders)
-
-  /** The New worktree dialog, held here rather than in `ProjectRow` — a dialog
-   * owned by a row goes when the row re-renders under it. */
-  const [addingWorktree, setAddingWorktree] = useState<{
-    folderId: string
-    name: string
-  } | null>(null)
 
   return (
     <nav
@@ -73,7 +62,7 @@ export function ProjectsSection() {
                 onNewChat={() =>
                   void useWorktreeChats
                     .getState()
-                    .openPlace({ folderId: folder.id, worktreeId: null })
+                    .create({ folderId: folder.id })
                 }
                 onToggle={() => {
                   toggleFolder(folder.id)
@@ -84,67 +73,39 @@ export function ProjectsSection() {
                   useShells.getState().showFor(folder.id)
                   // So does Explorer: this row is the app saying "this
                   // project", and the tree draws the one project being worked
-                  // in. Its own working tree, since that is the row clicked.
-                  useProjects.getState().setActive(folder.id, null)
+                  // in.
+                  useProjects.getState().setActive(folder.id)
                 }}
-                onNewWorktree={() =>
-                  setAddingWorktree({ folderId: folder.id, name: folder.name })
-                }
               />
-              {!shut && <ProjectWorktrees folderId={folder.id} />}
+              {!shut && <ProjectChats folderId={folder.id} />}
             </div>
           )
         })}
       </div>
-
-      {addingWorktree && (
-        <NewWorktreeDialog
-          folderId={addingWorktree.folderId}
-          folderName={addingWorktree.name}
-          onClose={() => setAddingWorktree(null)}
-          // Straight into a chat in it, which is the only reason to have made
-          // one: a checkout nobody is working in is a directory.
-          onCreated={(id) =>
-            void useWorktreeChats
-              .getState()
-              .openPlace({ folderId: addingWorktree.folderId, worktreeId: id })
-          }
-        />
-      )}
     </nav>
   )
 }
 
 /**
- * One project: the folder's name, a `+` that makes a worktree of it, and a menu
- * offering that plus a chat in the project itself.
+ * One project: the folder's name, a `+` that starts a chat in it, and a menu
+ * offering the same.
  *
  * The `+` is Conductor's, and it belongs on the row rather than in a header
- * above the list: it acts on *this* project. It stays a worktree rather than
- * becoming a menu, because a hover button that needs a second click to say what
- * it does is worse at the common case than it is good at the other one.
- *
- * `New chat here` **is** offered, which it was not: a chat used to happen only
- * in a checkout, on the argument that a branch of its own is what makes edits
- * pre-approved honest. That argument holds for the permission and not for the
- * feature — plenty of what somebody asks an agent is a question about the
- * project they have open, and making them cut a branch first is a worktree
- * nobody wanted and a directory to remove afterwards. What changes for a chat
- * here is that nothing claims isolation: see `captionFor` in `chat-pane.tsx` and
- * `SYSTEM_PROMPTS` in `main/worktree-chat.ts`.
+ * above the list: it acts on *this* project. It made a `git worktree` once,
+ * which was the expensive half of starting work here — a branch to name, a
+ * directory to remove afterwards — and a chat is what somebody wanted from it
+ * in nearly every case.
  */
 function ProjectRow({
   name,
   shut,
   onToggle,
   onNewChat,
-  onNewWorktree,
 }: {
   name: string
   shut: boolean
   onToggle: () => void
   onNewChat: () => void
-  onNewWorktree: () => void
 }) {
   return (
     <ContextMenu>
@@ -168,8 +129,8 @@ function ProjectRow({
               permanent `+` is a column of plus signs.
             */}
             <IconButton
-              label={`New worktree in ${name}`}
-              onClick={onNewWorktree}
+              label={`New chat in ${name}`}
+              onClick={onNewChat}
               className="absolute right-1 size-5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-visible:opacity-100"
             >
               <Plus className="size-3" />
@@ -182,115 +143,67 @@ function ProjectRow({
           <MessageSquare className="text-muted-foreground" />
           New chat here
         </ContextMenuItem>
-        <ContextMenuItem onClick={onNewWorktree}>
-          <GitBranch className="text-muted-foreground" />
-          New worktree…
-        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   )
 }
 
 /**
- * One project's worktrees: the checkouts `git worktree` has made of it.
+ * One project's chats, oldest first — the order they were started in.
  *
- * The row is the **branch**, because that is what a worktree is for — the
- * directory it lives in is this app's own bookkeeping (`worktreePath` in
- * `main/store.ts`) and is not something to make anybody read. It is the row's
- * tooltip, for when it is.
- *
- * There is no row for the project's own checkout: that is the project row above,
- * and a "main" entry under it would be the same thing listed twice at two
- * depths.
+ * The row is the chat's **title**, which is the first thing that was asked in
+ * it (`"Untitled"` until there is one). Listed here rather than only in the tab
+ * strip because the strip holds what is open in *this* run: a chat is written
+ * down as it happens, and the column is where one from last week is found
+ * again.
  */
-function ProjectWorktrees({ folderId }: { folderId: string }) {
-  const worktrees = useWorktrees((state) => state.worktrees)
-  const remove = useWorktrees((state) => state.remove)
+function ProjectChats({ folderId }: { folderId: string }) {
   const chats = useWorktreeChats((state) => state.chats)
   const selectedId = useWorktreeChats((state) => state.selectedId)
-  const openPlace = useWorktreeChats((state) => state.openPlace)
-  const create = useWorktreeChats((state) => state.create)
+  const select = useWorktreeChats((state) => state.select)
+  const remove = useWorktreeChats((state) => state.remove)
 
-  const own = worktreesOf(worktrees, folderId)
+  const own = chatsOf(chats, folderId)
   if (own.length === 0) return null
-
-  const shownWorktree = chats.find((chat) => chat.id === selectedId)?.worktreeId
 
   return (
     <>
-      {own.map((worktree) => {
-        const count = chats.filter(
-          (chat) => chat.worktreeId === worktree.id
-        ).length
-
-        return (
-          <ContextMenu key={worktree.id}>
-            <ContextMenuTrigger
-              render={
-                <SideRow
-                  indent={1}
-                  active={shownWorktree === worktree.id}
-                  title={worktree.path}
-                  // A worktree is somewhere to work, and working in it here
-                  // means talking to an agent — so the row opens its chat, and
-                  // starts one when it has none. Nothing else would be a
-                  // sensible thing to do with a directory.
-                  onClick={() => {
-                    void openPlace({
-                      folderId: worktree.folderId,
-                      worktreeId: worktree.id,
-                    })
-                    // The shell too, in this checkout rather than the project's
-                    // own: a chat here edits this branch, and a terminal beside
-                    // it pointed somewhere else would be a trap.
-                    useShells.getState().showFor(worktree.folderId, worktree.id)
-                    // And Explorer, for the same reason: the files on screen
-                    // beside a chat that is editing this branch have to be this
-                    // branch's files.
-                    useProjects
-                      .getState()
-                      .setActive(worktree.folderId, worktree.id)
-                  }}
-                >
-                  <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate text-left font-mono text-[0.7rem]">
-                    {worktree.branch}
-                  </span>
-                  {count > 1 && (
-                    <span className="shrink-0 text-[0.65rem] text-muted-foreground tabular-nums">
-                      {count}
-                    </span>
-                  )}
-                </SideRow>
-              }
-            />
-            <ContextMenuContent className="w-52">
-              <ContextMenuItem
-                onClick={() =>
-                  void create({
-                    folderId: worktree.folderId,
-                    worktreeId: worktree.id,
-                  })
-                }
+      {own.map((chat) => (
+        <ContextMenu key={chat.id}>
+          <ContextMenuTrigger
+            render={
+              <SideRow
+                indent={1}
+                active={selectedId === chat.id}
+                title={chat.title}
+                onClick={() => {
+                  select(chat.id)
+                  // The shell and the tree follow, the way a project row moves
+                  // them: a chat editing this project with a terminal pointed
+                  // at another one is a trap, not an inconvenience.
+                  useShells.getState().showFor(folderId)
+                  useProjects.getState().setActive(folderId)
+                }}
               >
-                <MessageSquare className="text-muted-foreground" />
-                New chat here
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              {/* The branch is kept — the commits are the work. Only the
-                  checkout goes, and its chats with it: they are conversations
-                  about a directory that will not exist. */}
-              <ContextMenuItem
-                variant="destructive"
-                onClick={() => void remove(worktree.id)}
-              >
-                <Trash2 />
-                Remove worktree
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
-        )
-      })}
+                <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-left">
+                  {chat.title}
+                </span>
+              </SideRow>
+            }
+          />
+          <ContextMenuContent className="w-52">
+            {/* The conversation is on disk, so this is the one way it goes. */}
+            <ContextMenuItem
+              variant="destructive"
+              onClick={() => void remove(chat.id)}
+            >
+              <Trash2 />
+              Delete chat
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      ))}
     </>
   )
 }

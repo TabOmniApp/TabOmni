@@ -76,11 +76,6 @@ export type FileIndexEntry = {
   /** Which workspace folder it was found under, for the hint beside it: two
    * repositories in one workspace both have a `src/index.ts`. */
   folderId: string
-  /** Set when it was found in a `git worktree` checkout of that folder rather
-   * than in the folder itself. Two checkouts of one project hold the same
-   * `relative` for every file, so the branch is the only thing that tells a
-   * row from its twin. */
-  worktreeId?: string
 }
 
 /**
@@ -314,7 +309,7 @@ export type ProcessExit = {
  * down, so a chat reopened next week is the one that was had.
  *
  * `Assistant` names the *role*, not a panel: the workspace assistant that once
- * shared these types is gone, and a worktree's chat is the conversation left.
+ * shared these types is gone, and a project's chat is the conversation left.
  */
 export type AssistantMessage =
   | { id: string; role: "user"; text: string }
@@ -363,6 +358,21 @@ export type AssistantMessage =
       /** One line about what came back: `631 lines`, or the output itself when
        * it was one line. Absent while the call is still running. */
       result?: string
+      /**
+       * How much an edit moved — `+3 −1` — read off the call's own input rather
+       * than its result.
+       *
+       * The row draws this **instead of** `result` for a call that has one,
+       * because what the CLI sends back for an edit is a sentence naming the
+       * absolute path the chip beside it is already showing. `result` is still
+       * kept and still drawn when the call *failed*, which is the one time that
+       * sentence is the thing worth reading.
+       */
+      stat?: string
+      /** The change itself, as `-`/`+` lines, capped: what the row shows on
+       * hover. Not a computed diff — these are the two sides the call was made
+       * of. */
+      change?: string
       /** Set when the tool call came back an error. */
       failed?: boolean
     }
@@ -453,6 +463,9 @@ export type AssistantEvent =
       toolId?: string
       title?: string
       path?: string
+      /** `+3 −1` for an edit — see the same field on the line it becomes. */
+      stat?: string
+      change?: string
     }
   /**
    * What a tool call came back with, for the line already drawn for it.
@@ -864,50 +877,13 @@ export type HttpResponseResult = {
 }
 
 /**
- * One `git worktree` of a workspace folder: a second checkout, on its own
- * branch, that this app created.
+ * One chat in a project: a conversation the app hosts, not a pty it reads.
  *
- * The point is isolation. Two agents on one project stand on each other — the
- * same files, the same branch, the same index — and a worktree is git's own
- * answer to that: a directory and a branch of its own, sharing the single
- * object store, so nothing is copied and nothing is duplicated. It is what
- * Conductor is built on.
- *
- * **This is the one place the studio creates a directory.** Everywhere else a
- * folder is somewhere already on the machine, worked on where it is, and the
- * rule is that nothing is written into it that the user did not ask for. A
- * worktree is asked for, and it goes under `~/.tabomni/worktrees/` rather than
- * beside the repository — so a project's directory stays exactly as its owner
- * left it, and removing every worktree leaves no trace in it.
- *
- * The record is the app's own list, not git's. `git worktree list` is still the
- * truth about what exists on disk (see `worktrees()` in `main/git.ts`); this is
- * what lets the renderer name one by id and main resolve that to a cwd without
- * trusting a path from the renderer.
- */
-export type WorktreeRecord = {
-  id: string
-  /** The workspace folder it was cut from. */
-  folderId: string
-  /** The branch checked out in it, created with it. */
-  branch: string
-  /** Absolute path to the checkout. */
-  path: string
-  /** What the branch was cut from — `HEAD`, `main`, `origin/main`. Kept so the
-   * chat can say where this checkout came from; optional because it was added
-   * after the record was. */
-  from?: string
-  createdAt: string
-}
-
-/**
- * One chat in a worktree: a conversation the app hosts, not a pty it reads.
- *
- * The app hosts it rather than reading one the CLI wrote: `claude -p` per turn
- * in the checkout's own directory, with the app holding the messages. There
+ * The app hosts it rather than reading one the CLI wrote: one agent turn at a
+ * time in the project's own directory, with the app holding the messages. There
  * used to be a session panel that did the opposite — the interactive CLI in a
  * pty, with a chat view tailing its transcript — and this is what replaced it.
- * See `main/worktree-chat.ts`, including why it runs with edits pre-approved.
+ * See `main/worktree-chat.ts`.
  *
  * `id` is also the CLI session id, so the record and the conversation the CLI
  * resumes name the same thing.
@@ -1178,54 +1154,38 @@ function readPermission(options: WorktreeChatOptions): ChatPermission {
 }
 
 /**
- * Where a chat runs: a `git worktree` checkout, or a project's own working tree.
+ * Where a chat runs: a project's own working tree.
  *
- * Both halves, never one: `worktreeId ?? folderId` is the key everything about a
- * *place* is already keyed by — `FileRoot.id`, the dock's shells — and the
- * folder is what a checkout's chat still needs in order to say which project it
- * is a branch of. Null `worktreeId` is the project itself, which is the same
- * `worktreeId ?? folderId` resolve `terminalCreate` does.
+ * A record rather than a bare id because it is the shape everything about a
+ * *place* is passed as — the dock's shells, `FileRoot`, a chat's own record —
+ * and it was a pair while `git worktree` checkouts existed beside the project.
+ * That whole layer is gone, and what is left is the project itself.
  */
 export type ChatPlace = {
   folderId: string
-  /** Null for the project's own working tree. */
-  worktreeId: string | null
 }
 
 /**
  * The place a record names, as the id everything keyed by place uses.
  *
- * Read through this rather than off the fields, the way `chatOptions` is: a chat
- * written before this build has a `worktreeId` and no `folderId`, and one
- * written in a project has the other way round. Null only for a record naming
- * neither, which nothing writes.
+ * Read through this rather than off the field, the way `chatOptions` is: a chat
+ * written while chats lived in `git worktree` checkouts has a `worktreeId` and
+ * may have no `folderId` at all, and there is nowhere left for it to run. Null
+ * is what that reads as, and the listing drops it.
  */
-export function chatRootId(chat: {
-  folderId?: string
-  worktreeId: string | null
-}): string | null {
-  return chat.worktreeId ?? chat.folderId ?? null
+export function chatRootId(chat: { folderId?: string }): string | null {
+  return chat.folderId ?? null
 }
 
 export type WorktreeChat = {
   id: string
   /**
-   * The checkout this chat is in, or null for the project's own working tree.
-   *
-   * Nullable rather than a second kind of record, because everything about a
-   * chat other than its directory is the same either way. What *does* differ is
-   * said out loud rather than left to the reader: the caption under the
-   * composer and the system prompt both stop claiming isolation for a chat that
-   * has none. See `SYSTEM_PROMPTS` in `main/worktree-chat.ts`.
-   */
-  worktreeId: string | null
-  /**
-   * The project it belongs to.
+   * The project it belongs to, and the directory its turns run in.
    *
    * Optional because it was added after the record was, like `started`: a chat
-   * written before chats could be in a project has only its worktree, and the
-   * folder is looked up from that. It is the *only* thing a chat with no
-   * worktree has, so read the pair through `chatRootId`.
+   * written while chats lived in a `git worktree` checkout has only the
+   * checkout's id, which names nothing now. Read it through `chatRootId`, which
+   * is null for exactly those.
    */
   folderId?: string
   /** The first thing asked, shortened — `"Untitled"` until there is one. */
@@ -1259,8 +1219,8 @@ export type WorktreeChat = {
   updatedAt: string
 }
 
-/** One of those events, tagged with the chat it belongs to: several worktrees
- * can be answering at once, so a listener has to know which one this is. */
+/** One of those events, tagged with the chat it belongs to: several chats can
+ * be answering at once, so a listener has to know which one this is. */
 export type WorktreeChatEvent = AssistantEvent & { chatId: string }
 
 /**
@@ -1494,30 +1454,15 @@ export type DesktopApi = {
    * failure. Capped at `MAX_STATUS_ENTRIES`; see `main/git.ts` for why a
    * wholly untracked or ignored directory arrives as one entry rather than as
    * its contents.
-   *
-   * `worktreeId` asks about one of that folder's checkouts instead, which is a
-   * repository of its own with its own branch and its own uncommitted work —
-   * the same `worktreeId ?? folderId` resolve `terminalCreate` does, and for
-   * the same reason: an id, never a path. It falls back to the folder when the
-   * checkout has gone, which is the honest answer for a root that is about to
-   * leave the tree.
    */
-  gitStatus: (
-    folderId: string,
-    worktreeId?: string | null
-  ) => Promise<GitStatusEntry[]>
+  gitStatus: (folderId: string) => Promise<GitStatusEntry[]>
 
   /**
-   * What has changed in one checkout, as a list.
+   * What has changed in one folder, as a list.
    *
-   * The same `worktreeId ?? folderId` resolve as `gitStatus`, and for the same
-   * reason: a checkout is a repository of its own with its own uncommitted work.
    * Ignored paths are left out — see `GitChange`.
    */
-  gitChanges: (
-    folderId: string,
-    worktreeId?: string | null
-  ) => Promise<GitChange[]>
+  gitChanges: (folderId: string) => Promise<GitChange[]>
   /**
    * A file as `HEAD` has it — the left-hand side of a diff.
    *
@@ -1726,7 +1671,7 @@ export type DesktopApi = {
    * the picker's cue to draw `CHAT_MODEL_FALLBACK`.
    */
   agentModels: () => Promise<AgentModel[]>
-  /** Every chat in every worktree — the listing; the lines are read one chat
+  /** Every chat in every project — the listing; the lines are read one chat
    * at a time. */
   listWorktreeChats: () => Promise<WorktreeChat[]>
   /** A new, empty chat in a checkout or in a project's own working tree. Made
@@ -1762,35 +1707,11 @@ export type DesktopApi = {
   sendWorktreeChat: (id: string, prompt: string) => Promise<void>
   /** Kills the turn in flight. There is nothing gentler in print mode. */
   stopWorktreeChat: (id: string) => Promise<void>
-  /** Every worktree chat's events, tagged with the chat. Returns an
+  /** Every chat's events, tagged with the chat. Returns an
    * unsubscribe. */
   onWorktreeChatEvent: (
     listener: (event: WorktreeChatEvent) => void
   ) => () => void
-
-  /**
-   * The worktrees this app has made, newest last.
-   *
-   * Reconciled against `git worktree list` on the way out, so a checkout
-   * somebody removed by hand is not offered as somewhere to work.
-   */
-  listWorktrees: () => Promise<WorktreeRecord[]>
-  /**
-   * Adds a worktree to `folderId` on a new branch cut from `from`.
-   *
-   * Resolves to the record, or to an error message — a branch name already
-   * taken is an ordinary answer a dialog has to show, not a fault. `from` is a
-   * committish: `HEAD`, `main`, `origin/main`.
-   */
-  createWorktree: (
-    folderId: string,
-    branch: string,
-    from: string
-  ) => Promise<{ worktree: WorktreeRecord } | { error: string }>
-  /** Removes the checkout and forgets the record. The **branch is kept**: the
-   * commits are the work, and removing a directory is not a reason to drop
-   * them. */
-  removeWorktree: (id: string) => Promise<void>
 
   /** Every note in the workspace, and the folders they are filed under —
    * their listings only; a body is read one at a time. */
@@ -1878,10 +1799,7 @@ export type DesktopApi = {
   startProcess: (
     folderId: string,
     command: string,
-    args: string[],
-    /** Run in this worktree of the folder rather than in the folder itself —
-     * an id, for the reason `terminalCreate` takes one. */
-    worktreeId?: string
+    args: string[]
   ) => Promise<string>
   stopProcess: (processId: string) => Promise<void>
 
@@ -1895,23 +1813,19 @@ export type DesktopApi = {
    * tagged with.
    *
    * The user's own login shell, and the only thing this starts: the agent CLIs
-   * used to be kinds of session here, and what runs one now is a worktree's
-   * chat (`main/worktree-chat.ts`) rather than a pty the renderer asked for.
+   * used to be kinds of session here, and what runs one now is a project's chat
+   * (`main/worktree-chat.ts`) rather than a pty the renderer asked for.
+   *
+   * The folder is named by **id** rather than by path, so main resolves the
+   * directory from its own record: a path handed over by the renderer would be
+   * a cwd this process had to validate, and the rule here is that the renderer
+   * never names a directory main has not already written down (`insideAny` in
+   * `files.ts` is the same rule for reads).
    */
   terminalCreate: (
     folderId: string,
     cols: number,
-    rows: number,
-    /**
-     * Run in this worktree of the folder rather than in the folder itself.
-     *
-     * An **id** rather than a path, so main resolves the directory from its own
-     * record: a path handed over by the renderer would be a cwd this process
-     * had to validate, and the rule here is that the renderer never names a
-     * directory main has not already written down (`insideAny` in `files.ts` is
-     * the same rule for reads).
-     */
-    worktreeId?: string
+    rows: number
   ) => Promise<string>
   /** Sends keystrokes to a shell. */
   terminalWrite: (terminalId: string, data: string) => Promise<void>
@@ -2016,9 +1930,6 @@ export const IPC = {
   sendWorktreeChat: "worktree-chats:send",
   stopWorktreeChat: "worktree-chats:stop",
   worktreeChatEvent: "worktree-chats:event",
-  listWorktrees: "worktrees:list",
-  createWorktree: "worktrees:create",
-  removeWorktree: "worktrees:remove",
   listNotes: "notes:list",
   saveNotes: "notes:save",
   listNoteFolders: "notes:list-folders",

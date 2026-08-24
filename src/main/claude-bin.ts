@@ -8,7 +8,7 @@
  * All that is left of an `agent-tools.ts` that also said how each kind of
  * session installed itself and whether it was present: sessions were kinds
  * because the Terminal panel let you pick one, and that panel is gone. What
- * remains runs `claude -p` — a worktree's chat — and offers no choice.
+ * remains runs the agent SDK — a project's chat — and offers no choice.
  */
 export function claudeBinary(): string {
   return process.env.CLAUDE_BIN ?? "claude"

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import path, { dirname } from "node:path"
+import path from "node:path"
 
 import {
   clipboard,
@@ -33,7 +33,6 @@ import {
   type NoteRecord,
   type WorktreeChatAnswer,
   type WorktreeChatOptions,
-  type WorktreeRecord,
 } from "../shared/api"
 import { descendantFolderIds } from "../shared/tree"
 import { agentModels } from "./agent-models"
@@ -42,15 +41,7 @@ import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
 import * as files from "./files"
 import { MAX_INDEXED_FILES } from "./files"
-import {
-  addWorktree,
-  changes,
-  currentBranch,
-  fileAtHead,
-  removeWorktree,
-  workingTree,
-  worktrees,
-} from "./git"
+import { changes, currentBranch, fileAtHead, workingTree } from "./git"
 import { sendHttp } from "./http"
 import { McpServers } from "./mcp"
 import { NotePreview } from "./preview"
@@ -349,7 +340,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   })
 
   /*
-   * A worktree's chats: `claude -p` per turn in that checkout.
+   * A project's chats: one agent turn at a time, in that project's directory.
    *
    * The only `claude` this app spawns. What the old "no second one" rule was
    * about is still refused — a feature calling the CLI as a helper, an AI filter
@@ -381,7 +372,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           ? { path, userServers: wanted.map((one) => one.name) }
           : null
       },
-      worktreeDir: (worktreeId) => store.resolveWorktreeDir(worktreeId),
       // Null rather than a throw for a folder that has left the workspace: the
       // caller turns "nowhere to run" into a line in the chat, and one path
       // through that is easier to be sure of than two.
@@ -545,39 +535,27 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     currentBranch(await store.resolveFolderDir(folderId))
   )
 
-  ipcMain.handle(
-    IPC.gitStatus,
-    async (_event, folderId: string, worktreeId: string | null) =>
-      workingTree(
-        (worktreeId ? await store.resolveWorktreeDir(worktreeId) : null) ??
-          (await store.resolveFolderDir(folderId))
-      )
+  ipcMain.handle(IPC.gitStatus, async (_event, folderId: string) =>
+    workingTree(await store.resolveFolderDir(folderId))
   )
 
-  ipcMain.handle(
-    IPC.gitChanges,
-    async (_event, folderId: string, worktreeId: string | null) =>
-      changes(
-        (worktreeId ? await store.resolveWorktreeDir(worktreeId) : null) ??
-          (await store.resolveFolderDir(folderId))
-      )
+  ipcMain.handle(IPC.gitChanges, async (_event, folderId: string) =>
+    changes(await store.resolveFolderDir(folderId))
   )
 
   /**
    * The committed side of a diff.
    *
    * Through the same gate as every other read of a file, and then run in the
-   * root that holds it: `HEAD:` is a path in one repository, and a checkout is a
-   * repository of its own — asking the project's own directory for a path in a
-   * worktree would answer with the wrong branch's copy of the file.
+   * root that holds it: `HEAD:` is a path in one repository, so the folder the
+   * path lives under is the one to ask.
    */
   ipcMain.handle(IPC.fileAtHead, async (_event, filePath: string) => {
     const target = await inWorkspace(filePath)
     const roots = await fileRoots()
 
-    // The narrowest root that holds it, since a folder and a checkout of it can
-    // both be roots and only one of them is where this path lives — the same
-    // rule `rootOf` follows in the renderer.
+    // The narrowest root that holds it, since one folder can be added inside
+    // another — the same rule `rootOf` follows in the renderer.
     const root = roots
       .filter((candidate) => files.insideAny([candidate.path], target))
       .sort((a, b) => b.path.length - a.path.length)[0]
@@ -587,36 +565,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   })
 
   /**
-   * Every directory the Explorer may read: the workspace's folders, and the
-   * `git worktree` checkouts made of them.
+   * Every directory the Explorer may read: the workspace's folders.
    *
-   * A checkout is **not** inside the folder it came from — they live under
-   * `~/.tabomni/workspace/worktrees/`, so that removing them all leaves a
-   * project's own directory untouched — which means a tree that lists them has
-   * to say so here or every read of one is refused by the gate below.
-   *
-   * Read fresh on every call, like the workspace itself: a worktree removed
+   * Read fresh on every call, like the workspace itself: a folder removed
    * between one read and the next has to stop being readable at once.
+   *
+   * Still its own function rather than a `getWorkspace()` at each call site
+   * because it is the one list four things are answered from — the gate below,
+   * the watchers, the palette's walk and the tsservers.
    */
-  async function fileRoots(): Promise<
-    { path: string; folderId: string; worktreeId: string | null }[]
-  > {
-    const [{ folders }, worktrees] = await Promise.all([
-      store.getWorkspace(),
-      store.listWorktrees(),
-    ])
-    return [
-      ...folders.map((folder) => ({
-        path: folder.path,
-        folderId: folder.id,
-        worktreeId: null,
-      })),
-      ...worktrees.map((worktree) => ({
-        path: worktree.path,
-        folderId: worktree.folderId,
-        worktreeId: worktree.id,
-      })),
-    ]
+  async function fileRoots(): Promise<{ path: string; folderId: string }[]> {
+    const { folders } = await store.getWorkspace()
+    return folders.map((folder) => ({ path: folder.path, folderId: folder.id }))
   }
 
   /**
@@ -702,12 +662,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    * is a file being sent to a process, which is exactly the kind of call the
    * gate exists for.
    */
-  // The worktrees are roots here as much as the folders are: a checkout has a
-  // `node_modules` and a `tsconfig.json` of its own, and resolving one file's
-  // imports against another checkout's copy is how a hover ends up pointing at
-  // the wrong branch's source. `serverFor` takes the longest match, and a
-  // checkout is nested inside no folder, so each gets its own server — started
-  // only when a file in it is opened.
+  // One server per root, since a root has its own `node_modules` and
+  // `tsconfig.json` and resolving one folder's imports against another's copy
+  // is how a hover ends up pointing at the wrong source. `serverFor` takes the
+  // longest match, and each server is started only when a file in it is opened.
   const tsServers = new TsServers(async () =>
     (await fileRoots()).map((root) => root.path)
   )
@@ -763,13 +721,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       // branch beside the folder, while touching no directory the tree is
       // watching. Added here rather than sent from the renderer because this
       // side is the one that joins a name to a path.
-      //
-      // In a worktree that path is a *file* pointing into the parent
-      // repository, and watching it catches less than a folder's `.git` does —
-      // enough that a checkout removed underneath is noticed, not enough for a
-      // commit made in it. What covers that case is the ordinary one: a commit
-      // touches files in directories the tree already has open, and each of
-      // those schedules the same status read.
       ...roots.map((root) => path.join(root, ".git")),
     ])
   })
@@ -777,9 +728,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.listWorkspaceFiles, async () => {
     // Sequential rather than `Promise.all`, so the budget is shared: two roots
     // walked at once would each take the whole cap and hand back twice what
-    // the renderer agreed to hold. The folders come first for the same reason
-    // they are listed first in the tree — a checkout is a copy of one of them,
-    // and the copy is not what somebody reaching for `⌘P` usually means.
+    // the renderer agreed to hold.
     const found: FileIndexEntry[] = []
     for (const root of await fileRoots()) {
       if (found.length >= MAX_INDEXED_FILES) break
@@ -787,8 +736,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
         ...(await files.indexFiles(
           root.path,
           root.folderId,
-          MAX_INDEXED_FILES - found.length,
-          root.worktreeId
+          MAX_INDEXED_FILES - found.length
         ))
       )
     }
@@ -944,19 +892,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(
     IPC.startProcess,
-    async (
-      _event,
-      folderId: string,
-      command: string,
-      args: string[],
-      worktreeId?: string
-    ) =>
-      processes.start(
-        (worktreeId ? await store.resolveWorktreeDir(worktreeId) : null) ??
-          (await store.resolveFolderDir(folderId)),
-        command,
-        args
-      )
+    async (_event, folderId: string, command: string, args: string[]) =>
+      processes.start(await store.resolveFolderDir(folderId), command, args)
   )
 
   ipcMain.handle(IPC.stopProcess, (_event, processId: string) => {
@@ -992,81 +929,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.httpSend, (_event, input: HttpSendInput) =>
     sendHttp(input)
   )
-
-  /*
-   * The worktrees, reconciled against git's own list on the way out.
-   *
-   * A checkout somebody removed with `git worktree remove` themselves, or by
-   * deleting the directory, is dropped here rather than offered as somewhere to
-   * work — and dropped from the record too, so the reconciliation happens once
-   * rather than on every read. Git is the truth about what exists; the record
-   * only exists so the renderer can name one by id.
-   */
-  ipcMain.handle(IPC.listWorktrees, async () => {
-    const known = await store.listWorktrees()
-    if (known.length === 0) return known
-
-    // One `git worktree list` per folder that has records, not per record.
-    const byFolder = new Map<string, Set<string>>()
-    for (const folderId of new Set(known.map((entry) => entry.folderId))) {
-      const dir = await store.resolveFolderDir(folderId).catch(() => null)
-      byFolder.set(
-        folderId,
-        new Set(dir ? (await worktrees(dir)).map((entry) => entry.path) : [])
-      )
-    }
-
-    const live = known.filter((entry) =>
-      byFolder.get(entry.folderId)?.has(entry.path)
-    )
-    if (live.length !== known.length) await store.saveWorktrees(live)
-    return live
-  })
-
-  ipcMain.handle(
-    IPC.createWorktree,
-    async (_event, folderId: string, branch: string, from: string) => {
-      const dir = await store.resolveFolderDir(folderId)
-      const target = store.worktreePath(folderId, branch)
-
-      await mkdir(dirname(target), { recursive: true })
-
-      const added = await addWorktree(dir, target, branch, from)
-      if (added.error) return { error: added.error }
-
-      const worktree: WorktreeRecord = {
-        id: randomUUID(),
-        folderId,
-        branch,
-        path: target,
-        // Only when this run cut the branch. A reused one was cut from whatever
-        // it was cut from the first time, which nothing here knows, and
-        // `WorktreeWelcome` already draws a missing `from` as the branch alone.
-        ...(added.reused ? {} : { from }),
-        createdAt: new Date().toISOString(),
-      }
-      await store.saveWorktrees([...(await store.listWorktrees()), worktree])
-      return { worktree }
-    }
-  )
-
-  ipcMain.handle(IPC.removeWorktree, async (_event, id: string) => {
-    const known = await store.listWorktrees()
-    const worktree = known.find((entry) => entry.id === id)
-    if (!worktree) return
-
-    const dir = await store
-      .resolveFolderDir(worktree.folderId)
-      .catch(() => null)
-    // Removed even when git refuses or the folder has gone: the record is this
-    // app's own, and leaving a row for a checkout nobody can reach is worse
-    // than leaving a directory `git worktree prune` will clear.
-    if (dir) await removeWorktree(dir, worktree.path)
-    // The chats go with the checkout: they are conversations about a directory
-    // that no longer exists, and a turn in one could not run anywhere.
-    await worktreeChats.deleteFor(id)
-    await store.saveWorktrees(known.filter((entry) => entry.id !== id))
-  })
 
   ipcMain.handle(IPC.listNotes, () => store.listNotes())
 
@@ -1128,22 +990,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(
     IPC.terminalCreate,
-    async (
-      _event,
-      folderId: string,
-      cols: number,
-      rows: number,
-      worktreeId?: string
-    ) => {
-      // The worktree when one was named, the folder otherwise — and the folder
-      // again when the worktree has since been removed, which is the right
-      // fallback for a shell whose checkout is gone.
-      const cwd =
-        (worktreeId ? await store.resolveWorktreeDir(worktreeId) : null) ??
-        (await store.resolveFolderDir(folderId))
+    async (_event, folderId: string, cols: number, rows: number) => {
+      const cwd = await store.resolveFolderDir(folderId)
       // No command: the user's own login shell, which is the only thing a pty
       // is started for now. The agent CLIs used to be started here too, with
-      // their flags built alongside — what runs one is `claude -p` in
+      // their flags built alongside — what runs one is the agent SDK in
       // `worktree-chat.ts`, which spawns its own process and needs no pty.
       return terminals.create({ cwd }, cols, rows)
     }

@@ -4,7 +4,7 @@ import {
   countsOf,
   summaryOf,
 } from "../src/renderer/lib/worktree-chat/activity"
-import { describeCall, resultLine } from "../src/main/claude-agent"
+import { changeOf, describeCall, resultLine } from "../src/main/claude-agent"
 import { check, finish, section } from "./harness"
 
 /**
@@ -288,6 +288,79 @@ check("a shape this does not know is nothing shown", resultLine(42) === "")
 check(
   "a long single line is collapsed rather than wrapping the row",
   resultLine("x".repeat(400)).endsWith("…")
+)
+
+section("what an edit did")
+
+/*
+ * The row this was written against: `Edit` came back "The file
+ * /Users/…/review-panel.tsx has been updated. Here's the result of running
+ * `cat -n`…", which was the widest thing in the row and said nothing the chip
+ * beside it had not. The call's own input has both sides of the change in it.
+ */
+const edited = describeCall("Edit", {
+  file_path: "/w/a.ts",
+  old_string: "const a = 1",
+  new_string: "const a = 2\nconst b = 3",
+})
+
+check("an edit counts both sides", edited.stat === "+2 −1", edited.stat)
+
+check(
+  "and keeps them as the lines they were",
+  edited.change === "- const a = 1\n+ const a = 2\n+ const b = 3",
+  edited.change
+)
+
+check(
+  "a write has one side, which is honest — it replaced the file",
+  (() => {
+    const written = changeOf("Write", { content: "one\ntwo\n" })
+    return written.stat === "+2" && written.change === "+ one\n+ two"
+  })(),
+  "a trailing newline ends the last line rather than starting an empty one"
+)
+
+check(
+  "a multi-edit is the total of its edits",
+  (() => {
+    const many = changeOf("MultiEdit", {
+      edits: [
+        { old_string: "a", new_string: "b" },
+        { old_string: "c\nd", new_string: "e" },
+      ],
+    })
+    return many.stat === "+2 −3"
+  })()
+)
+
+check(
+  "deleting a block is a change with nothing on the new side",
+  (() => {
+    const cut = changeOf("Edit", { old_string: "gone", new_string: "" })
+    return cut.stat === "−1" && cut.change === "- gone"
+  })(),
+  "an empty string is a real side, so the split cannot be guarded on falsiness"
+)
+
+check(
+  "a tool that is not an edit has nothing to say about one",
+  changeOf("Read", { file_path: "/w/a.ts" }).stat === undefined
+)
+
+check(
+  "and a long one is capped with a line saying how much is left",
+  (() => {
+    const big = changeOf("Write", {
+      content: Array.from({ length: 40 }, (_, at) => `line ${at}`).join("\n"),
+    })
+    return (
+      big.stat === "+40" &&
+      big.change?.endsWith("… 24 more") === true &&
+      big.change.split("\n").length === 17
+    )
+  })(),
+  "this is a tooltip, not a pane"
 )
 
 finish()

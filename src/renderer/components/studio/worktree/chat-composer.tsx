@@ -111,6 +111,8 @@ export function ChatComposer({
   options = DEFAULT_CHAT_OPTIONS,
   onOptions,
   attachRoot,
+  initialDraft = "",
+  onLeave,
 }: {
   sending: boolean
   onSend: (text: string) => void
@@ -135,8 +137,29 @@ export function ChatComposer({
    * the thing the agent would have typed itself.
    */
   attachRoot?: string
+  /**
+   * What the field starts with: this chat's unsent draft, or a message written
+   * *for* the user — the `Changes` pane's review, which `Ask AI to fix` puts
+   * here rather than sending.
+   *
+   * The **initial** value rather than a controlled one, because a field being
+   * typed into is the user's: a value round-tripped through a store on every
+   * keystroke would put the caret machinery below (the mention menu's
+   * `pending` caret, the mirror's scroll) behind a render it does not control.
+   * The pane keys this component by the chat instead, which is React's own way
+   * of saying "this is a different field now".
+   */
+  initialDraft?: string
+  /**
+   * The field on its way out, so the draft can be kept for this chat.
+   *
+   * A parting shot rather than a change event: what the owner wants is the last
+   * thing that was in it, and a store written per keystroke would re-render the
+   * pane on every letter typed.
+   */
+  onLeave?: (text: string) => void
 }) {
-  const [draft, setDraft] = useState("")
+  const [draft, setDraft] = useState(initialDraft)
   const [menu, setMenu] = useState<{
     query: MentionQuery
     items: PlainMention[]
@@ -146,6 +169,25 @@ export function ChatComposer({
   // The user's own `claude`'s list, for the two pickers that need it — the
   // model's rows and, per model, which effort levels exist at all.
   const models = useAgentModels()
+
+  /* The draft as it stands, for the unmount below: the cleanup runs once and
+   * would otherwise close over the empty string it was built with. */
+  const latest = useRef(draft)
+  useEffect(() => {
+    latest.current = draft
+  })
+
+  /* Through a ref as well, so the cleanup below can stay a once-only effect
+   * while still calling whatever the current owner is. */
+  const onLeaveRef = useRef(onLeave)
+  useEffect(() => {
+    onLeaveRef.current = onLeave
+  })
+
+  // Once, on the way out, whatever has changed since: this is the field being
+  // taken off the screen, not a value being reported. Both halves are refs, so
+  // there is nothing for this to depend on.
+  useEffect(() => () => onLeaveRef.current?.(latest.current), [])
 
   const field = useRef<HTMLTextAreaElement>(null)
   const mirror = useRef<HTMLDivElement>(null)

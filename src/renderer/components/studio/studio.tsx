@@ -20,7 +20,6 @@ import { useDock } from "@/lib/dock"
 import { useStudio, type Pane } from "@/lib/store"
 import { useRun } from "@/lib/run/store"
 import { useProjects } from "@/lib/projects"
-import { useWorktrees } from "@/lib/worktree/store"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
 import { Dock } from "./dock"
 import { ProjectCrumbs } from "./project/project-crumbs"
@@ -92,7 +91,6 @@ export function Studio() {
     void useFiles.getState().restore()
     void useProjects.getState().restore()
     void useRun.getState().restore()
-    void useWorktrees.getState().refresh()
     void useWorktreeChats.getState().refresh()
   }, [])
 
@@ -100,7 +98,7 @@ export function Studio() {
   // so its output is subscribed to here rather than in the panel.
   useEffect(() => useRun.getState().listen(), [])
 
-  // A worktree chat's turn runs in the main process and outlives the
+  // A chat's turn runs in the main process and outlives the
   // pane being switched away from, so its lines are subscribed to here.
   useEffect(() => useWorktreeChats.getState().listen(), [])
 
@@ -249,14 +247,13 @@ function Workbench() {
    * Here rather than inside `setActive`, which is where it belongs by rights: a
    * store that reached into `lib/panels.ts` would be a cycle, since that module
    * reads this one's context to work out what is in scope at all. So the
-   * workbench watches the two fields instead, which is the same thing one frame
+   * workbench watches the field instead, which is the same thing one frame
    * later and in the layer that is allowed to know about both.
    */
   const activeFolderId = useProjects((state) => state.activeFolderId)
-  const checkout = useProjects((state) => state.checkout)
   useEffect(() => {
     reconcileScope()
-  }, [activeFolderId, checkout])
+  }, [activeFolderId])
 
   /*
    * The sidebar's own panel, collapsed rather than unmounted.

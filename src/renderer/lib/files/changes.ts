@@ -4,7 +4,6 @@ import { create } from "zustand"
 import type { GitChange } from "@shared/api"
 import { useProjects } from "../projects"
 import { useStudio } from "../store"
-import { useWorktrees } from "../worktree/store"
 import { useGitStatus } from "./git-status"
 import { fileRoots } from "./roots"
 
@@ -40,7 +39,7 @@ import { fileRoots } from "./roots"
  * for a root with a tab open.
  */
 type ChangesState = {
-  /** Keyed by `FileRoot.id`, which is `worktreeId ?? folderId`. */
+  /** Keyed by `FileRoot.id`, which is the folder's id. */
   byRoot: Record<string, GitChange[]>
   /** Roots being read right now, so the tab can say "reading" the first time
    * without saying it on every re-read behind an answer already on screen. */
@@ -56,19 +55,15 @@ type ChangesState = {
   /**
    * Reads one root now.
    *
-   * Takes the three fields it needs rather than a whole `FileRoot` — which
+   * Takes the two fields it needs rather than a whole `FileRoot` — which
    * satisfies this structurally anyway — because the caller is an effect: the
    * root record is rebuilt on every render of the panel, and a dependency on
    * the object would be a `git diff` per render.
    */
-  refresh: (root: {
-    id: string
-    folderId: string
-    worktreeId: string | null
-  }) => Promise<void>
+  refresh: (root: { id: string; folderId: string }) => Promise<void>
 
   /** Opens the diff tab for a root and puts it on screen — a row in the
-   * Explorer's `Changes` list, and a checkout's own menu. */
+   * Explorer's `Changes` list. */
   open: (rootId: string) => void
   select: (rootId: string) => void
   close: (rootId: string) => void
@@ -95,7 +90,7 @@ export const useChanges = create<ChangesState>((set, get) => ({
     }
 
     const changes = await window.desktop
-      .gitChanges(root.folderId, root.worktreeId)
+      .gitChanges(root.folderId)
       .catch(() => [] as GitChange[])
 
     set((state) => ({
@@ -121,28 +116,20 @@ export const useChanges = create<ChangesState>((set, get) => ({
     })
 
     // The pane, or the tab would be selected with nothing drawing it — the same
-    // move a worktree chat makes, and for the same reason: this pane is not a
-    // section, so nothing else shows it.
+    // move a chat makes, and for the same reason: this pane is not a section,
+    // so nothing else shows it.
     useStudio.getState().showPane("changes")
 
     /*
-     * And the workbench works in this checkout.
+     * And the workbench works in this project.
      *
      * A tab in the strip is scoped to its root (`rootOf` in `lib/panels.ts`), so
      * selecting one has to move the context to that root or the tab would be
      * selected and out of scope in the same breath. `useFiles.reveal` and
      * `useWorktreeChats.select` do this for their own tabs already.
      */
-    const worktree = useWorktrees
-      .getState()
-      .worktrees.find((entry) => entry.id === rootId)
-    if (worktree) {
-      useProjects.getState().setActive(worktree.folderId, worktree.id)
-      return
-    }
-    // Not a checkout, so the root is the project folder itself.
     if (useStudio.getState().folders.some((folder) => folder.id === rootId)) {
-      useProjects.getState().setActive(rootId, null)
+      useProjects.getState().setActive(rootId)
     }
   },
 
@@ -214,10 +201,6 @@ useStudio.subscribe((studio, previous) => {
   if (studio.folders !== previous.folders) follow()
 })
 
-useWorktrees.subscribe((state, previous) => {
-  if (state.worktrees !== previous.worktrees) follow()
-})
-
 /**
  * One root's selection, dropped when the file it names is no longer a change.
  *
@@ -242,7 +225,7 @@ export function keepSelected(
  * A hook rather than an effect in the list, because the list is not the only
  * thing that needs the answer: the Explorer's `Changes` **tab** carries the
  * count, so it has to be read while the tree is the tab on screen. One root —
- * the checkout being worked in — so this is one `git status` and one
+ * the project being worked in — so this is one `git status` and one
  * `git diff --numstat` behind the same debounce the colours already pay for.
  *
  * It watches nothing of its own. `useGitStatus` is already debounced behind the
@@ -255,9 +238,7 @@ export function keepSelected(
  * record on every render of the panel: an effect that depended on the object
  * would run `git diff` on every keystroke somewhere else.
  */
-export function useWatchChanges(
-  root: { id: string; folderId: string; worktreeId: string | null } | null
-) {
+export function useWatchChanges(root: { id: string; folderId: string } | null) {
   const refresh = useChanges((state) => state.refresh)
   const status = useGitStatus((state) =>
     root ? state.byRoot[root.id] : undefined
@@ -265,10 +246,9 @@ export function useWatchChanges(
 
   const id = root?.id ?? null
   const folderId = root?.folderId ?? null
-  const worktreeId = root?.worktreeId ?? null
 
   useEffect(() => {
     if (id === null || folderId === null) return
-    void refresh({ id, folderId, worktreeId })
-  }, [refresh, id, folderId, worktreeId, status])
+    void refresh({ id, folderId })
+  }, [refresh, id, folderId, status])
 }

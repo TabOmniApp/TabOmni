@@ -19,7 +19,7 @@ import { SECTION_IDS, type Section } from "@/lib/sections"
  *
  * **There is no Terminal section**, and there is no Terminal panel either: a
  * shell is a tab of the dock, pointed at whichever project was last clicked,
- * and an agent's work happens in a worktree's chat — which draws in a pane of
+ * and an agent's work happens in a project's chat — which draws in a pane of
  * its own with no sidebar of its own.
  *
  * Explorer is first because it is the workspace's own contents — the folders

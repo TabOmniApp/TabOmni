@@ -579,7 +579,13 @@ export function collapse(text: string): string {
 export function describeCall(
   name: string,
   input: unknown
-): { summary: string; title?: string; path?: string } {
+): {
+  summary: string
+  title?: string
+  path?: string
+  stat?: string
+  change?: string
+} {
   const record =
     typeof input === "object" && input !== null
       ? (input as Record<string, unknown>)
@@ -605,7 +611,76 @@ export function describeCall(
     summary,
     ...(title ? { title: collapse(title) } : {}),
     ...(path ? { path } : {}),
+    ...changeOf(name, record),
   }
+}
+
+const CHANGE_LINES = 16
+
+export function changeOf(
+  name: string,
+  record: Record<string, unknown>
+): { stat?: string; change?: string } {
+  const string = (value: unknown): string | null =>
+    typeof value === "string" ? value : null
+
+  /** One edit as its two sides, `null` for a side the call does not have. */
+  const pairs: { old: string | null; now: string | null }[] = []
+
+  if (name === "Edit") {
+    pairs.push({
+      old: string(record.old_string),
+      now: string(record.new_string),
+    })
+  } else if (name === "MultiEdit" && Array.isArray(record.edits)) {
+    for (const edit of record.edits) {
+      const one = edit as Record<string, unknown>
+      pairs.push({ old: string(one?.old_string), now: string(one?.new_string) })
+    }
+  } else if (name === "Write") {
+    pairs.push({ old: null, now: string(record.content) })
+  } else if (name === "NotebookEdit") {
+    pairs.push({ old: null, now: string(record.new_source) })
+  } else {
+    return {}
+  }
+
+  const lines: string[] = []
+  let added = 0
+  let removed = 0
+
+  for (const pair of pairs) {
+    // An empty string is a real side — deleting a block, or writing an empty
+    // file — so the split is guarded on null rather than on falsiness.
+    const before = pair.old === null ? [] : splitLines(pair.old)
+    const after = pair.now === null ? [] : splitLines(pair.now)
+    removed += before.length
+    added += after.length
+
+    for (const line of before) lines.push(`- ${line}`)
+    for (const line of after) lines.push(`+ ${line}`)
+  }
+
+  if (added === 0 && removed === 0) return {}
+
+  const stat = [added > 0 ? `+${added}` : "", removed > 0 ? `−${removed}` : ""]
+    .filter(Boolean)
+    .join(" ")
+
+  const shown = lines.slice(0, CHANGE_LINES)
+  if (lines.length > shown.length) {
+    shown.push(`… ${lines.length - shown.length} more`)
+  }
+
+  return { stat, change: shown.join("\n") }
+}
+
+/** The lines of one side of an edit. A trailing newline is the end of the last
+ * line rather than an empty line after it, which is what `split` would make of
+ * it — and an empty side has no lines at all. */
+function splitLines(text: string): string[] {
+  if (text === "") return []
+  return text.replace(/\n$/, "").split("\n")
 }
 
 /**

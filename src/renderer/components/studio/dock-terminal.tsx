@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef } from "react"
-import { GitBranch, RotateCw, X } from "lucide-react"
+import { RotateCw, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { useDock } from "@/lib/dock"
 import { useShells, type Shell } from "@/lib/shell/store"
 import { useStudio } from "@/lib/store"
-import { useWorktrees } from "@/lib/worktree/store"
 import { IconButton } from "./icon-button"
 import { TerminalView, type TerminalHandle } from "./terminal-view"
 
@@ -77,13 +76,11 @@ export function DockTerminal() {
  *
  * Said in the panel rather than left to the prompt: the whole point of this tab
  * is that it follows the project, so the one thing a reader has to be able to
- * check at a glance is which one it followed. The branch when it is a worktree,
- * because that is what a checkout is known by.
+ * check at a glance is which one it followed.
  */
 function Where({ id }: { id: string | null }) {
   const shells = useShells((state) => state.shells)
   const folders = useStudio((state) => state.folders)
-  const worktrees = useWorktrees((state) => state.worktrees)
   const restart = useShells((state) => state.restart)
   const close = useShells((state) => state.close)
 
@@ -92,21 +89,12 @@ function Where({ id }: { id: string | null }) {
 
   const project =
     folders.find((folder) => folder.id === shell.folderId)?.name ?? "project"
-  const branch = shell.worktreeId
-    ? worktrees.find((worktree) => worktree.id === shell.worktreeId)?.branch
-    : null
 
   return (
     <div className="flex h-7 shrink-0 items-center gap-1.5 border-b px-2">
       <span className="min-w-0 truncate text-[0.7rem] text-muted-foreground">
         {project}
       </span>
-      {branch && (
-        <span className="flex min-w-0 items-center gap-1 text-[0.7rem] text-muted-foreground">
-          <GitBranch className="size-3 shrink-0" />
-          <span className="truncate font-mono">{branch}</span>
-        </span>
-      )}
       {shell.exited && (
         <span className="shrink-0 text-[0.7rem] text-muted-foreground/70">
           exited
@@ -145,7 +133,7 @@ function ShellView({ shell }: { shell: Shell }) {
   // so writes go through a ref rather than state.
   const terminalId = useRef<string | null>(null)
 
-  const { id, folderId, worktreeId } = shell
+  const { id, folderId } = shell
 
   const onReady = useCallback(
     (terminal: TerminalHandle) => {
@@ -154,12 +142,7 @@ function ShellView({ shell }: { shell: Shell }) {
       let unsubscribeExit: (() => void) | undefined
 
       void window.desktop
-        .terminalCreate(
-          folderId,
-          terminal.cols,
-          terminal.rows,
-          worktreeId ?? undefined
-        )
+        .terminalCreate(folderId, terminal.cols, terminal.rows)
         .then((created) => {
           // The pane unmounted while the shell was starting; it would otherwise
           // be left running with nothing reading it.
@@ -205,7 +188,7 @@ function ShellView({ shell }: { shell: Shell }) {
         if (current) void window.desktop.terminalKill(current)
       }
     },
-    [id, folderId, worktreeId, setExited]
+    [id, folderId, setExited]
   )
 
   const onResize = useCallback((size: { cols: number; rows: number }) => {

@@ -9,7 +9,6 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { useStudio } from "@/lib/store"
 import { cn } from "@/lib/utils"
-import { useWorktrees } from "@/lib/worktree/store"
 import { blocksOf } from "@/lib/worktree-chat/activity"
 import { placeOf, useWorktreeChats } from "@/lib/worktree-chat/store"
 import { totalOf, usageDetail, usageLine } from "@/lib/worktree-chat/usage"
@@ -20,10 +19,10 @@ import { ChatMessage } from "./chat-message"
 import { WorktreeWelcome } from "./worktree-welcome"
 
 /**
- * A worktree's chat: the pane the strip's chat tabs draw into.
+ * A project's chat: the pane the strip's chat tabs draw into.
  *
  * The conversation is hosted rather than tailed — one agent-SDK turn at a time
- * in the checkout's own directory, streamed back a message at a time (see
+ * in the project's own directory, streamed back a message at a time (see
  * `main/worktree-chat.ts`). So this is the app's own chat UI rather than a
  * reader: a session's chat view tails the transcript the interactive CLI
  * writes, and therefore cannot be anything else.
@@ -33,14 +32,13 @@ import { WorktreeWelcome } from "./worktree-welcome"
  * removed, and came here with it: this is the only chat left in the app.
  *
  * One pane for every chat, keyed by which one the strip has selected — the tabs
- * above it are `lib/panels.ts`'s, grouped by worktree, so the outer tab is the
- * branch and the strip inside it is that checkout's conversations.
+ * above it are `lib/panels.ts`'s, gathered under the project when grouping is
+ * switched on.
  */
 export function WorktreeChatPane() {
   const chats = useWorktreeChats((state) => state.chats)
   const selectedId = useWorktreeChats((state) => state.selectedId)
   const openIds = useWorktreeChats((state) => state.openIds)
-  const worktrees = useWorktrees((state) => state.worktrees)
 
   const shown =
     selectedId && openIds.includes(selectedId)
@@ -55,7 +53,7 @@ export function WorktreeChatPane() {
       <div className="grid h-full place-items-center p-6">
         <p className="max-w-xs text-center text-xs text-muted-foreground">
           That chat has been deleted. Pick another from the strip, or start one
-          from its worktree.
+          from its project.
         </p>
       </div>
     )
@@ -67,7 +65,7 @@ export function WorktreeChatPane() {
       // The chat's own place rather than the workbench's: a chat tab can be on
       // screen for a moment before the context has followed it, and the caption
       // saying what this turn may do has to be about *this* chat.
-      place={placeOf(shown, worktrees)}
+      place={placeOf(shown)}
       // Through `chatOptions` on both sides of the contract: main builds the
       // turn's argument list out of the same reading, and a toolbar showing
       // `Edits` over a turn that ran as a plan is the one disagreement worth
@@ -97,14 +95,14 @@ const placeholderFor = (permission: ChatPermission, where: string): string =>
  * The line under the composer: what this chat's next turn may do, in the words
  * somebody would want to have read before it ran.
  *
- * The last two are the reason this takes the place at all. "In this branch only"
- * is the isolation argument, and in a project's own working tree there is none —
- * the directory *is* the branch they have checked out — so the caption there has
- * to say that instead of borrowing a reassurance that does not hold. See
- * `SYSTEM_PROMPTS` in `main/worktree-chat.ts`, which stops making the same claim
- * to the model.
+ * The last two say **where**, and that is the point of them. There was a second
+ * wording for a chat in a `git worktree` checkout — "in this branch only",
+ * which is the isolation argument — and it does not hold here: the directory
+ * *is* the branch the user has checked out, so the caption says so rather than
+ * borrowing a reassurance. See `SYSTEM_PROMPT` in `main/worktree-chat.ts`,
+ * which tells the model the same thing.
  */
-function captionFor(permission: ChatPermission, isolated: boolean): string {
+function captionFor(permission: ChatPermission): string {
   switch (permission) {
     case "plan":
       return "Plan mode: this turn reads and changes nothing"
@@ -113,13 +111,9 @@ function captionFor(permission: ChatPermission, isolated: boolean): string {
     case "ask":
       return "Reading runs freely; edits and commands will stop and ask you"
     case "edits":
-      return isolated
-        ? "Edits and commands run without asking, in this branch only"
-        : "Edits and commands run without asking, in this project's own working tree"
+      return "Edits and commands run without asking, in this project's own working tree"
     case "full":
-      return isolated
-        ? "Full access: nothing is asked, in this branch only"
-        : "Full access: nothing is asked, in this project's own working tree"
+      return "Full access: nothing is asked, in this project's own working tree"
   }
 }
 
@@ -140,26 +134,26 @@ function Conversation({
   const stop = useWorktreeChats((state) => state.stop)
   const answer = useWorktreeChats((state) => state.answer)
   const setOptions = useWorktreeChats((state) => state.setOptions)
+  /**
+   * This chat's unsent draft — what was typed and left, or a message written
+   * *for* the user: the `Changes` pane's review, which `Ask AI to fix` puts in
+   * the field rather than sending (`drafts` on the store).
+   *
+   * Read here and handed down as the field's initial value, which is why the
+   * composer is keyed by the chat below: a draft belongs to the conversation it
+   * was written in, and the same field instance carried across a switch is how
+   * one chat's half-written message came to sit under another one's.
+   */
+  const seeded = useWorktreeChats((state) => state.drafts[chatId])
+  const keepDraft = useWorktreeChats((state) => state.keepDraft)
+  const clearDraft = useWorktreeChats((state) => state.clearDraft)
 
   // Where the file picker opens and what a picked path is written relative to.
-  // The record's own path rather than one built here: a checkout lives under
-  // `~/.tabomni/workspace/worktrees/`, which is not something to reconstruct in
-  // two places.
-  const worktreePath = useWorktrees((state) =>
-    state.worktrees.find((entry) => entry.id === place?.worktreeId)
-  )?.path
-  const folderPath = useStudio((state) =>
+  // The record's own path rather than one built here, and undefined for a
+  // project that has left the workspace — there is nowhere to resolve against.
+  const root = useStudio((state) =>
     state.folders.find((entry) => entry.id === place?.folderId)
   )?.path
-  // Not a `??` chain: a chat in a checkout whose directory has gone must not
-  // start writing paths relative to the project's own, which is a different
-  // repository state with the same file names.
-  const root = place?.worktreeId ? worktreePath : folderPath
-
-  // A place that has gone reads as a checkout, which is what every chat was
-  // until now — nothing runs in it either way, and the alternative is a caption
-  // naming the user's own working tree for a directory nobody can resolve.
-  const isolated = place === null || place.worktreeId !== null
 
   const box = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
@@ -229,27 +223,38 @@ function Conversation({
       <div className="shrink-0 border-t p-3">
         <div className="mx-auto w-full max-w-2xl space-y-1.5">
           <ChatComposer
+            // One field per chat: its draft is that chat's, and a field kept
+            // across a switch is one draft shared by every conversation.
+            key={chatId}
+            initialDraft={seeded ?? ""}
+            // The field on its way out — switching chats, or this panel being
+            // taken down — hands back what was in it, and that is what makes
+            // coming back to a chat find the sentence you left in it.
+            onLeave={(text) => keepDraft(chatId, text)}
             sending={sending}
-            onSend={(text) => void send(chatId, text)}
+            onSend={(text) => {
+              // Before the send, so the draft cannot outlive the message: the
+              // field empties itself, and this is what stops a rebuild of it
+              // putting the sent text back.
+              clearDraft(chatId)
+              void send(chatId, text)
+            }}
             onStop={() => stop(chatId)}
             placeholder={
               ask
                 ? "Answer above to carry on…"
-                : placeholderFor(
-                    options.permission,
-                    isolated ? "this checkout" : "this project"
-                  )
+                : placeholderFor(options.permission, "this project")
             }
             options={options}
             onOptions={(next) => setOptions(chatId, next)}
             attachRoot={root}
           />
 
-          {/* Said plainly rather than left implicit: a turn here edits files and
-              runs commands without asking, and the only reason that is
-              acceptable is that this is a branch of its own. It has to follow
-              the permission rather than describe the usual one — a caption that
-              lies about the turn is worse than none, in either direction. */}
+          {/* Said plainly rather than left implicit: a turn here edits files
+              and runs commands without asking, in the working tree the user
+              has open. It has to follow the permission rather than describe the
+              usual one — a caption that lies about the turn is worse than none,
+              in either direction. */}
           <div className="flex items-baseline justify-between gap-3 px-1 text-[0.7rem]">
             <p
               className={cn(
@@ -261,7 +266,7 @@ function Conversation({
             >
               {ask
                 ? "The turn is waiting on your answer. Stop ends it instead."
-                : captionFor(options.permission, isolated)}
+                : captionFor(options.permission)}
             </p>
 
             {/* Beside the caption rather than at the end of the transcript: the

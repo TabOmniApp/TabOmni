@@ -9,23 +9,21 @@ import {
   type WorktreeChatAsk,
   type WorkspaceFolder,
   type WorktreeChatOptions,
-  type WorktreeRecord,
 } from "@shared/api"
 import { useProjects } from "../projects"
 import { useShells } from "../shell/store"
 import { useStudio } from "../store"
-import { useWorktrees } from "../worktree/store"
 
 /**
- * The chats held in worktrees.
+ * The chats held in the workspace's projects.
  *
  * A view of what `main/worktree-chat.ts` owns. The turn runs in the
  * main process, so this holds no process and no timers — only the listing, the
  * lines of whichever chats have been opened, and which chat is on screen.
  *
- * **Many** conversations at once: a worktree exists so a piece of work can run
- * in isolation, and several of them answering in parallel is the point rather
- * than an edge case. So everything here is keyed by chat id.
+ * **Many** conversations at once: several chats answering in parallel is the
+ * point rather than an edge case — a question about one project while another
+ * is being refactored. So everything here is keyed by chat id.
  */
 type WorktreeChatState = {
   chats: WorktreeChat[]
@@ -61,15 +59,40 @@ type WorktreeChatState = {
   reorder: (ids: string[]) => void
 
   /**
-   * Opens a place's chat: the one it was last on, or a new one.
+   * What is typed into a chat's composer and not yet sent, by chat id.
    *
-   * What a worktree row does, and what `New chat` on a project does. Resolves
-   * once there is something on screen, so a caller can await it before it moves
-   * the pane.
+   * **Per chat, which it was not.** The composer held one local draft and the
+   * pane was never keyed, so a half-written message followed you into the next
+   * chat you clicked and sat under its own field — one draft shared by every
+   * conversation. Here it belongs to the chat it was written in: switching tabs
+   * and coming back finds it, and switching away does not carry it.
+   *
+   * It is also how a message can be written *for* somebody: the `Changes` pane's
+   * `Ask AI to fix` opens a chat with the whole review already in the field and
+   * unsent, so the last word is still the reader's — a prompt assembled by a
+   * button is exactly the kind that wants a sentence added before it goes. Which
+   * is why `create` takes one and writes it in the same `set` as the chat: the
+   * composer reads this as its initial value, and a draft arriving a render
+   * later would arrive after the field had been built empty.
    */
-  openPlace: (place: ChatPlace) => Promise<void>
-  /** Another chat in the same place — the `+` in the strip. */
-  create: (place: ChatPlace) => Promise<void>
+  drafts: Record<string, string>
+  /** Keeps what is in a field — the composer on its way out. Empty text forgets
+   * the entry rather than storing one. */
+  keepDraft: (chatId: string, text: string) => void
+  /** Forgets one, so a field rebuilt later comes up empty rather than repeating
+   * a message that has already been sent. */
+  clearDraft: (chatId: string) => void
+
+  /**
+   * Another chat in the same place — the `+` in the strip.
+   *
+   * `draft` is text for its composer rather than a message: it is put in the
+   * field, not sent. Resolves to the new chat's id, or null if it could not be
+   * started — a caller that has something to *say* in it needs to name it, and
+   * reading `selectedId` back would be a guess at whether this call is what put
+   * it there.
+   */
+  create: (place: ChatPlace, draft?: string) => Promise<string | null>
   remove: (id: string) => Promise<void>
 
   send: (id: string, prompt: string) => Promise<void>
@@ -94,6 +117,7 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
   chats: [],
   loading: false,
   messages: {},
+  drafts: {},
   sending: [],
   asks: {},
   openIds: [],
@@ -117,31 +141,30 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
       selectedId: id,
     })
 
-    // The pane too, or clicking a worktree row would select a chat nothing is
+    // The pane too, or clicking a chat row would select a chat nothing is
     // drawing: `worktree` is not a section, so it is only ever reached from a
     // list in somebody else's sidebar, and this is the only thing that shows
     // it. Leaves the sections alone, as a session's pane does.
     useStudio.getState().showPane("worktree")
 
     /*
-     * And the workbench works in this chat's checkout.
+     * And the workbench works in this chat's project.
      *
-     * Here rather than only on the worktree row that used to be the one way in.
-     * A chat is now an ordinary tab in the one strip — its panel stopped
-     * grouping by branch, so the strip no longer says which checkout a chat is
-     * in — and switching to one left the crumb, the Explorer's root and the
-     * dock's shell wherever they were. The last of those is the one that matters:
-     * a chat edits its own branch with `acceptEdits`, and a terminal beside it
-     * pointed at another checkout is a trap, not an inconvenience.
+     * Here rather than only on the row in the left column that used to be the
+     * one way in: a chat is an ordinary tab in the strip, and switching to one
+     * left the crumb, the Explorer's root and the dock's shell wherever they
+     * were. The last of those is the one that matters — a chat edits its
+     * project with `acceptEdits`, and a terminal beside it pointed at another
+     * project is a trap, not an inconvenience.
      *
      * This is what `useFiles.reveal` already does for a file tab, for the same
-     * reason — the tree draws one checkout, so putting something from another one
-     * on screen has to move that selection first.
+     * reason — the tree draws one project, so putting something from another
+     * one on screen has to move that selection first.
      */
-    const place = chat ? placeOf(chat, useWorktrees.getState().worktrees) : null
+    const place = chat ? placeOf(chat) : null
     if (place) {
-      useProjects.getState().setActive(place.folderId, place.worktreeId)
-      useShells.getState().showFor(place.folderId, place.worktreeId)
+      useProjects.getState().setActive(place.folderId)
+      useShells.getState().showFor(place.folderId)
     }
 
     // Read once per run. The main process holds the lines and appends to them,
@@ -185,33 +208,37 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     set({ openIds: ids.filter((id) => open.has(id)) })
   },
 
-  async openPlace(place) {
-    if (get().chats.length === 0) await get().refresh()
-
-    const own = chatsOf(get().chats, place.worktreeId ?? place.folderId)
-    // The most recently touched, which is where somebody left off.
-    const last = [...own].sort((a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt)
-    )[0]
-
-    if (last) {
-      get().select(last.id)
-      return
-    }
-    await get().create(place)
-  },
-
-  async create(place) {
+  async create(place, draft) {
     try {
       const chat = await window.desktop.createWorktreeChat(place)
       set({
         chats: [...get().chats, chat],
         messages: { ...get().messages, [chat.id]: [] },
+        // In the same write as the chat: the composer takes this as its initial
+        // value, and one landing a render later would land after the field had
+        // been built empty.
+        drafts: draft ? { ...get().drafts, [chat.id]: draft } : get().drafts,
       })
       get().select(chat.id)
+      return chat.id
     } catch (error) {
       console.error("Could not start a chat", error)
+      return null
     }
+  },
+
+  keepDraft(chatId, text) {
+    if (!text) {
+      get().clearDraft(chatId)
+      return
+    }
+    if (get().drafts[chatId] === text) return
+    set({ drafts: { ...get().drafts, [chatId]: text } })
+  },
+
+  clearDraft(chatId) {
+    if (get().drafts[chatId] === undefined) return
+    set({ drafts: without(get().drafts, chatId) })
   },
 
   async remove(id) {
@@ -222,7 +249,11 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     const { messages } = get()
     const rest = { ...messages }
     delete rest[id]
-    set({ chats: get().chats.filter((chat) => chat.id !== id), messages: rest })
+    set({
+      chats: get().chats.filter((chat) => chat.id !== id),
+      messages: rest,
+      drafts: without(get().drafts, id),
+    })
     get().close(id)
   },
 
@@ -377,6 +408,8 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
                   toolId: event.toolId,
                   title: event.title,
                   path: event.path,
+                  stat: event.stat,
+                  change: event.change,
                 }
               : event.type === "usage"
                 ? {
@@ -409,56 +442,32 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
   },
 }))
 
-/** One place's chats, oldest first — the strip inside its tab. Keyed by root id
- * (`worktreeId ?? folderId`), which is what a chat's group and scope are. */
+/** One project's chats, oldest first. Keyed by root id, which for a chat is
+ * its folder — the same key its group and its scope use. */
 export function chatsOf(chats: WorktreeChat[], rootId: string): WorktreeChat[] {
   return chats.filter((chat) => chatRootId(chat) === rootId)
 }
 
 /**
- * The place a record names, with the folder filled in for a chat that predates
- * the field.
+ * The place a record names.
  *
- * The lookup is why this is not `chatRootId`: a chat written before a chat could
- * be in a project has only its worktree, and everything that moves the workbench
- * — the crumb, the Explorer's root, the dock's shell — is asked for a folder and
- * a checkout rather than for one id. Null once the worktree it names has been
- * removed, which is the frame before its chats close.
- *
- * Takes the worktrees rather than reading them, so a component can subscribe to
- * the list it is answered from: the listing arrives after the chats do on a
- * launch, and a place resolved off a snapshot would stay null.
+ * Null for a record naming none — a chat written while chats lived in a
+ * `git worktree` checkout has only that checkout's id, and there is nowhere
+ * left to run its next turn. Its lines are still on disk and still readable.
  */
-export function placeOf(
-  chat: WorktreeChat,
-  worktrees: WorktreeRecord[]
-): ChatPlace | null {
-  if (chat.worktreeId === null) {
-    return chat.folderId ? { folderId: chat.folderId, worktreeId: null } : null
-  }
-
-  const worktree = worktrees.find((entry) => entry.id === chat.worktreeId)
-  if (worktree) {
-    return { folderId: worktree.folderId, worktreeId: worktree.id }
-  }
-  return chat.folderId
-    ? { folderId: chat.folderId, worktreeId: chat.worktreeId }
-    : null
+export function placeOf(chat: WorktreeChat): ChatPlace | null {
+  const rootId = chatRootId(chat)
+  return rootId ? { folderId: rootId } : null
 }
 
 /** The place a root id names, for the callers that have only the id: the `+` at
  * the end of a group's strip, and `New chat` on a row. */
 export function placeOfRoot(
   rootId: string,
-  folders: WorkspaceFolder[],
-  worktrees: WorktreeRecord[]
+  folders: WorkspaceFolder[]
 ): ChatPlace | null {
-  const worktree = worktrees.find((entry) => entry.id === rootId)
-  if (worktree) {
-    return { folderId: worktree.folderId, worktreeId: worktree.id }
-  }
   const folder = folders.find((entry) => entry.id === rootId)
-  return folder ? { folderId: folder.id, worktreeId: null } : null
+  return folder ? { folderId: folder.id } : null
 }
 
 /** One key dropped from a record. Written out because the destructuring form

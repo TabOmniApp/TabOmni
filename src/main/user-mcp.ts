@@ -21,16 +21,14 @@ import type { UserMcpServer } from "../shared/api"
  * **Where they live.** `~/.claude.json`, which is where `claude mcp add`
  * writes: `mcpServers` at the top level for the `user` scope, and
  * `projects.<dir>.mcpServers` for one added under a particular directory. Both
- * are listed, because a worktree is not any of those directories — a checkout
- * lives under `~/.tabomni/workspace/worktrees/`, so a server added under the
- * project it is a branch of would never be found by directory, and matching by
- * directory would also mean the list changed as the left column was clicked
- * around. The switch is the workspace's, so the list is too.
+ * are listed, because matching by directory would mean the list changed as the
+ * left column was clicked around — and a workspace holds several projects at
+ * once. The switch is the workspace's, so the list is too.
  *
  * A `.mcp.json` in a repository is deliberately not read. That file is the
  * project's own, checked in and shared, and copying a server out of it because
- * a checkout happened to be selected is the inheriting this app refuses. Adding
- * it with `claude mcp add` is what says yes to it.
+ * that project happened to be selected is the inheriting this app refuses.
+ * Adding it with `claude mcp add` is what says yes to it.
  */
 
 /** What a server looks like in the CLI's config: this app never interprets it

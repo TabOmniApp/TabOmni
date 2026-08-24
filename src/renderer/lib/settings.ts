@@ -80,7 +80,7 @@ type SettingsState = Stored & {
    * default for a frame and correcting itself. */
   loaded: boolean
 
-  /** Whether a turn's tool calls are drawn in a worktree's chat
+  /** Whether a turn's tool calls are drawn in a project's chat
    * (`ChatMessage`). */
   showToolCalls: boolean
   /** Whether the model's reasoning is drawn beside them. Its own switch rather

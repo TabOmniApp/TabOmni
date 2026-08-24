@@ -28,7 +28,6 @@ import {
   neighbour,
   PREFIX,
 } from "./tabs"
-import { useWorktrees } from "./worktree/store"
 import { useWorktreeChats } from "./worktree-chat/store"
 
 /**
@@ -59,6 +58,15 @@ type PanelTabs = {
   active: () => string | null
   /** Puts one on screen, and the pane on this panel with it. */
   select: (id: string) => void
+  /**
+   * Keeps a tab the panel was only previewing — a double click on it.
+   *
+   * Only the Explorer has one: a file reached by a single click in the tree is
+   * a look rather than an open, and every other panel's tabs are opened
+   * deliberately from a list of things that already exist. A panel without one
+   * simply has nothing for the second click to do.
+   */
+  keep?: (id: string) => void
   close: (id: string) => void
   closeOthers: (id: string) => void
   closeAll: () => void
@@ -68,25 +76,26 @@ type PanelTabs = {
    * grouping them. A panel without one is never grouped; all five have one.
    *
    * What a folder *is* differs: the workspace folder a file sits in, the
-   * checkout a chat is having its conversation in, the folder in the panel's
+   * project a chat is having its conversation in, the folder in the panel's
    * own tree a request or a note is filed under, the schema a table belongs to.
    * `NO_GROUP` is the tab that is under none of them.
    */
   groupOf?: (id: string) => string
   /**
-   * The **root** one of this panel's tabs belongs to — a workspace folder or one
-   * of its `git worktree` checkouts — or null when the tab is not in one.
+   * The **root** one of this panel's tabs belongs to — a workspace folder — or
+   * null when the tab is not in one.
    *
-   * What makes the strip per checkout. A panel that leaves this off is a panel
+   * What makes the strip per project. A panel that leaves this off is a panel
    * whose tabs belong to the *workspace*: a table, a saved request and a note
-   * are the workspace's by deliberate design, so they stay in the strip whatever
-   * branch is being worked in, and a half-written query does not vanish because
-   * somebody changed checkout. Only the two panels whose tabs are genuinely a
-   * checkout's have one — a file, and a chat that edits a branch.
+   * are the workspace's by deliberate design, so they stay in the strip
+   * whatever project is being worked in, and a half-written query does not
+   * vanish because somebody clicked another one. Only the two panels whose tabs
+   * are genuinely a project's have one — a file, and a chat that edits it.
    *
-   * Null rather than absent for a tab whose root has *gone*: the frame between a
-   * checkout leaving the workspace and its tabs closing. Such a tab stays in the
-   * strip, because the alternative is a tab that exists and cannot be reached.
+   * Null rather than absent for a tab whose root has *gone*: the frame between
+   * a project leaving the workspace and its tabs closing. Such a tab stays in
+   * the strip, because the alternative is a tab that exists and cannot be
+   * reached.
    */
   rootOf?: (id: string) => string | null
 }
@@ -132,14 +141,9 @@ const noteActive = (state: NoteState): string | null =>
     : null
 
 /**
- * The **root** a file is in: a workspace folder, or one of its `git worktree`
- * checkouts (`lib/files/roots.ts`, which takes the longest match — a folder
- * added inside another one is still a project of its own).
- *
- * A checkout groups on its own rather than under the project it was cut from,
- * because that is what the group is for: the same `src/index.ts` open on two
- * branches is two tabs, and gathering both under one folder tab would put two
- * identical names in one strip.
+ * The **root** a file is in: a workspace folder (`lib/files/roots.ts`, which
+ * takes the longest match — a folder added inside another one is still a
+ * project of its own).
  *
  * Every file the Explorer can open is inside a root (`fileRoots` in
  * `main/ipc.ts` is what guarantees it), so `NO_GROUP` here is the frame between
@@ -192,14 +196,7 @@ const dbGroupOf = (id: string): string => {
 const noteGroupOf = (id: string): string =>
   useNotes.getState().notes.find((note) => note.id === id)?.folderId ?? NO_GROUP
 
-/**
- * The chat the strip has selected.
- *
- * Its group is the checkout it is in rather than the project: a project can
- * have several, and three chats in one of them gather into that one's tab.
- * Prefixed so a worktree id can never collide with a folder id: both are
- * uuids, and a group is only ever compared as a string.
- */
+/** The chat the strip has selected. */
 const worktreeChatActive = (
   state: ReturnType<typeof useWorktreeChats.getState>
 ): string | null =>
@@ -222,7 +219,7 @@ const fileRootOf = (filePath: string): string | null =>
   rootOfPath(fileRoots(), filePath)?.id ?? null
 
 /** The place a chat is in. A chat's root id *is* a `FileRoot.id` — both are
- * `worktreeId ?? folderId` — so no translation is needed. */
+ * the project's folder id — so no translation is needed. */
 const worktreeChatRootOf = (id: string): string | null => {
   const chat = useWorktreeChats
     .getState()
@@ -230,15 +227,16 @@ const worktreeChatRootOf = (id: string): string | null => {
   return chat ? chatRootId(chat) : null
 }
 
-/** The place a chat belongs to. */
+/** The place a chat belongs to. Prefixed so a chat's group can never collide
+ * with a group of any other panel's, which are only ever compared as strings. */
 const worktreeChatGroupOf = (id: string): string => {
   const root = worktreeChatRootOf(id)
   return root ? `w:${root}` : NO_GROUP
 }
 
 /** The place a group names, or null when it is not one of a chat's — what the
- * strip's label and the pane's welcome block ask. Its id is a root's, so it is a
- * checkout or a project and the caller looks up which. */
+ * strip's label and the pane's welcome block ask. Its id is a root's, which is
+ * a project. */
 export function groupRootId(group: string): string | null {
   return group.startsWith("w:") ? group.slice(2) : null
 }
@@ -253,8 +251,8 @@ const PANELS: Record<Pane, PanelTabs> = {
     closeAll: () => useChanges.getState().closeAll(),
     reorder: (ids) => useChanges.getState().reorder(ids),
     // The tab's id **is** the root's, so this is the identity — an
-    // `Changes` tab is about one checkout and belongs in the strip exactly
-    // while that checkout is the one being worked in.
+    // `Changes` tab is about one project and belongs in the strip exactly
+    // while that project is the one being worked in.
     rootOf: (id) => id,
   },
   files: {
@@ -263,6 +261,7 @@ const PANELS: Record<Pane, PanelTabs> = {
     // reached from the strip after its document was pruned, has to be read
     // before the pane has anything to draw. Reading one already held is a no-op.
     select: (id) => void useFiles.getState().open(id),
+    keep: (id) => useFiles.getState().keep(id),
     active: () => fileActive(useFiles.getState()),
     close: (id) => useFiles.getState().close(id),
     closeOthers: (id) => useFiles.getState().closeOthers(id),
@@ -297,16 +296,7 @@ const PANELS: Record<Pane, PanelTabs> = {
     reorder: (ids) => useApi.getState().reorder(ids),
     groupOf: apiGroupOf,
   },
-  /*
-   * A checkout's chats.
-   *
-   * The one panel that is grouped whatever the setting says: a chat stands for
-   * a conversation in a worktree rather than for something the user opened, and
-   * five of them across two checkouts must not be five of a strip five panels
-   * share. Grouped by **worktree**, so the outer tab is the branch and the strip
-   * inside it is that checkout's chats — which is the arrangement the whole
-   * feature is about.
-   */
+  /* A project's chats, grouped under it when grouping is switched on. */
   worktree: {
     open: () => useWorktreeChats.getState().openIds,
     active: () => worktreeChatActive(useWorktreeChats.getState()),
@@ -356,30 +346,23 @@ const STORES = {
  * `shownRootOf` and not a field of its own, because that is what the Explorer
  * draws and what the crumb in the title bar names: the strip has to agree with
  * both, including their fallbacks — the first project when nothing is picked, a
- * project's own working tree for a checkout that has gone.
+ * project when the remembered one has gone.
  */
 function activeRootId(): string | null {
   const { folders } = useStudio.getState()
-  const { checkout, activeFolderId } = useProjects.getState()
-  return (
-    shownRootOf(
-      folders,
-      useWorktrees.getState().worktrees,
-      checkout,
-      activeFolderId
-    )?.id ?? null
-  )
+  const { activeFolderId } = useProjects.getState()
+  return shownRootOf(folders, activeFolderId)?.id ?? null
 }
 
 /**
  * Whether one of a panel's tabs belongs in the strip right now.
  *
- * The strip is **per checkout** for the two panels whose tabs are a checkout's
+ * The strip is **per project** for the two panels whose tabs are a project's
  * — see `rootOf` on `PanelTabs`. Everything else is the workspace's and is
  * always in.
  *
  * "In the strip" is not "open": the tab stays open, its editor keeps its
- * document and its unsaved edits, and coming back to that checkout shows it
+ * document and its unsaved edits, and coming back to that project shows it
  * again. That distinction is the one `lib/files/roots.ts` was split for —
  * `shownRootOf` is what is drawn, `fileRootsOf` is what may be read — and this
  * is the same line drawn one level up.
@@ -397,7 +380,7 @@ function inScope(pane: Pane, id: string): boolean {
   return own === null || own === root
 }
 
-/** What a panel has in the strip: its own tabs, less the other checkouts'. */
+/** What a panel has in the strip: its own tabs, less the other projects'. */
 function openInScope(pane: Pane): string[] {
   return PANELS[pane].open().filter((id) => inScope(pane, id))
 }
@@ -496,6 +479,30 @@ export function selectTab(id: string) {
 }
 
 /**
+ * Keeps the tab a double click landed on — see `PanelTabs.keep`.
+ *
+ * A group's own tab keeps the member it is showing, which is the same thing
+ * `selectTab` does with a group: the tab stands for whichever of its members is
+ * on screen, and that is the one the click was about.
+ */
+export function keepTab(id: string) {
+  const kind = kindOf(id)
+  if (!kind) return
+
+  const keep = PANELS[kind].keep
+  if (!keep) return
+
+  const own = bare(id, kind)
+  if (!isGroup(own)) {
+    keep(own)
+    return
+  }
+
+  const member = shownMember(kind, bareGroup(own))
+  if (member !== null) keep(member)
+}
+
+/**
  * Closes one tab, and leaves the pane showing something.
  *
  * Each panel already picks its own next tab, which is what should happen while
@@ -591,11 +598,11 @@ export function closeShownTab(id: string) {
 }
 
 /**
- * Closes every tab a panel has **in the strip**, leaving another checkout's
+ * Closes every tab a panel has **in the strip**, leaving another project's
  * alone.
  *
  * One `close` per tab rather than the panel's own `closeAll`, which replaces the
- * whole list: "all" here means all of what is on screen, and a checkout nobody
+ * whole list: "all" here means all of what is on screen, and a project nobody
  * is looking at is not on screen. The fast path is kept for the common case,
  * where nothing is out of scope and the panel can drop its list in one write.
  */
@@ -614,7 +621,7 @@ function closeAllInScope(pane: Pane) {
  * "Others" is the strip, so the other four panels lose all of theirs, and the
  * kept tab is selected at the end: it may well belong to a panel that was not
  * the one on screen. The strip is what is *drawn*, so this stops at the
- * checkout's edge too — a menu item cannot close tabs the menu was not opened
+ * project's edge too — a menu item cannot close tabs the menu was not opened
  * over.
  */
 export function closeOtherTabs(id: string) {
@@ -676,7 +683,7 @@ export function reorderTabs(ids: string[]) {
         ? orderGroups(PANELS[pane].open(), of, own.map(bareGroup))
         : // `own` is only what the strip was drawing, so it cannot be handed
           // straight to a `reorder` that replaces the panel's whole list — the
-          // other checkouts' tabs would close on a drag. Written back into the
+          // other projects' tabs would close on a drag. Written back into the
           // slots they already hold instead.
           orderWhere(PANELS[pane].open(), (id) => inScope(pane, id), own)
     )
@@ -765,10 +772,10 @@ export function useActiveTabId(pane: Pane): string | null {
   const own = usePanelActive(pane)
   if (own === null) return null
 
-  // A tab from another checkout is not in the strip, so it cannot be the tab
+  // A tab from another project is not in the strip, so it cannot be the tab
   // the strip is marking. The pane draws `NothingOpen` for it until
   // `reconcileScope` has picked something that is — or straight away, when this
-  // checkout has nothing open at all.
+  // project has nothing open at all.
   if (!inScope(pane, own)) return null
 
   const of = grouper(pane)
@@ -791,9 +798,9 @@ function usePanelActive(pane: Pane): string | null {
 /**
  * What the strip's **scope** is a question about, subscribed to.
  *
- * Which checkout is being worked in, and what checkouts there are — the two
+ * Which project is being worked in, and what projects there are — the two
  * things `activeRootId` reads that no panel's own store knows. Without this a
- * strip would keep the tabs of the branch it was on until something else
+ * strip would keep the tabs of the project it was on until something else
  * happened to redraw it.
  *
  * Called for the subscription alone; the value is read back through `getState`
@@ -801,8 +808,6 @@ function usePanelActive(pane: Pane): string | null {
  */
 function useScope() {
   useProjects((state) => state.activeFolderId)
-  useProjects((state) => state.checkout)
-  useWorktrees((state) => state.worktrees)
   useStudio((state) => state.folders)
 }
 
@@ -879,7 +884,7 @@ export function useShownGroup(pane: Pane) {
 /**
  * Whether anything at all is in the strip.
  *
- * In the strip, not open: a checkout whose only tabs belong to another branch
+ * In the strip, not open: a project whose only tabs belong to another one
  * has an empty strip, and the pane says `Nothing open` rather than
  * `No tab open` — which is the truthful pair of words for it, since there is
  * nothing above to pick from.
@@ -902,24 +907,24 @@ export function useHasOpenTabs(): boolean {
 
   // Every pane in `PANES`, and the reason this is worth saying: a panel left out
   // here can never be drawn. The workbench only shows a pane once the strip has
-  // a tab, so a missing one reads as a row that does nothing — a worktree's
+  // a tab, so a missing one reads as a row that does nothing — a chat's
   // chat opened, selected and invisible until some *other* panel happened to
   // have a tab of its own.
   return PANES.some((pane) => openInScope(pane).length > 0)
 }
 
 /**
- * Puts something from *this* checkout on screen, when what was showing is not.
+ * Puts something from *this* project on screen, when what was showing is not.
  *
  * Called when the context moves. Most ways of moving it already land on a tab
- * that is in scope — a worktree row opens a chat in that checkout, selecting a
+ * that is in scope — a project row opens a chat in it, selecting a
  * file tab or a chat tab moves the context to *its* root rather than the other
  * way round — but picking a project row moves the context and selects nothing,
  * which would otherwise leave the pane drawing a file from the branch just left
  * while the strip no longer holds its tab.
  *
- * Prefers the pane already on screen, so switching checkout with a file open
- * lands on this checkout's file rather than on whatever the strip happens to
+ * Prefers the pane already on screen, so switching project with a file open
+ * lands on this project's file rather than on whatever the strip happens to
  * start with. Cannot loop: every id it selects is in scope, and the `setActive`
  * that a panel's `select` performs is a no-op for the root already current.
  */
@@ -935,7 +940,7 @@ export function reconcileScope() {
     return
   }
 
-  // Nothing of this panel's in this checkout. Whatever the strip does hold,
+  // Nothing of this panel's in this project. Whatever the strip does hold,
   // then — and nothing at all is a legitimate answer, which `NothingOpen` says.
   const next = tabIds()[0]
   if (next !== undefined) selectTab(next)

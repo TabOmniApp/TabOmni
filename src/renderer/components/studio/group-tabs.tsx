@@ -5,6 +5,7 @@ import {
   closePanelTab,
   closeTab,
   groupRootId,
+  keepTab,
   reorderWithinGroup,
   selectTab,
   useShownGroup,
@@ -12,7 +13,6 @@ import {
 import type { ChatPlace } from "@shared/api"
 import { useStudio, type Pane } from "@/lib/store"
 import { bare } from "@/lib/tabs"
-import { useWorktrees } from "@/lib/worktree/store"
 import { placeOfRoot, useWorktreeChats } from "@/lib/worktree-chat/store"
 import { IconButton } from "./icon-button"
 import { useTabItems } from "./tab-items"
@@ -27,7 +27,7 @@ const LABELS: Record<Pane, string> = {
   database: "Tables in this schema",
   api: "Requests in this folder",
   note: "Notes in this folder",
-  worktree: "Chats in this worktree",
+  worktree: "Chats in this project",
 }
 
 /** The Database panel's one group that is not a schema: the console's own
@@ -35,12 +35,11 @@ const LABELS: Record<Pane, string> = {
 const DB_QUERIES = ""
 
 /** Where the `+` at the end of a chat group's strip would put a chat: the group
- * is a root id, and what `create` takes is the folder and the checkout. */
+ * is a root id, and what `create` takes is the project. */
 function useChatGroupPlace(group: string): ChatPlace | null {
   const folders = useStudio((state) => state.folders)
-  const worktrees = useWorktrees((state) => state.worktrees)
   const root = groupRootId(group)
-  return root ? placeOfRoot(root, folders, worktrees) : null
+  return root ? placeOfRoot(root, folders) : null
 }
 
 /**
@@ -56,9 +55,9 @@ function useChatGroupPlace(group: string): ChatPlace | null {
  * reason the outer strip is: a strip of tabs behaves the same way whatever it
  * is a strip of, and five copies of it would agree only by accident. What is
  * genuinely per panel is a tab's label and icon (`useTabItems`, shared with the
- * strip above) and, for the worktree chats, the `+` — a checkout's tab is the
- * one place another chat can be started in the branch already on screen without
- * being asked which one.
+ * strip above) and, for the chats, the `+` — a project's tab is the one place
+ * another chat can be started in the project already on screen without being
+ * asked which one.
  */
 export function GroupTabs({ pane }: { pane: Pane }) {
   const shown = useShownGroup(pane)
@@ -66,9 +65,9 @@ export function GroupTabs({ pane }: { pane: Pane }) {
   const create = useWorktreeChats((state) => state.create)
 
   // Null for a group that is not a chat's, which is every other panel's — and
-  // for one whose checkout or project has left the workspace, which is a `+`
-  // with nowhere to put a chat. Resolved before the early return below, since a
-  // hook cannot be called under one.
+  // for one whose project has left the workspace, which is a `+` with nowhere
+  // to put a chat. Resolved before the early return below, since a hook cannot
+  // be called under one.
   const grouped = useChatGroupPlace(shown?.group ?? "")
   const place = pane === "worktree" ? grouped : null
 
@@ -95,11 +94,7 @@ export function GroupTabs({ pane }: { pane: Pane }) {
       trailing={
         place ? (
           <IconButton
-            label={
-              place.worktreeId
-                ? "New chat in this worktree"
-                : "New chat in this project"
-            }
+            label="New chat in this project"
             onClick={() => void create(place)}
           >
             <Plus />
@@ -107,6 +102,7 @@ export function GroupTabs({ pane }: { pane: Pane }) {
         ) : undefined
       }
       onSelect={selectTab}
+      onKeep={keepTab}
       onClose={(id) => closePanelTab(pane, bare(id, pane))}
       onCloseOthers={(id) =>
         closeOthersInGroup(pane, shown.group, bare(id, pane))

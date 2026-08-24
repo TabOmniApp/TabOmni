@@ -45,6 +45,7 @@ export function SideRow({
   indent = 0,
   title,
   onClick,
+  onDoubleClick,
   onContextMenu,
   className,
   children,
@@ -53,6 +54,10 @@ export function SideRow({
   indent?: number
   title?: string
   onClick?: () => void
+  /** The second click, where the row has something more to mean by it — the
+   * Explorer keeps a previewed file's tab. Both clicks still fire `onClick`,
+   * which is what makes the pair "open it, then keep it". */
+  onDoubleClick?: () => void
   /** For a row that carries its own right-click menu. */
   onContextMenu?: (event: MouseEvent) => void
   className?: string
@@ -72,6 +77,7 @@ export function SideRow({
       ref={ref}
       variant="ghost"
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       title={title}
       aria-current={active ? "true" : undefined}

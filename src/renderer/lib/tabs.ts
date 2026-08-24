@@ -11,7 +11,7 @@ import type { Pane } from "./store"
 export const PREFIX: Record<Pane, string> = {
   files: "file:",
   // The id after it is a **root** id rather than anything the panel made up:
-  // there is one `Changes` tab per checkout, and that is what it is about.
+  // there is one `Changes` tab per project, and that is what it is about.
   changes: "changes:",
   database: "db:",
   api: "api:",
@@ -34,12 +34,25 @@ export const PREFIX: Record<Pane, string> = {
  */
 export const GROUP = "@"
 
+/**
+ * Which panel a strip id belongs to.
+ *
+ * **Read off `PREFIX` rather than listed here**, and that is the whole point:
+ * this was five hand-written `if`s against a map of six, and the one it had
+ * fallen behind on was `changes`. Nothing failed loudly — `selectTab` and
+ * `closeTab` both open with `const kind = kindOf(id); if (!kind) return`, so the
+ * `Changes` tab simply could not be selected or closed, and its ✕ did nothing at
+ * all. A list that has to be kept in step with another list is a list that will
+ * not be.
+ *
+ * The loop relies on no prefix beginning with another, or the answer would be
+ * whichever happened to be tested first; `test/tabs.ts` asserts that separately,
+ * which is what makes iterating in insertion order safe.
+ */
 export function kindOf(id: string): Pane | null {
-  if (id.startsWith(PREFIX.files)) return "files"
-  if (id.startsWith(PREFIX.database)) return "database"
-  if (id.startsWith(PREFIX.api)) return "api"
-  if (id.startsWith(PREFIX.worktree)) return "worktree"
-  if (id.startsWith(PREFIX.note)) return "note"
+  for (const [pane, prefix] of Object.entries(PREFIX) as [Pane, string][]) {
+    if (id.startsWith(prefix)) return pane
+  }
   return null
 }
 

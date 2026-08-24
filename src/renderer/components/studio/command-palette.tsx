@@ -25,7 +25,6 @@ import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio } from "@/lib/store"
 import { PREFIX } from "@/lib/tabs"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
-import { useWorktrees } from "@/lib/worktree/store"
 import { METHOD_TONES } from "./api/request-list"
 import { KIND_ICONS } from "./db/database-tree"
 
@@ -272,7 +271,6 @@ function useEntries(query: string): Group[] {
   const apiFolders = useApi((state) => state.folders)
 
   const chats = useWorktreeChats((state) => state.chats)
-  const worktrees = useWorktrees((state) => state.worktrees)
   const folders = useStudio((state) => state.folders)
 
   const notes = useNotes((state) => state.notes)
@@ -283,20 +281,12 @@ function useEntries(query: string): Group[] {
       const folder = folders.find(
         (candidate) => candidate.id === entry.folderId
       )
-      // The branch as well as the project when the hit is in a checkout: two
-      // worktrees of one repository hold the same `src/index.ts`, so the
-      // folder's name alone would draw the same hint on both rows.
-      const worktree = worktrees.find(
-        (candidate) => candidate.id === entry.worktreeId
-      )
       return {
         value: PREFIX.files + entry.path,
         label: entry.relative,
         // Which repository it is in, since two of them in one workspace both
         // have a `src/index.ts`.
-        hint: worktree
-          ? `${folder?.name ?? "Worktree"} · ${worktree.branch}`
-          : folder?.name,
+        hint: folder?.name,
         // The path without its slashes as well as with them: the shortlist
         // that chose this row ignores separators — "libfiles" finds
         // `lib/files` — and cmdk, which scores it afterwards, does not. Without
@@ -370,13 +360,11 @@ function useEntries(query: string): Group[] {
     // conversation nobody has on screen is found again, and selecting one is
     // what opens its tab.
     const chatEntries: Entry[] = chats.map((chat) => {
-      // The branch rather than the project: two checkouts of one repository are
-      // what a chat has to be told apart by. A chat in the project's own working
-      // tree has no branch to name, so it is named for the project.
-      const where = chat.worktreeId
-        ? worktrees.find((candidate) => candidate.id === chat.worktreeId)
-            ?.branch
-        : folders.find((candidate) => candidate.id === chat.folderId)?.name
+      // The project it is in: two chats can carry the same first sentence, and
+      // where they run is what tells them apart.
+      const where = folders.find(
+        (candidate) => candidate.id === chat.folderId
+      )?.name
       return {
         value: PREFIX.worktree + chat.id,
         label: chat.title,
@@ -427,7 +415,6 @@ function useEntries(query: string): Group[] {
     requests,
     apiFolders,
     chats,
-    worktrees,
     folders,
     notes,
     noteFolders,

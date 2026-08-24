@@ -17,6 +17,7 @@ import {
   Save,
 } from "lucide-react"
 
+import { hasGitChange, useGitStatus } from "@/lib/files/git-status"
 import { relativeTo } from "@/lib/files/paths"
 import { fileRootsOf, rootOfPath } from "@/lib/files/roots"
 import { isDirty, useFiles, viewOf, type FileDoc } from "@/lib/files/store"
@@ -24,7 +25,6 @@ import { viewersFor, type Viewer } from "@/lib/files/viewers"
 import { useSettings } from "@/lib/settings"
 import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio } from "@/lib/store"
-import { useWorktrees } from "@/lib/worktree/store"
 import { SECTION_ACCENT } from "../section-marks"
 import { IconButton } from "../icon-button"
 import { FileDiff } from "./file-diff"
@@ -150,10 +150,14 @@ export function FilePane({
   path,
   visible,
   preferred,
+  reviewRootId,
 }: {
   path: string
   visible: boolean
   preferred?: Viewer
+  /** The checkout whose review this pane is part of, for the diff's comment
+   * column. Only the `Changes` pane has one — see `CodeMirrorFileDiff`. */
+  reviewRootId?: string | null
 }) {
   const doc = useFiles((state) => state.docs[path])
   const image = useFiles((state) => state.images[path])
@@ -180,13 +184,14 @@ export function FilePane({
 
   const dirty = isDirty(doc)
 
-  /* Which root this file is in, subscribed rather than read: a checkout removed
+  /* Which root this file is in, subscribed rather than read: a project removed
    * under an open tab has to fall back to the absolute path rather than keep
    * drawing a name relative to a root that has gone. */
   const folders = useStudio((state) => state.folders)
-  const worktrees = useWorktrees((state) => state.worktrees)
-  const root = rootOfPath(fileRootsOf(folders, worktrees), path)
+  const root = rootOfPath(fileRootsOf(folders), path)
   const label = (root && relativeTo(root.path, path)) || path
+
+  const changed = useGitStatus((state) => hasGitChange(state, path))
 
   const write = useCallback(
     (text: string) => {
@@ -205,14 +210,13 @@ export function FilePane({
   return (
     <div className="flex h-full min-w-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        {/* The path **in the checkout's own terms**, and the whole of it only
-            on the hover line. A worktree lives under
-            `~/.tabomni/workspace/worktrees/<uuid>/<branch>/`, so the absolute
-            path spent forty characters on where this app keeps its checkouts
-            before reaching anything about the file — and truncating from the
-            left is what put `…/hhh/bbb.txt` in a header that had room for
-            `bbb.txt`. Copy path and Reveal still deal in the absolute one,
-            since that is what the OS and a terminal want. */}
+        {/* The path **relative to its project**, and the whole of it only on
+            the hover line: a repository somewhere deep under `~` spends the
+            first forty characters of its absolute path saying nothing about
+            the file, and truncating from the left is what put `…/hhh/bbb.txt`
+            in a header that had room for `bbb.txt`. Copy path and Reveal still
+            deal in the absolute one, since that is what the OS and a terminal
+            want. */}
         <span
           title={path}
           className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
@@ -235,9 +239,16 @@ export function FilePane({
         {/* Only between these two, and only when one of them is showing. A `.md`
             can also be a preview or a block editor, and a segmented pair cannot
             say which of three is on without lying about the other two — that
-            menu is the tree's right-click, which offers all of them. */}
+            menu is the tree's right-click, which offers all of them.
+
+            And only for a file git has something to say about: a diff of an
+            unchanged file is the same text in both columns, so the switch would
+            be offering a view with nothing in it. `viewer === "diff"` keeps it
+            for the diff already on screen — a file committed while its diff is
+            open must not lose the way back to `Edit`. */}
         {(viewer === "diff" || viewer === "text") &&
-          viewersFor(path).includes("diff") && (
+          viewersFor(path).includes("diff") &&
+          (viewer === "diff" || changed) && (
             <ViewerSwitch path={path} viewer={viewer} />
           )}
 
@@ -285,6 +296,7 @@ export function FilePane({
             doc={doc}
             viewer={viewer}
             visible={visible}
+            reviewRootId={reviewRootId}
             onChange={write}
             onSave={commit}
           />
@@ -302,6 +314,7 @@ function Body({
   doc,
   viewer,
   visible,
+  reviewRootId,
   onChange,
   onSave,
 }: {
@@ -312,6 +325,9 @@ function Body({
    * the stacked editors share the drawing event and only the visible one may
    * answer it. */
   visible: boolean
+  /** Passed through to the diff, which is the only viewer that has anything to
+   * do with a review. */
+  reviewRootId?: string | null
   onChange: (text: string) => void
   onSave: () => void
 }) {
@@ -360,6 +376,7 @@ function Body({
         // A deleted file reads as an error and is ready: its right-hand side is
         // empty and its left is what was committed, which is what its diff is.
         ready={doc !== undefined && doc.kind !== "loading"}
+        reviewRootId={reviewRootId}
         // No writers: a diff takes no keystrokes, and the buffer it shows is the
         // path's own — whichever editor *can* be typed into is the one that tells
         // the store what is in it (`lib/files/documents.ts`). ⌘S is claimed by

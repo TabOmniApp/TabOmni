@@ -71,7 +71,6 @@ import {
 import { useProjects } from "@/lib/projects"
 import { shownRootOf } from "@/lib/files/roots"
 import { useStudio, type ExplorerTab } from "@/lib/store"
-import { useWorktrees } from "@/lib/worktree/store"
 import { RenameDialog } from "../db/rename-dialog"
 import { IconButton } from "../icon-button"
 import { RenameRow, useMenuFocusHandoff } from "../rename-row"
@@ -152,14 +151,11 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
   const renameFolder = useStudio((state) => state.renameFolder)
   const removeFolder = useStudio((state) => state.removeFolder)
 
-  /** The one root drawn: the project being worked in, in the checkout it was
-   * left in. Subscribed to all three stores rather than read through
-   * `shownRoot`, since this is the render that has to follow a row being
-   * clicked in the left column. */
-  const worktrees = useWorktrees((state) => state.worktrees)
-  const checkout = useProjects((state) => state.checkout)
+  /** The one root drawn: the project being worked in. Subscribed to both
+   * stores rather than read through `shownRoot`, since this is the render that
+   * has to follow a row being clicked in the left column. */
   const activeFolderId = useProjects((state) => state.activeFolderId)
-  const shown = shownRootOf(folders, worktrees, checkout, activeFolderId)
+  const shown = shownRootOf(folders, activeFolderId)
   const folder = folders.find((entry) => entry.id === shown?.folderId) ?? null
 
   const expanded = useFiles((state) => state.expanded)
@@ -192,7 +188,7 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
   }, [rootPath, rootRead])
 
   /** Which of the two tabs is showing, and what the other one has to say for
-   * itself. The count is read for the checkout on screen whichever tab that is,
+   * itself. The count is read for the project on screen whichever tab that is,
    * so `Changes 12` is true before it is clicked — which is the whole use of a
    * number on a tab. */
   const tab = useStudio((state) => state.explorerTab)
@@ -207,7 +203,7 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
         {/* Two tabs where the panel's title used to be.
             `Explorer` named the panel to somebody already looking at it, and
             the space is worth more as the way in to the other list this panel
-            has: what the checkout has changed, which after an agent's turn is
+            has: what the project has changed, which after an agent's turn is
             the only question being asked. The names are Conductor's, since this
             is Conductor's column. */}
         <div className="flex h-9 shrink-0 items-center gap-2 border-b pr-2 pl-1.5">
@@ -281,7 +277,7 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
             }
           >
             {/* No heading over the list, and no row for the root itself. The
-                tree is one checkout's files, so a row saying which one would be
+                tree is one project's files, so a row saying which one would be
                 a row every file is indented under for no answer it gives —
                 which project and which branch is the bar above, where it can be
                 read with the list scrolled. */}
@@ -382,14 +378,14 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
       {/* The empty space under the tree is **the root's** menu.
           It was the bar above the list — the project's name, its branch and a
           checkout picker — and the bar is gone: the left column already lists
-          every project and every checkout, and says which one is selected, so
+          every project and says which one is selected, so
           a strip repeating it was a row of chrome answering a question that was
           already on screen. What the bar carried had to go somewhere, and the
           empty space under the last row is the only part of this panel that is
-          about the checkout as a whole rather than about a file in it. It acts
-          on the checkout being read — a new file lands in the branch on
+          about the project as a whole rather than about a file in it. It acts
+          on the project being read — a new file lands in the branch on
           screen — while Rename and Remove are about the workspace's record of
-          the **project**, whichever checkout that is. */}
+          the **project** being read. */}
       {menuTarget === null &&
         (shown && folder ? (
           <RootMenu
@@ -587,7 +583,7 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
  *
  * Not the workbench's `TabStrip`, and not shadcn's `Tabs`: those are about
  * things somebody opened and can close, and these are two fixed views of one
- * checkout. What it borrows instead is the treatment `SideRow` gives a selected
+ * project. What it borrows instead is the treatment `SideRow` gives a selected
  * row, so a tab and the row under it read as the same kind of "this is the one".
  */
 function ExplorerTabButton({
@@ -679,11 +675,11 @@ function ViewerIcon({ viewer }: { viewer: Viewer }) {
  * navigation across rows, and every row's indent is its own depth.
  */
 /**
- * The menu on the bar above the tree: the checkout being read, and the project
+ * The menu on the bar above the tree: the project being read, and the project
  * it belongs to.
  *
  * Split that way on purpose. `New file…`, `Refresh`, `Copy path` and `Reveal`
- * act on the **directory on screen**, which is the checkout — a file made here
+ * act on the **directory on screen**, which is the project — a file made here
  * while a branch is being read belongs to that branch. `Rename…` and
  * `Remove folder…` act on the workspace's record of the **project**: what the
  * studio calls it, and whether it is pointed at it at all, neither of which is
@@ -699,7 +695,7 @@ function RootMenu({
   onAddFolder,
 }: {
   folder: WorkspaceFolder
-  /** The checkout being read — the folder's own path, or a worktree's. */
+  /** The directory being read — the project folder's own path. */
   path: string
   /** Whether anything is open below the root, which is what `Collapse all` has
    * to do. The root itself is always in the set — it is read without being a
@@ -733,7 +729,7 @@ function RootMenu({
         Refresh
       </ContextMenuItem>
       {/* Where the header button went. It is about the tree rather than about
-          this checkout's files, but this menu is the one the tree has — and a
+          this project's files, but this menu is the one the tree has — and a
           button for it beside the tabs was a button that got used once. */}
       <ContextMenuItem
         disabled={!expanded}
@@ -752,7 +748,7 @@ function RootMenu({
       </ContextMenuItem>
       <ContextMenuSeparator />
       {/* The workspace's own action, at the end and under a rule: everything
-          above is about this checkout, and this one is about which projects
+          above is about this project, and this one is about which projects
           there are. */}
       <ContextMenuItem onClick={onAddFolder}>
         <FolderPlus />
@@ -941,10 +937,19 @@ function Row({
         // thing that says what a green name means to somebody who has not
         // learnt the palette, or who cannot see it.
         title={git ? `${entry.path} — ${GIT_LABELS[git]}` : entry.path}
+        // A single click on a file is a **look**: the tab it opens is the
+        // preview one, in italics, and the next look takes its place rather
+        // than adding a tab beside it. Reading through a repository was the
+        // thing that left fifteen tabs nobody had asked for.
         onClick={() =>
           directory
             ? useFiles.getState().toggle(entry.path)
-            : void useFiles.getState().open(entry.path)
+            : void useFiles.getState().open(entry.path, { preview: true })
+        }
+        // And a double click keeps it. The first of the two clicks has already
+        // opened it, so this only has to promote what is on screen.
+        onDoubleClick={
+          directory ? undefined : () => useFiles.getState().keep(entry.path)
         }
         onContextMenu={() => onMenu(entry)}
       >

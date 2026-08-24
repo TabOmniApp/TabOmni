@@ -42,7 +42,7 @@ const remembered = {
   },
 }
 
-const { isDeleted, useFiles, viewOf } =
+const { isDeleted, opening, useFiles, viewOf } =
   await import("../src/renderer/lib/files/store")
 const { keepSelected } = await import("../src/renderer/lib/files/changes")
 
@@ -217,6 +217,111 @@ async function main() {
     "a directory nothing has read says nothing either way",
     !isDeleted(null, { entries: {} }, "/elsewhere/unknown.ts"),
     "a tab must not be labelled gone for never having been looked for"
+  )
+
+  section("the preview tab")
+
+  /*
+   * The editors' rule, and the whole of what it is for: reading through a
+   * repository is one click per file, and before this each of those clicks left
+   * a tab behind. One slot, holding whatever was last only looked at.
+   */
+  check(
+    "a look replaces the last look, in the slot it was already in",
+    (() => {
+      const next = opening(
+        { openIds: ["/w/a.ts", "/w/b.ts"], previewId: "/w/a.ts" },
+        "/w/c.ts",
+        true
+      )
+      return (
+        next.openIds.join() === "/w/c.ts,/w/b.ts" &&
+        next.previewId === "/w/c.ts" &&
+        next.replaced === "/w/a.ts"
+      )
+    })(),
+    "in place, so the tab does not move out from under the pointer"
+  )
+
+  check(
+    "with nothing previewing, a look adds the slot",
+    (() => {
+      const next = opening(
+        { openIds: ["/w/a.ts"], previewId: null },
+        "/w/b.ts",
+        true
+      )
+      return (
+        next.openIds.join() === "/w/a.ts,/w/b.ts" &&
+        next.previewId === "/w/b.ts" &&
+        next.replaced === null
+      )
+    })()
+  )
+
+  check(
+    "an open file is left exactly as it is",
+    (() => {
+      const state = { openIds: ["/w/a.ts", "/w/b.ts"], previewId: "/w/b.ts" }
+      const kept = opening(state, "/w/a.ts", true)
+      const previewed = opening(state, "/w/b.ts", true)
+      return (
+        kept.previewId === "/w/b.ts" &&
+        kept.replaced === null &&
+        previewed.previewId === "/w/b.ts"
+      )
+    })(),
+    "clicking around the tree must not demote the file being edited"
+  )
+
+  check(
+    "opening deliberately leaves the preview slot alone",
+    (() => {
+      const next = opening(
+        { openIds: ["/w/a.ts"], previewId: "/w/a.ts" },
+        "/w/b.ts",
+        false
+      )
+      return (
+        next.openIds.join() === "/w/a.ts,/w/b.ts" &&
+        next.previewId === "/w/a.ts" &&
+        next.replaced === null
+      )
+    })(),
+    "the palette and a definition jumped to are opens, not looks"
+  )
+
+  await useFiles.getState().open("/w/one.ts", { preview: true })
+  const opened = useFiles.getState().openIds.length
+  await useFiles.getState().open("/w/two.ts", { preview: true })
+  check(
+    "a second look through the store adds no tab",
+    useFiles.getState().openIds.length === opened &&
+      !useFiles.getState().openIds.includes("/w/one.ts") &&
+      useFiles.getState().previewId === "/w/two.ts",
+    useFiles.getState().openIds
+  )
+
+  useFiles.getState().setText("/w/two.ts", "typed into")
+  check(
+    "typing in it keeps it",
+    useFiles.getState().previewId === null,
+    "an edit is the point at which somebody plainly means to stay"
+  )
+
+  await useFiles.getState().open("/w/three.ts", { preview: true })
+  check(
+    "so the next look does not evict it",
+    useFiles.getState().openIds.includes("/w/two.ts") &&
+      useFiles.getState().previewId === "/w/three.ts",
+    useFiles.getState().openIds
+  )
+
+  useFiles.getState().close("/w/three.ts")
+  check(
+    "closing the preview empties the slot rather than handing it on",
+    useFiles.getState().previewId === null,
+    "the neighbour that takes the selection was opened on its own terms"
   )
 
   finish()

@@ -23,13 +23,11 @@ import type {
   NoteFolder,
   NoteRecord,
   WorktreeChat,
-  WorktreeRecord,
   UpdateDatabaseInput,
   WorkspaceFolder,
   WorkspaceRecord,
 } from "../shared/api"
 import { dataDir } from "./data-dir"
-import { worktreeSlug } from "./git"
 import { decrypt, encrypt } from "./encryption"
 
 /** A `DatabaseRecord`'s own credential, held only in the manifest file. */
@@ -107,34 +105,17 @@ export const ENVIRONMENTS_FILE = "environments.json"
 export const FOLDERS_FILE = "folders.json"
 
 /**
- * The chats held in worktrees — their listing; each chat's lines are a file of
- * its own, the split the notes have and for the same reason: a turn rewrites one
- * chat rather than all of them.
+ * The chats held in the workspace's projects — their listing; each chat's lines
+ * are a file of its own, the split the notes have and for the same reason: a
+ * turn rewrites one chat rather than all of them.
+ *
+ * The file is still called `worktree-chats.json`: chats lived in `git worktree`
+ * checkouts once, and renaming the file would lose every chat already written.
  */
 export const WORKTREE_CHATS_FILE = "worktree-chats.json"
 
 /** Where each of those chats' lines live, one `<id>.json` per chat. */
 export const WORKTREE_CHATS_DIR = "worktree-chats"
-
-/**
- * The worktrees this app has made — the record, not git's own list.
- *
- * `git worktree list` is the truth about what exists; this is what lets the
- * renderer name one by id so main can resolve the cwd itself.
- */
-export const WORKTREES_FILE = "worktrees.json"
-
-/**
- * Where the checkouts themselves live: one subdirectory per folder, one per
- * branch under it.
- *
- * **Not** beside the repository. A project's directory is somebody else's and
- * the studio writes nothing into it that was not asked for; putting checkouts
- * here means removing every worktree leaves that directory exactly as it was.
- * The cost is that a worktree is not obvious from the repo — which is what
- * `git worktree list` is for.
- */
-export const WORKTREES_DIR = "worktrees"
 
 /** The workspace's notes — their listing; each body is a file of its own. */
 export const NOTES_FILE = "notes.json"
@@ -630,39 +611,6 @@ export class Store {
 
   private worktreeChatPath(id: string): string {
     return path.join(this.workspaceDir, WORKTREE_CHATS_DIR, `${ownId(id)}.json`)
-  }
-
-  listWorktrees(): Promise<WorktreeRecord[]> {
-    return this.readList(WORKTREES_FILE)
-  }
-
-  saveWorktrees(worktrees: WorktreeRecord[]): Promise<void> {
-    return this.writeList(WORKTREES_FILE, worktrees)
-  }
-
-  /**
-   * Where a new worktree of `folderId` on `branch` should go.
-   *
-   * The branch name is slugged because it is a path segment here and branches
-   * hold slashes: `feature/orders` would otherwise be two directories deep, and
-   * a branch called `..` would be somewhere else entirely. The folder id is a
-   * uuid and needs none of that.
-   */
-  worktreePath(folderId: string, branch: string): string {
-    return path.join(
-      this.workspaceDir,
-      WORKTREES_DIR,
-      folderId,
-      worktreeSlug(branch)
-    )
-  }
-
-  /** The directory a worktree id names, or null when no such record exists.
-   * Null rather than a throw: the caller falls back to the folder itself, which
-   * is the right answer for a session whose worktree has been removed. */
-  async resolveWorktreeDir(id: string): Promise<string | null> {
-    const worktrees = await this.listWorktrees()
-    return worktrees.find((entry) => entry.id === id)?.path ?? null
   }
 
   listNotes(): Promise<NoteRecord[]> {

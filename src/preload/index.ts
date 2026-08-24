@@ -65,10 +65,8 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.testDatabaseConnection, input),
 
   gitBranch: (folderId) => ipcRenderer.invoke(IPC.gitBranch, folderId),
-  gitStatus: (folderId, worktreeId) =>
-    ipcRenderer.invoke(IPC.gitStatus, folderId, worktreeId ?? null),
-  gitChanges: (folderId, worktreeId) =>
-    ipcRenderer.invoke(IPC.gitChanges, folderId, worktreeId ?? null),
+  gitStatus: (folderId) => ipcRenderer.invoke(IPC.gitStatus, folderId),
+  gitChanges: (folderId) => ipcRenderer.invoke(IPC.gitChanges, folderId),
   fileAtHead: (filePath) => ipcRenderer.invoke(IPC.fileAtHead, filePath),
 
   listDirectory: (dirPath) => ipcRenderer.invoke(IPC.listDirectory, dirPath),
@@ -135,10 +133,6 @@ const api: DesktopApi = {
   stopWorktreeChat: (id) => ipcRenderer.invoke(IPC.stopWorktreeChat, id),
   onWorktreeChatEvent: (listener) =>
     subscribe<WorktreeChatEvent>(IPC.worktreeChatEvent, listener),
-  listWorktrees: () => ipcRenderer.invoke(IPC.listWorktrees),
-  createWorktree: (folderId, branch, from) =>
-    ipcRenderer.invoke(IPC.createWorktree, folderId, branch, from),
-  removeWorktree: (id) => ipcRenderer.invoke(IPC.removeWorktree, id),
   listNotes: () => ipcRenderer.invoke(IPC.listNotes),
   saveNotes: (notes) => ipcRenderer.invoke(IPC.saveNotes, notes),
   listNoteFolders: () => ipcRenderer.invoke(IPC.listNoteFolders),
@@ -161,8 +155,8 @@ const api: DesktopApi = {
   deleteNoteFiles: (fileNames) =>
     ipcRenderer.invoke(IPC.deleteNoteFiles, fileNames),
 
-  startProcess: (folderId, command, args, worktreeId) =>
-    ipcRenderer.invoke(IPC.startProcess, folderId, command, args, worktreeId),
+  startProcess: (folderId, command, args) =>
+    ipcRenderer.invoke(IPC.startProcess, folderId, command, args),
   stopProcess: (processId) => ipcRenderer.invoke(IPC.stopProcess, processId),
 
   onProcessOutput: (listener) =>
@@ -170,8 +164,8 @@ const api: DesktopApi = {
   onProcessExit: (listener) =>
     subscribe<ProcessExit>(IPC.processExit, listener),
 
-  terminalCreate: (folderId, cols, rows, worktreeId) =>
-    ipcRenderer.invoke(IPC.terminalCreate, folderId, cols, rows, worktreeId),
+  terminalCreate: (folderId, cols, rows) =>
+    ipcRenderer.invoke(IPC.terminalCreate, folderId, cols, rows),
   terminalWrite: (terminalId, data) =>
     ipcRenderer.invoke(IPC.terminalWrite, terminalId, data),
   terminalResize: (terminalId, cols, rows) =>

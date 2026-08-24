@@ -24,11 +24,12 @@ import type { Pane } from "@/lib/store"
 const HINTS: Record<Pane, string> = {
   files: "Pick a file from the Explorer on the right.",
   changes:
-    "Pick a file under Changes in the Explorer to read what this checkout has changed.",
+    "Pick a file under Changes in the Explorer to read what this project has changed.",
   database: "Find a table with ⌘P, or open a query tab.",
   api: "Find a request with ⌘P.",
   note: "Find a note with ⌘P.",
-  worktree: "Pick a worktree under a project on the left to open its chat.",
+  worktree:
+    "Pick a chat under a project on the left, or start one from its row.",
 }
 
 /**
@@ -54,7 +55,7 @@ export function NothingOpen({
   pane: Pane
   hasOpenTabs: boolean
 }) {
-  // A worktree chat has no section of its own — it is not one of the four kinds
+  // A chat has no section of its own — it is not one of the four kinds
   // the workspace holds — so the pane it draws in borrows the Explorer's mark
   // rather than inventing a fifth for an empty state.
   const mark = isSection(pane) ? pane : "files"

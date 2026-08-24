@@ -62,21 +62,21 @@ function isRememberedStrip(value: unknown): value is RememberedStrip {
  * are all on screen at once now, so this is only about the pane.
  *
  * A `Section` and two more, and neither of the two has a sidebar of its own:
- * `worktree` draws a checkout's chats and is opened from the left column, and
+ * `worktree` draws a project's chats and is opened from the left column, and
  * `changes` draws the diff of whichever changed file the Explorer's `Changes`
- * tab has picked, one tab per checkout. `showPane` leaves the sections alone
+ * tab has picked, one tab per project. `showPane` leaves the sections alone
  * for both, since a click in somebody else's list must not move the section the
  * panel is on.
  *
  * There was a `terminal` pane beside them — a session with a tab, a chat view
  * and a transcript — and it is gone: a shell is a tab of the dock now
- * (`lib/shell/store.ts`), and the agent half of what it was is a worktree's
+ * (`lib/shell/store.ts`), and the agent half of what it was is a project's
  * chat.
  */
 export type Pane = Section | "worktree" | "changes"
 
 /**
- * Which of the Explorer's two lists is showing: the checkout's files, or the
+ * Which of the Explorer's two lists is showing: the project's files, or the
  * ones it has changed.
  *
  * Two tabs where the panel's own title used to be, which is what the space was
@@ -141,7 +141,7 @@ type StudioState = {
   /**
    * Which of the Explorer's two tabs is showing.
    *
-   * Remembered with the strip and not per checkout: it is a way of working —
+   * Remembered with the strip and not per project: it is a way of working —
    * reviewing, or reading — rather than a fact about a branch, and one that
    * reset every time the left column moved would be one nobody could stay in.
    */

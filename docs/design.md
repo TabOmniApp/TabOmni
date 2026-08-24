@@ -76,7 +76,7 @@ panel**, alone and without tabs — a strip of four tabs with one tab on it is a
 row of chrome that answers nothing. The asymmetry is the point rather than an
 oversight: a file tree is the contents of the thing being worked on rather than
 a list of what the workspace holds, it is far the deepest of the four, and it
-follows whichever checkout this column has clicked. The other three are lists of
+follows whichever project this column has clicked. The other three are lists of
 records the workspace owns, and they are short.
 
 A folded section is a bare `PanelHeader` this column draws; an open one is the
@@ -100,16 +100,21 @@ its file list over its `Setup / Run / Terminal`. `⌘B` closes it, and the left
 column closes on its own button in the title bar. Two keys for two columns,
 deliberately: one that took both would leave the workbench with no edges at all.
 
-**A project's rows are its worktrees**, and clicking one opens a chat in it —
-see Worktrees below. A project row carries a `+` that makes another checkout,
-shown on hover, because a column of projects each wearing a permanent one is a
-column of plus signs. Projects fold, and which are shut is remembered
-(`lib/projects.ts`, under `projects.column` with whether the column itself is
-showing).
+**A project's rows are its chats**, and clicking one opens it — see Chats
+below. A project row carries a `+` that starts another, shown on hover, because
+a column of projects each wearing a permanent one is a column of plus signs.
+Projects fold, and which are shut is remembered (`lib/projects.ts`, under
+`projects.column` with whether the column itself is showing).
 
-Clicking a project row also points the dock's `Terminal` tab at that project,
-and clicking a worktree row at that checkout, so a shell opened beside a chat is
-in the branch the chat is editing.
+The rows were a project's `git worktree` checkouts once, with the chats a level
+below them — one row per branch, and no way to see from this column what
+conversations a project actually held. That layer is gone (see Worktrees,
+removed), and what a project opens onto is the thing the column was always
+navigating to.
+
+Clicking a project row or one of its chats also points the dock's `Terminal` tab
+at that project, so a shell opened beside a chat is in the directory the chat is
+editing.
 
 Adding, renaming and removing a folder is **Explorer's**, not this column's: the
 list that says what the workspace is pointed at is the one that changes it.
@@ -119,10 +124,10 @@ at Explorer.
 ### Tasks, removed
 
 There was a layer above the workbench here — a **task**: a name, a line about
-what it was for, and members taken from any panel, so `debug checkout` was the
+what it was for, and members taken from any panel, so `debug orders` was the
 `create-order` request, the `orders` table, a file in `api/` and a note. The
 column listed them under the project each was filed in, `Home` opened a grid of
-cards (`⌘E`, **View › All tasks**), `Home › debug checkout` ran across the title
+cards (`⌘E`, **View › All tasks**), `Home › debug orders` ran across the title
 bar, and `Add what is open` filed whatever the pane was showing.
 
 All of it is gone, deleted rather than hidden, the way the Mail and Terminal
@@ -137,50 +142,43 @@ Nothing reads it and nothing deletes it, for the reason `mail.json` survives its
 own panel: removing a feature is not a reason to throw away what somebody wrote
 with it.
 
-## Worktrees
+## Chats
 
-A project's rows are its `git worktree` checkouts, and clicking one opens a chat
-in it.
+A project's rows are its chats, and clicking one opens it.
 
-This is the isolation Conductor is built on, and it is git's own: a second
-working tree on a branch of its own, sharing the single object store. **Nothing
-is copied** — that is the whole point over duplicating a directory — so two
-agents can work on one project at once without standing on each other's files,
-index and branch.
+### Worktrees, removed
 
-`main/git.ts` holds the operations: `worktrees()` reads
-`git worktree list --porcelain`, `addWorktree()` is `add`, `removeWorktree()`
-is `remove --force`. `parseWorktrees` and `worktreeSlug` are the pure halves and
-are tested (`test/worktrees.ts`), because the shape of git's output and the
-turning of a branch name into a path segment are the two parts that break
-quietly; `test/worktree-git.ts` drives the two operations over a real repository,
-which is where the arguments git is handed are the whole of the behaviour.
+There was a layer between the two: a project's rows were its `git worktree`
+checkouts — a second working tree on a branch of its own, sharing the single
+object store, so two agents could work on one project without standing on each
+other's files, index and branch — and a chat lived in one of those rather than
+in the project. It is **gone**, deleted rather than hidden, the way the Mail and
+Terminal panels went: `main/git.ts`'s `worktrees` / `addWorktree` /
+`removeWorktree` and `parseWorktrees` / `worktreeSlug`, the `worktrees:*`
+channels, `WorktreeRecord`, `lib/worktree/store.ts`, the New worktree dialog,
+`test/worktrees.ts` and `test/worktree-git.ts` are all out, and so is the
+nullable `worktreeId` that ran through `ChatPlace`, `FileRoot`, the dock's
+shells, `gitStatus`, `gitChanges`, `terminalCreate` and `startProcess`.
 
-**Three decisions in those operations.** `add` passes **`-b` only for a branch
-that does not exist yet** (`branchExists`, a `show-ref --verify` rather than the
-glob `branch --list` takes), and checks an existing one out as it stands. It used
-to be `-b` unconditionally, on the argument that two checkouts of one branch is a
-state git refuses anyway and a new worktree is a place to do something not yet
-done — and the second half of that is what did not hold. `remove --force` goes
-ahead over uncommitted changes — it is called from a row somebody already
-confirmed, and a refusal they cannot act on from here is worse — but the **branch
-is kept**, because the commits are the work and removing a directory is not a
-reason to drop them. Those two together were a trap: removing a checkout and
-making it again under the same name met `fatal: a branch named 'x' already
-exists`, every time, with nothing offered from the dialog to get past it. Reusing
-the branch is also the answer somebody re-making a checkout wants, since the
-commits are still on it. `from` is **ignored** for a reused branch rather than
-reset onto it — a checkout that silently rewound to `HEAD` would throw away the
-work that made the branch worth keeping — and the `reused` it comes back with is
-why the record leaves `from` unset in that case rather than claiming a lineage
-this run did not give it. And `listWorktrees` reconciles against git on every
-read, so a checkout removed by hand drops out of the record rather than leaving a
-list that lies.
+What it cost was paid on every use and the isolation was wanted on few of them:
+a branch to name and a directory to remove afterwards, before a question about
+the project somebody already had open. What is left is the shape everything
+else in the app was already keyed by — a **project**, `FileRoot.id` and the
+dock's shell key and a chat's root all being the same folder id, with no `??`
+chain anywhere deciding which of two directories was meant.
 
-### Its chat is `claude -p`
+A workspace that used the feature still has its checkouts on disk under
+`~/.tabomni/workspace/worktrees/`. Nothing reads them and nothing deletes them,
+for the reason `mail.json` survives its own panel; `git worktree list` in the
+project is what still knows about them, and `git worktree remove` is how they
+go. A chat written in one has a `worktreeId` naming nothing, which `chatRootId`
+reads as null — it keeps its lines and is not listed, because there is nowhere
+left to run its next turn.
 
-Clicking a worktree opens a chat in it, and the app **hosts** that conversation
-rather than reading one.
+### The chat is hosted, not tailed
+
+Clicking a project's row opens a chat in it, and the app **hosts** that
+conversation rather than reading one.
 
 There was a session panel that did the opposite: its chat view tailed the
 transcript the interactive CLI writes, so the terminal and the chat were two
@@ -195,39 +193,30 @@ the pane in `components/studio/worktree/`. They were the assistant panel's until
 that panel was removed (see The assistant, removed) and came here with it, which
 is where they belong now: this is the only chat in the app.
 
-#### A chat in the project itself
+#### A chat is a place
 
-A chat is a **place**, and a place is a checkout _or_ a project's own working
-tree: `New chat here` on a project row's context menu, and on the title bar
-crumb's, starts one with the project directory as the cwd. On the record that is
-`folderId` plus a nullable `worktreeId` (`ChatPlace` in `@shared/api`), and
-`chatRootId` — `worktreeId ?? folderId` — is where a record older than the pair
-is read, the way `chatOptions` reads an older record's options. That id is a
+A chat is a **place**, and a place is a project's own working tree: `New chat
+here` on a project row's context menu, on the `+` at the end of its row, and on
+the title bar crumb's menu, all start one with the project directory as the cwd.
+On the record that is `folderId` (`ChatPlace` in `@shared/api`), read through
+`chatRootId` the way options are read through `chatOptions` — which is where a
+record written while chats lived in checkouts comes back as null. That id is a
 `FileRoot.id` and the dock's shell key already, so a chat's scope, its tab group
 and the row it moves the workbench to all fall out of it unchanged.
 
-The argument this was held back by — that a branch of its own is what makes
-pre-approved edits honest — turns out to be an argument about the _permission_
-and not about the feature. Plenty of what somebody asks an agent is a question
-about the project they have open, and making them cut a branch first is a
-worktree nobody wanted and a directory to remove afterwards. So the permissions
-are **not** quietly narrowed here: narrowing them would make `Edits` mean two
-different things depending on which row it was picked from, and `Plan` and `Ask`
-are already in the picker for exactly this. What changes is that nothing claims
-isolation any more. `SYSTEM_PROMPTS` in `main/worktree-chat.ts` has one prompt
-per kind of place — the worktree one opens by saying edits here cannot disturb
-the branch you have checked out elsewhere, which is _false_ in a project, and a
+The permissions are **not** quietly narrowed for it. Narrowing them would make
+`Edits` mean two different things depending on where it was picked, and `Plan`
+and `Ask` are already in the picker for exactly this. What is not claimed is
+isolation: `SYSTEM_PROMPT` in `main/worktree-chat.ts` tells the turn it is in
+the user's own working tree on whatever branch they have checked out, since a
 model told it is isolated when it is not reaches for `Bash` more freely than it
 should. The caption under the composer says "in this project's own working tree"
-rather than "in this branch only" (`captionFor` in `chat-pane.tsx`), and the
-empty state says it a third time, with the toolbar named as the way to be asked
-first.
+(`captionFor` in `chat-pane.tsx`), and the empty state says it a second time,
+with the toolbar named as the way to be asked first.
 
-The cwd resolve is deliberately **not** the `worktreeDir(id) ?? folderDir(id)`
-chain `terminalCreate` uses. A shell that lands in the project because its
-checkout was removed is a surprising `pwd`; a turn that lands there with edits
-pre-approved is a diff in the branch the user actually has open. A chat whose
-place has gone finishes with a line saying so instead.
+The cwd resolve is deliberately **not** a fallback chain: a chat whose folder has
+left the workspace finishes with a line saying so, rather than running its next
+turn in whichever directory happens to be readable.
 
 #### What a turn looks like
 
@@ -256,7 +245,7 @@ tool it was, what the model said it was doing, the file it was about as a chip
 with its own file-type icon, and what came back. They are apart because they are
 read at different speeds — the marks are scanned, the chips are looked for, and
 the argument is read only when one of the first two caught the eye — and a single
-line of `Read /Users/…/worktrees/<uuid>/…/x.tsx` defeats all three. The lead is
+line of `Read /Users/…/projects/api/src/http/client.ts` defeats all three. The lead is
 the model's own `description` where a tool carries one, so a `Bash` row says
 "Check IPC wiring for attachments" rather than "Bash". `chat-marks.tsx` holds
 the glyphs, in its own file for the reason `section-marks.tsx` is: the same mark
@@ -284,6 +273,42 @@ and only those, which is the note worth reading before touching it: every other
 write there is a read-modify-write with an `await` in the middle, and that is
 safe for an append and not for a change to a line the same turn is appending
 after.
+
+**An edit's row says how much it moved, not what the CLI said about it.** The
+result of an `Edit` is a sentence — "The file /Users/…/review-panel.tsx has been
+updated. Here's the result of running `cat -n`…" — and it was the widest thing in
+the row: forty characters of a path the chip beside it was already showing, then a
+clause about `cat -n` that is about the CLI rather than about the change. So
+`changeOf` reads the change off the call's **input**, which is where both sides
+of it are: `stat` is `+3 −1` and goes where the result went, and `change` is the
+`-`/`+` lines themselves, shown when the chip is hovered. It is deliberately not
+a computed diff — those two strings _are_ the sides, and running a diff over them
+would be inventing detail about which of their lines correspond — and it is
+capped, because a tooltip is not a pane and the file's real diff against `HEAD`
+is a click away in `Changes`. `Write` and `NotebookEdit` have one side only,
+which is honest: a write replaces the file, and what it replaced is not in the
+call. The sentence comes back when the call **failed**, which is the one time it
+is the thing worth reading — an edit that could not find its `old_string` says so
+there and nowhere else.
+
+**The lines open on a click, in a popover, and the whole row is the button.**
+Both halves of that were got wrong first and are worth the record. It was a
+`title`, which cannot hold a line break. Then it was a _tooltip_, which is the
+wrong container twice over: the tooltip in this app is the inverted `bg-primary`
+chip meant for a few words, so a `-`/`+` block came out as a pale box with code
+in it, and a panel that goes away when the pointer leaves the row cannot be
+scrolled, selected or copied out of — all three of which is what somebody wants
+from code. And the target was the _chip_, which is 90px of a 600px row: a target
+found by accident once and never again. A click on the row keeps the panel up
+while the reader looks down the rows under it, which is what reading a turn's work
+actually looks like. A row with nothing to show is left a plain `div` rather than
+a button, and a chip with no change keeps its `title`, so a `Read` is exactly as
+it was.
+
+The popover's footer says **what this call changed, and that the file's own diff
+is in `Changes`** — because those two answers drift apart the moment anything
+else touches the file, and a popover captioned "diff" showing the first while
+somebody read it as the second would be worse than no popover at all.
 
 **Thinking is back**, as one folded line each (`showThinking`, under the key it
 was always written to). It was dropped when a turn was read for its messages and
@@ -345,7 +370,7 @@ failure free, so it says `nothing counted` instead.
 It is also the **only** `claude` the app runs. What this document's old
 "only one" rule was actually against is still refused: features calling the CLI
 as a helper — an AI filter, an import button — because a helper turn is a turn
-nobody asked for. A worktree chat is a conversation somebody is having.
+nobody asked for. A project's chat is a conversation somebody is having.
 `claude-agent.ts` stays a file of its own even with one caller left, for the
 part that matters: what the SDK hands back moves between versions, and a reader
 of it tangled into a store and a session id is one nobody wants to re-read when
@@ -413,7 +438,7 @@ says so in as many words rather than leaving it implicit.
 answers, how much effort a turn gets, and how much it is allowed to do, with a
 `+` menu and the send button at the other end. They are `WorktreeChatOptions` on the chat's own
 record — per chat rather than per workspace, because that is the unit somebody
-thinks in: the checkout being refactored wants Opus at `max`, and the chat asking
+thinks in: the project being refactored wants Opus at `max`, and the chat asking
 where a function is called wants Haiku at `low`. A turn is built from whatever
 they said when the message was sent, and a turn already in flight keeps what it
 started with — they are its argument list, and there is nothing to change it to.
@@ -541,8 +566,8 @@ one — which main composes and emits as a `decision` event, so the sentence has
 one author rather than a renderer spelling its own version of it. A refusal shows
 even with tool calls switched off, because it changed what the turn did.
 `Always allow` echoes the SDK's own `suggestions` back as `updatedPermissions`,
-which writes a rule into the checkout's `.claude/settings.local.json` — remembered
-for that branch, gone when the branch is — and it is offered only where the SDK
+which writes a rule into the project's `.claude/settings.local.json` — checked
+in or not, as that project already decides — and it is offered only where the SDK
 had a rule to suggest, since a button that did nothing would be worse than no
 button.
 
@@ -576,11 +601,11 @@ draws — because a toolbar saying `Edits` over a turn that ran as a plan is the
 one disagreement worth a function to make impossible.
 
 The `+` menu is two items. **Attach file** (⌘U) is the OS picker, and what it
-leaves in the draft is a path relative to the checkout — plain text, not a
+leaves in the draft is a path relative to the project — plain text, not a
 mention, for the same reason `@` inserts a name: the turn runs in this directory
 with `Read`, so a path is already something the agent can open, and print mode
 takes a prompt rather than an upload. A file from somewhere else keeps its
-absolute path, since a `../..` chain reads like a path in this checkout and is
+absolute path, since a `../..` chain reads like a path in this project and is
 not one (`relativeTo` in `lib/files/paths.ts`, `test/attach-paths.ts`).
 **Mention…** types the `@`, which is all it has to do — the menu that follows is
 the one a typed `@` opens.
@@ -600,12 +625,12 @@ named rather than its tools, so one added to it later is covered, and
 MCP tool through it, and being asked to approve a search for a tool is another
 prompt nobody can answer.
 
-The two refusals are there for a reason that survives the isolation argument
-rather than being covered by it. A worktree is a branch; a
-saved request is not in any branch. Deleting one — and `delete_folder` cascades —
-is a change to the workspace that no checkout contains, that no `git checkout`
+The two refusals are there for a reason of their own. A project is a
+repository; a saved request is not in any repository. Deleting one — and
+`delete_folder` cascades — is a change to the workspace that no commit contains,
+that no `git checkout`
 undoes, and that there is no trash to fetch back from. `Bash` in the same turn
-could do worse to the files in the checkout, and that is precisely the
+could do worse to the files in the project, and that is precisely the
 distinction: those files are a branch, and the workspace's records are not.
 
 **A chat's id is the CLI's session id, and that outlives the app's run.** So
@@ -627,55 +652,37 @@ method of its own.
 
 An `--append-system-prompt` says where the turn is. Short, because the CLI can
 see the working directory for itself. What it cannot see is that the `tabomni-*`
-tools are the whole workspace's rather than this checkout's.
+tools are the whole workspace's rather than this project's.
 
-**Several at once.** `WorktreeChats` keys everything by chat id — a turn per chat,
-lines per chat — because a worktree exists so a piece of work can run in
-isolation, and two of them answering in parallel is the point rather than an edge
-case. Removing a worktree deletes its chats: they are conversations about a
-directory that will not exist, and a turn in one could not run anywhere.
+**Several at once.** `WorktreeChats` keys everything by chat id — a turn per
+chat, lines per chat — because a question about one project while another is
+being refactored is the point rather than an edge case.
 
-The chats are the `worktree` pane, registered in `PANELS` like any other and
-**always grouped** — grouped by worktree, so the outer tab is the branch and the
-strip inside it is that checkout's conversations. That is the tab strip in
-Conductor's screenshots, and it came from the grouping machinery rather than
-from a second strip.
+**Where they live.** The listing is `workspace/worktree-chats.json` and each
+chat's lines are `workspace/worktree-chats/<id>.json` beside it — the split the
+notes have, and for the same reason: a turn rewrites one chat rather than all of
+them. Both keep the old names, because renaming the files would lose every chat
+already written.
 
-### Where they live
-
-`~/.tabomni/workspace/worktrees/<folderId>/<branch-slug>` — **not** beside the
-repository. A project's directory is somebody else's, and the rule everywhere
-else here is that the studio writes nothing into it that was not asked for; this
-way removing every worktree leaves that directory exactly as it was. It is also
-where Conductor puts its own (`~/conductor/workspaces/…`), so a project can hold
-both without either noticing.
-
-The branch is slugged because it is a path segment and a branch name is not one:
-`feature/orders` would be two directories deep, `..` would be a directory above
-the one intended. `worktreeSlug` is that, and the traversal cases are what its
-test is mostly about.
+The chats are the `worktree` pane, registered in `PANELS` like any other, listed
+in the left column under the project each is in, and grouped under it in the tab
+strip when grouping is switched on in Settings › Tabs. The list in the column is
+what makes a chat from last week findable at all: the strip holds what is open
+in _this_ run, and a chat is written down as it happens.
 
 ### Running in one
 
-A turn runs in the checkout, and so does anything else pointed at one:
-`terminalCreate` and `startProcess` both take a `worktreeId`, and main resolves
-`resolveWorktreeDir(id) ?? resolveFolderDir(folderId)`.
+A turn runs in the project's directory, and so does anything else pointed at it:
+`terminalCreate` and `startProcess` both take a `folderId` and main resolves
+`resolveFolderDir(folderId)`.
 
 An **id**, never a path. The renderer does not get to name a directory main has
 not already written down — the same rule `insideAny` in `main/files.ts` is for.
-The `??` is also the fallback that matters: a shell whose worktree has since been
-removed runs in the folder rather than failing to start.
 
-The chats **group by worktree** rather than by folder (`lib/panels.ts`), so the
-workbench strip holds one tab per checkout and the strip inside it holds that
-checkout's conversations — which is the tab strip Conductor shows above a
-conversation, and the `+` at its end starts another chat in the same branch. The
-tab is named for the branch; the directory is bookkeeping.
-
-A chat's empty state is `WorktreeWelcome` — which branch, cut from what, and the
-path — because somebody with three checkouts of one project open needs to know
-which one they are about to change. It says **nothing was copied**, on purpose:
-that is the whole point of `git worktree` over duplicating a directory.
+A chat's empty state is `WorktreeWelcome` — which project, and its path —
+because somebody with two projects open needs to know which one they are about
+to change. It says the opposite of a reassurance, on purpose: this is the
+working tree you have checked out, and an edit here is an edit to your work.
 
 ## The dock
 
@@ -706,14 +713,14 @@ A shell in the project the column last had clicked (`lib/shell/store.ts`,
 **This is where the Terminal panel went.** There was a panel — a pane of its own,
 a tab per project in the strip, an agent picker, and a chat view tailing the
 CLI's transcript — built on the premise that a session _was_ the work and could
-not be demoted into a corner. A worktree's chat is that work now, hosted rather
+not be demoted into a corner. A project's chat is that work now, hosted rather
 than tailed, and what was left of the panel is what Conductor's tab always
 was: a shell beside the work. So the panel is gone, and this is the whole of it.
 
-**One shell per place**, keyed by `worktreeId ?? folderId`. Clicking a project
-row points the dock at that project's shell; clicking one of its worktree rows
-points it at that checkout's, so the terminal beside a chat is in the branch the
-chat is editing. A pty's cwd is fixed when it starts and cannot be moved, so
+**One shell per place**, keyed by the project's folder id. Clicking a project
+row, or one of its chats, points the dock at that project's shell, so the
+terminal beside a chat is in the directory the chat is editing. A pty's cwd is
+fixed when it starts and cannot be moved, so
 "the terminal follows the project" can only mean a second pty. A `cd` sent into
 the first would be worse than a second one: it lands in whatever is half-typed at
 the prompt, does nothing at all while a command is running, and leaves one
@@ -728,8 +735,7 @@ switching project does not kill the command left running in the last one.
 Not remembered across a launch, unlike the sessions this replaced. A shell here
 is ad-hoc — something opened beside the work for one command — and replaying five
 of them on every launch would be a surprise rather than a convenience. A folder
-removed from the workspace, or a worktree removed from a project, takes its shell
-with it.
+removed from the workspace takes its shell with it.
 
 ### Run
 
@@ -798,18 +804,18 @@ holds it and scrolls the row into view.
 What it no longer has to do is _bring the list up_. That was the job while one
 box on the right held four lists behind tabs; every list is on screen at once
 now — three sections of the left column, the Explorer on the right — so
-`showPane` sets the pane and nothing else. A worktree's chat is the one pane with
-no list at all, which is why `Pane` in `lib/store.ts` is `Section` plus
+`showPane` sets the pane and nothing else. A project's chat is the one pane with
+no list of its own, which is why `Pane` in `lib/store.ts` is `Section` plus
 `worktree`: `Section` in `lib/sections.ts` is the four kinds the workspace holds,
-and a chat is a conversation in a checkout rather than one of them.
+and a chat is a conversation in a project rather than one of them.
 
 The scrolling half is one place: `SideRow` is every sidebar's row, and it
 scrolls itself into view when it becomes the active one — `block: "nearest"`, so
 a row already on screen is left exactly where it is rather than the list
 centring itself on every click. The opening half cannot be shared, because what
 "holds" a thing differs per panel: a directory chain in the Explorer, a folder
-chain in API and Notes (`ancestorFolderIds` in `lib/tree.ts`), the workspace
-checkout a chat is in, the branch a table belongs to.
+chain in API and Notes (`ancestorFolderIds` in `lib/tree.ts`), the project a
+chat is in, the branch a table belongs to.
 
 Each panel does it in its own `select`, not in an effect beside the list. That
 is what keeps the fold state honest in both directions: it only ever _opens_, so
@@ -907,6 +913,41 @@ relation of their own: every pane but one is hidden, so the table that can be
 paged, sorted or filtered is always the selected one, and a second way to say
 so would be a second thing to keep in step.
 
+### The preview tab
+
+**A single click in the Explorer is a look, not an open.** The tab it opens is
+the _preview_ one — drawn in italics, one at a time — and the next single click
+takes its place rather than adding a tab beside it. Double-clicking the row, or
+typing in the file, keeps it: the italics go and the tab stays like any other.
+It is the editors' own rule, and it is here for the reason it is there: reading
+through a repository to find something is one click per file, and each of those
+clicks used to leave a tab behind, so ten minutes of looking cost fifteen tabs
+to close and a strip too wide to read.
+
+`previewId` on the files store is the whole of the state — one path, or null —
+and `opening` beside it is the arithmetic, tested in `test/files-store.ts`. Four
+things about it are deliberate:
+
+- **A file that already has a tab is left exactly as it is.** A kept tab stays
+  kept and a preview stays a preview, so clicking around the tree cannot quietly
+  demote the file being edited into something the next click evicts.
+- **The replacement happens in the slot the old tab held**, so the tab does not
+  move out from under the pointer while somebody is clicking down a directory.
+- **Only the tree previews.** `⌘P`, a definition jumped to, `New file`, and
+  `Open with` are all somebody asking for a particular file, and they open a tab
+  of its own. So the flag is on `open`/`select` rather than being the default,
+  and the one caller passing it is the row in the tree.
+- **An edit keeps it**, from `setText` rather than from the editor: a keystroke,
+  a paste and a format all go through that one function, and a preview tab that
+  has been typed into and then evicted would be lost work. The eviction still
+  flushes, for the same reason closing a tab does.
+
+It is not remembered across a launch — `files.tabs` stores what was open and
+which was selected, and everything restored comes back kept. A tab that survived
+a restart is one the workspace kept, and having the first click in the tree
+evict it would make the memory worse than none. `keep` is by path rather than
+"whatever is previewing", so a double click on some other row cannot promote it.
+
 ### Grouped tabs
 
 **One tab per folder, with that folder's own tabs in a strip inside it.** A
@@ -921,25 +962,22 @@ other one. Grouped, the outer strip answers "which folder" and the inner one
 It is **off** by default and switched on in Settings › Tabs. The strip somebody
 already has is the one they chose, and a preference that rearranges every open
 tab the first time the app launches is not a default. **No panel is an
-exception.** The worktree chats were one for a while — grouped whatever the
-setting said, on the argument that a chat tab stands for a conversation in a
-checkout rather than for something the user opened, so grouping was how that
-panel stopped spending the strip. What it bought in practice was two tab strips
+exception.** The chats were one for a while — grouped whatever the setting
+said, on the argument that a chat tab stands for a conversation in a place
+rather than for something the user opened, so grouping was how that panel
+stopped spending the strip. What it bought in practice was two tab strips
 stacked on screen the moment a chat was open, in a window whose setting said
-tabs were not grouped: the outer strip the branch, the inner one its chats, for
+tabs were not grouped: the outer strip the place, the inner one its chats, for
 a panel nobody had asked to fold. So the exception is gone, `grouper` reads the
-setting and nothing else, and a chat is one tab among the rest — with the branch
-on its hover line, because the label is the chat's title and cannot carry both.
+setting and nothing else, and a chat is one tab among the rest — with its
+project on its hover line, because the label is the chat's title and cannot
+carry both.
 
 What a folder _is_ differs per panel, and `groupOf` is each one's answer: the
-Explorer root a file sits in — a workspace folder or one of its checkouts, the
-longest match, since a folder added inside another is still a project of its own
-— the checkout a chat is in, the folder in the
-panel's own tree a request or a note is filed under, the schema a table belongs
-to. A file in a worktree groups under the **branch** rather than under the
-project it was cut from, because the same `src/index.ts` open on two branches is
-two tabs, and one folder tab holding both would put the same name in a strip
-twice. A request at the top level of its tree is filed under a real place rather
+Explorer root a file sits in — a workspace folder, the longest match, since a
+folder added inside another is still a project of its own — the project a chat
+is in, the folder in the panel's own tree a request or a note is filed under,
+the schema a table belongs to. A request at the top level of its tree is filed under a real place rather
 than nowhere, so its group is named for the panel — "Requests", "Notes" — rather
 than "Ungrouped".
 
@@ -1018,7 +1056,7 @@ since the box the strip goes in is what decides.
 ## Search
 
 `⌘P` opens a search over everything the workspace can open — a file, a table, a
-request, a worktree's chat, a note — and picking one opens its tab and goes to
+request, a chat, a note — and picking one opens its tab and goes to
 the panel that shows it.
 `components/studio/command-palette.tsx` is the whole of it.
 
@@ -1358,15 +1396,12 @@ flag meaning something. This app's own three are written last, so a user server
 called `tabomni-notes` cannot take a name the tool list pre-approves.
 
 A **project-scoped** server is offered here too, rather than matched against the
-directory a chat is in. A checkout lives under
-`~/.tabomni/workspace/worktrees/`, so it is inside none of the directories the
-CLI would match — a server added under the very project a branch belongs to
-would never be found — and matching would also mean the list changed as the left
-column was clicked around, for a switch that belongs to the workspace. A
-`.mcp.json` in a repository is not read at all: that file is the project's own,
-checked in and shared, and copying a server out of it because a checkout
-happened to be selected is the inheriting this refuses. `claude mcp add` is what
-says yes to it.
+directory a chat is in: matching would mean the list changed as the left column
+was clicked around, for a switch that belongs to the workspace — which holds
+several projects at once. A `.mcp.json` in a repository is not read at all: that
+file is the project's own, checked in and shared, and copying a server out of it
+because that project happened to be selected is the inheriting this refuses.
+`claude mcp add` is what says yes to it.
 
 The setting is one key holding a **JSON array of names** (`mcp.userServers`),
 not a key per server, because these are whatever the user configured rather than
@@ -1421,19 +1456,19 @@ it is left in the code: `src/main/assistant.ts`, `lib/assistant/store.ts` and
 `assistant-panel.tsx` are deleted, the seven `assistant:*` channels and the six
 methods over them are out of the contract, `AssistantChat` with them, and
 `Store` no longer has a `readChat`. `AssistantMessage` and `AssistantEvent`
-stayed: they name the assistant _role_ in a turn, which a worktree's chat still
+stayed: they name the assistant _role_ in a turn, which a project's chat still
 produces.
 
-What replaces it is the chat in a worktree, which is where the argument landed.
+What replaces it is the chat in a project, which is where the argument landed.
 The panel existed because the MCP servers are about the _workspace_ and a chat
-with a checkout under it is a conversation about one repository — but a worktree
-chat is handed the same three servers on the same terms, so the tools were never
-the thing only this panel could reach. What it had that no other surface has is a
+with one repository under it is a conversation about that repository — but a
+project's chat is handed the same three servers on the same terms, so the tools
+were never the thing only this panel could reach. What it had that no other surface has is a
 turn that cannot change anything, and that is a smaller thing than a second chat
 UI, a second store, a second `claude -p` policy and a second denylist to re-read
 every time the CLI grows a tool.
 
-Two things moved rather than went. Its rows and its composer are the worktree
+Two things moved rather than went. Its rows and its composer are the project
 chat's now (`ChatMessage` and `ChatComposer` in
 `components/studio/worktree/`, with `lib/worktree-chat/mention-text.ts` and
 `mentions.ts` under them) — they were always shared, and there is one caller
@@ -1510,41 +1545,35 @@ The first of the four sections, and the only panel that shows the folders
 themselves rather than something the studio keeps about them: the workspace's
 directories, opened one level at a time, and a file opened into an editor.
 
-**One tree: the files of the checkout being worked in.** Not one per project
-and not one per checkout — the list is the contents of a single directory, with
-no root row above it and nothing else beside it (`shownRootOf` in
-`lib/files/roots.ts`, over `activeFolderId` and `checkout` on
-`lib/projects.ts`).
+**One tree: the files of the project being worked in.** Not one per project —
+the list is the contents of a single directory, with no root row above it and
+nothing else beside it (`shownRootOf` in `lib/files/roots.ts`, over
+`activeFolderId` on `lib/projects.ts`).
 
-Two wider versions came first and both are the wrong shape. Every checkout as a
-root of its own is three copies of one repository stacked in one column, each
-with its own `src/`, its own `package.json` and its own everything; every
-project as a heading is the same problem one level up, a list to scroll past
-before reaching the files somebody actually has open. The question a file tree
-answers is "the files of the thing I am working on", and the thing being worked
-on is one place. It is the choice the dock's Terminal already makes: one shell
-for the place you are in, not one per place there is.
+The wider version came first and it is the wrong shape: every project as a
+heading is a list to scroll past before reaching the files somebody actually has
+open. The question a file tree answers is "the files of the thing I am working
+on", and the thing being worked on is one place. It is the choice the dock's
+Terminal already makes: one shell for the place you are in, not one per place
+there is.
 
-Clicking a project row or a worktree row in the column moves the tree, the chat
-and the shell together, so the files beside a chat that is editing a branch are
-that branch's files. Which checkout is remembered **per project**, so coming
-back to one lands on the branch it was left on rather than on its main working
-tree. A `⌘P` hit anywhere else switches the selection on the way to revealing
+Clicking a project row in the column, or one of its chats, moves the tree, the
+chat and the shell together, so the files beside a chat are the files it is
+editing. A `⌘P` hit anywhere else switches the selection on the way to revealing
 it, since the index walks every root.
 
 **There is no bar above the list.** There was one — the project's name, the
-branch on screen and a picker for the other checkouts — and it went for the
-reason the panel's title went: the left column already lists every project and
-every checkout and marks the one selected, so a strip repeating it was a row of
-chrome answering a question that was already on screen. Which branch a file tab
-belongs to is on the tab's hover line, and the title bar's crumb says the same
-thing across the top.
+branch on screen and a picker — and it went for the reason the panel's title
+went: the left column already lists every project and marks the one selected, so
+a strip repeating it was a row of chrome answering a question that was already
+on screen. Which project a file tab belongs to is on the tab's hover line, and
+the title bar's crumb says the same thing across the top.
 
 What the bar carried is the **root's menu**, and that is now the right-click on
 the empty space under the tree — the only part of this panel that is about the
-checkout as a whole rather than about a file in it. It splits the way the bar
+project as a whole rather than about a file in it. It splits the way the bar
 did: `New file`, `Refresh`, `Collapse all`, `Copy path` and `Reveal` act on the
-checkout on screen, `Add folder` is the workspace's own, and `Rename` and
+project on screen, `Add folder` is the workspace's own, and `Rename` and
 `Remove folder` act on the workspace's record of the project. The cost is known
 and accepted: a tree long enough to fill the column leaves only the list's
 bottom padding to right-click, and the way back is `Collapse all` or the File
@@ -1555,13 +1584,12 @@ standing.
 **The panel's header is two tabs: `All files` and `Changes`.** It was the word
 `Explorer` and a row of buttons, which named the panel to somebody already
 looking at it; the space is worth more as the way in to the other list this
-panel has. After an agent's turn, "what has changed in this checkout" is
-often the only question being asked, and it is now a click rather than a button
-that opened a pane. `explorerTab` on `useStudio` is which one is showing,
-remembered with the strip — it is a way of working rather than a fact about a
-branch, so it does not reset when the left column moves. The bar underneath —
-the project, the branch, the checkout picker — is shared by both, since both are
-about the same checkout.
+panel has. After an agent's turn, "what has changed in this project" is often
+the only question being asked, and it is now a click rather than a button that
+opened a pane. `explorerTab` on `useStudio` is which one is showing, remembered
+with the strip — it is a way of working rather than a fact about a project, so
+it does not reset when the left column moves. The bar underneath — the project
+and its branch — is shared by both, since both are about the same project.
 
 **One button beside them, and it is `Refresh`.** There were four — `New file`,
 `Refresh`, `Collapse all`, `Add folder` — and a row of icons beside two tabs is
@@ -1580,14 +1608,14 @@ would be. It drew an empty list and said nothing before, on the argument that
 the header had the button directly above it; it does not any more, and a blank
 column whose only way forward is a right-click is a dead end.
 
-The count rides on the tab: `Changes 12`, read for the checkout on screen
+The count rides on the tab: `Changes 12`, read for the project on screen
 whichever tab is showing, which is the whole use of a number on a tab. Nothing
 at all at zero, or before the first read.
 
 **The list is here; the diff is the tab it opens.** `changes` is a `Pane` of its
-own (`changes-pane.tsx`, `lib/files/changes.ts`), one per checkout, whose **id is
+own (`changes-pane.tsx`, `lib/files/changes.ts`), one per project, whose **id is
 the root's** — so `rootOf` is the identity function and the tab is in the strip
-exactly while that checkout is the one being worked in. A row picks a file and
+exactly while that project is the one being worked in. A row picks a file and
 that tab shows its diff, so a turn's twelve changed files are twelve clicks and
 one tab.
 
@@ -1598,8 +1626,8 @@ files left twelve tabs to close afterwards. Then it was the pane's own left
 column, which worked but put the list somewhere that had to be opened before it
 could be read. What is not allowed either way is the list in both places at
 once — one question answered twice, which is the thing this app keeps deleting
-(the Terminal sidebar's second folder list, the assistant panel beside a worktree
-chat) — so the pane holds the diff and nothing else.
+(the Terminal sidebar's second folder list, the assistant panel beside a
+project's chat) — so the pane holds the diff and nothing else.
 
 A row is one line: the directory, dimmed, then the file's name in its git
 colour, then the state's letter and `+112 −8` at the end. The **directory** is
@@ -1615,7 +1643,7 @@ number the row shows none: a binary file, a file past the cap, a repository with
 no commit yet. Nothing ignored is listed — those are what the tree greys, and
 they are not anybody's changes.
 
-Its list is read for the **one checkout on screen**, unlike the colours, which
+Its list is read for the **one project on screen**, unlike the colours, which
 are read for every root so that any path can be coloured — `useWatchChanges` is
 the hook the panel calls, and it is the panel rather than the list that calls it
 because the count on the tab has to be right while the tree is what is showing.
@@ -1670,10 +1698,10 @@ the right side empty. There is nothing to special-case about it any more — the
 store holds no text for such a file, and a read-only diff was never going to
 hand it any.
 
-**The path in that header is relative to the checkout**, with the absolute one
-on the hover line. A `git worktree` checkout lives under
-`~/.tabomni/workspace/worktrees/<uuid>/<branch>/`, so the absolute path spends
-forty characters on where this app keeps its checkouts before it reaches
+**The path in that header is relative to the project**, with the absolute one
+on the hover line. A repository somewhere deep under `~` spends the first
+forty characters of its absolute path saying nothing about the file before it
+reaches
 anything about the file — and a header that truncates from the left then shows
 `…/hhh/bbb.txt` where `bbb.txt` would have fitted. `Copy path` and `Reveal`
 still deal in the absolute path, which is what the OS and a terminal want.
@@ -1711,6 +1739,120 @@ has nothing left to guard against and is gone. Whitespace is now all or nothing
 no selection-scoped equivalent, and somebody who turned the toggle on to find a
 stray tab wanted all of them anyway.
 
+**A review is left on the diff, and becomes a chat.** Reading a turn's work is
+where the remarks happen — "this leaks", "wrong error path", "rename this" — and
+before this they had to be retyped into a chat with the file and the line named
+by hand, which is both the tedious part and the part that goes wrong. So the
+`Changes` pane takes them where they occur: a `+` in a column against the code
+picks a line — **held down and dragged** for a range, the way a forge does it,
+with shift-click as the second way — a box at the foot of the pane takes the
+remark, and one button opens a new chat in that project **with the whole review
+written into its composer** — unsent, which is what the ellipsis on
+`Ask AI to fix…` means. A prompt assembled out of eight remarks is exactly the
+kind that wants a sentence added to it ("the first three only", "and run the
+tests"), and a turn already in flight cannot be told that, so the last word stays
+the reader's in a field they are already looking at. The threads are **not**
+cleared by it either: the review is the structured half — ranges, files, who said
+what — and the composer holds only its text, so discarding it on the strength of
+a message nobody has sent yet would throw away the reviewable half if the reader
+decided against sending. `Discard` is the deliberate way, and pressing the button
+twice makes a second chat, which is visible rather than silent.
+
+That draft is `drafts` on the worktree-chat store, and giving it somewhere to live
+fixed something that was already wrong: **a composer's draft is now per chat**.
+The field held one local `useState` and the pane was never keyed, so a
+half-written message followed you into the next chat you clicked and sat under
+its own field. It is keyed by the chat now, the field hands back what was in it
+on the way out (`onLeave`), and `create` takes a draft and writes it in the same
+`set` as the chat — the composer reads it as its _initial_ value, and one arriving
+a render later would arrive after the field had been built empty. Initial rather
+than controlled, because a value round-tripped through a store on every keystroke
+would put the mention menu's caret bookkeeping behind a render it does not
+control.
+
+**A comment is a thread, not a line of text**, and that is the shape rather than
+a feature: a remark on a range is answered, argued with and added to, the way one
+on a pull request is. So a range holds _notes_, each with an author, and `Reply`
+adds one. Which is also what makes the next thing expressible without a
+migration: an **agent** asked to review the diff leaves threads of its own
+(`author: "agent"`, opened through `comment` rather than through the composer),
+and answering one is the same reply. Nothing in `lib/files/review.ts` would
+change for it, which is the reason it is built this way before there is anything
+to build on it — retrofitting an author onto a flat string is a migration, and
+there is nothing yet to migrate. In the prompt, a thread with one note is that
+note unattributed and a thread with several is the exchange with each line
+labelled `Reviewer` or `Assistant`: naming an author in a conversation with one
+voice is noise, and who said what is the whole content of a disagreement. `lib/files/review.ts` is the
+store and the prompt; `lib/files/review-marks.ts` is the column;
+`review-panel.tsx` is the strip.
+
+Six things about its shape were decided rather than fallen into:
+
+- **The picker is a gutter, not the code.** Both sides of this diff are genuinely
+  read-only, so nothing in the content area holds focus or reports a selection,
+  and the browser's own selection there is what somebody uses to _copy_ a line. A
+  mousedown handler over the code would have to guess which of the two every drag
+  was. A click in a gutter is never anything else.
+- **The range is painted while it is dragged; the box opens when the pointer is
+  let go** (`settled` on the pending range). Drawing the box on the way down took
+  height off the diff mid-gesture, which moved the rows out from under the
+  pointer that was still choosing them. The drag itself is followed with an
+  anchor rather than by growing what is there — `stretch` against `pick`'s
+  `extend` — because a drag that turns back has to shrink, and a range grown from
+  itself can only ever get bigger. **The drag is followed on `window` rather than
+  on the column**, and that is not a detail: the column is 22px wide, and the
+  hand pulling a range down goes _through the code_ — which is the thing being
+  chosen. So the row comes off the pointer's Y through `lineBlockAtHeight`, the
+  same way a gutter's own handlers resolve a line, and the X is ignored; a drag
+  that leaves the editor entirely keeps working, and one clamped past either end
+  stops at the last row on screen rather than scrolling the diff under a held
+  pointer. Only a row crossed changes the range, since each change is a store
+  write, a render and a transaction. It is finished on a `window` `mouseup`, since
+  the button is regularly let go outside the column it was pressed in.
+- **The remarks are in the pane's own bar, not in the diff** — and it went the
+  other way once. The threads _were_ CodeMirror block widgets under the lines
+  they were about, which is where a forge draws them, built from plain DOM
+  because a React root per thread would be mounted by a view that rebuilds on
+  every file, layout and theme change and measured before React had committed
+  anything into it. They came back out for a plainer reason than any of that: a
+  diff with three comments in it is a diff pushed apart in three places, and the
+  code around a remark is the thing somebody is reading. What the diff keeps is
+  what it can say without moving a line — a bubble in the review column and a
+  tint on the range — and the remark itself is a row in the list, where a review
+  of four files is one list rather than four files to open, and where a thread in
+  a file that is not on screen is still readable. Gone with the widgets: their
+  DOM, the module-level `drafts` they needed so a rebuild would not take a
+  half-typed sentence with it, and `replyTo` ever reaching `review-marks.ts`.
+- **Only the new side.** The line numbers a comment carries are the working
+  file's, because those are what an agent can open the file at. A removed line is
+  a block widget rather than a line of that document and has no line in the file
+  to point at, so it gets no cell; a remark about one goes on the kept line
+  beside it.
+- **The quoted lines are captured when the thread is opened**, not resolved when
+  it is sent. Lines move — a fix to the file above this one is enough — and a
+  snippet read later would quote something the remark was never about. Capped at
+  `SNIPPET_LIMIT`, with a line saying how much was left out, since a prompt that
+  stops mid-function reads as the reviewer having meant only that much.
+- **The column is in this pane's diff and nowhere else.** `reviewRootId` is a
+  root id rather than a flag, and only `changes-pane.tsx` passes one — the `Diff`
+  half of a file tab's toggle is the same component without it. A `+` in every
+  diff in the app would be offering a review with nowhere to submit it.
+- **A review is a sitting, not a record.** Nothing is written to disk: drafts
+  outlive switching files and tabs, and do not outlive the app. What a review is
+  _for_ is the chat at the end of it, and that is the thing that keeps it —
+  which is also why the drafts are cleared the moment the chat exists rather than
+  when the turn comes back.
+
+The prompt is the one part with a test (`test/review.ts`): a heading per comment
+naming the file and its lines **relative to the project** — the cwd the turn
+runs in, and forty characters shorter than the absolute path — the quoted lines
+in a fence so a `#` in them is not a heading, then the remark, in the order they
+were written, which is the order the diff was read in. The chat is started with
+`create` on the worktree-chat store, which is why that call now hands back the
+new chat's id: a caller with something to _say_ in a chat has to be able to name
+it, and reading `selectedId` back would be a guess at whether this call is what
+put it there.
+
 **The diff is the one editor that is unmounted rather than hidden.** Every panel
 in the workbench, and every file tab inside this one, is kept mounted and hidden
 with `invisible` — the point is editing state, an undo history and a caret and a
@@ -1728,24 +1870,24 @@ the visible one may answer, and ⌘S typed into a chat's composer saved a file
 tab nobody could see. `pane === "files"` is now the other half of it.
 
 **What the tree draws and what the app may read are two different things.**
-`fileRootsOf` is every root there is — each folder and each of its checkouts —
-and it is what answers "may this be read", "does this tab survive", "which
-checkout is this path in". `shownRootOf` is the single one the tree draws.
+`fileRootsOf` is every root there is — each of the workspace's folders — and it
+is what answers "may this be read", "does this tab survive", "which project is
+this path in". `shownRootOf` is the single one the tree draws.
 Keeping them apart is what stops switching project or branch from closing the
 tabs of the one being left, unsaved edits and all: the tree is a view, not the
 workspace.
 
 Everything keyed by "where" uses the root rather than the folder: `FileRoot.id`
-is `worktreeId ?? folderId`, the same key the dock's shells use for a place. One
-`git status` per root, so a checkout is coloured by its own uncommitted work;
-one tsserver per root, so a hover resolves against that checkout's
-`node_modules` rather than another branch's; one tab group per root, so
-`src/index.ts` open on two branches is two tabs under two names; and the
-palette's index walks them all, with the branch in the hint beside a hit — two
-checkouts of one repository hold the same `src/index.ts`, and the folder's name
-alone would draw the same row twice. `fileRoots` in `main/ipc.ts` is the
-main-process half, and it is what `insideAny` is given, since a checkout is
-inside no folder and every read of one would otherwise be refused.
+is the folder's id, the same key the dock's shells use for a place. One
+`git status` per root, so a project is coloured by its own uncommitted work;
+one tsserver per root, so a hover resolves against that project's
+`node_modules` rather than another project's; one tab group per root, so a file
+is filed under the project it is in; and the palette's index walks them all,
+with the project in the hint beside a hit — two repositories in one workspace
+both hold a `src/index.ts`, and the path alone would draw the same row twice.
+`fileRoots` in `main/ipc.ts` is the main-process half, and it is what
+`insideAny` is given: it is the one list the gate, the watchers, the palette's
+walk and the tsservers are all answered from.
 
 **The tree is the directory tree.** Every other sidebar lists records this app
 owns — a request, a note, a database — and files them however it likes;
@@ -1816,18 +1958,17 @@ whatever a listing read before it was written still says. Only where git has
 nothing to say at all does the listing get the last word.
 
 Treating them as interchangeable shipped a bug worth remembering: a file an agent
-had just created in a worktree was opened from the Changes list, where git had it
+had just created was opened from the Changes list, where git had it
 as `U` and its diff drew the added line correctly, and its tab said `deleted` —
 because the tree had read that directory before the file existed.
 `test/files-store.ts` holds the six cases now.
 
 The status is re-read when the roots load, when Refresh is pressed, and —
-debounced, so a checkout is one read and not fifty — whenever a watched
+debounced, so a project is one read and not fifty — whenever a watched
 directory reports something. Each root's `.git` is watched for exactly this:
 a commit made in the dock's shell changes the colour of every row and the branch
-beside the folder, while touching no directory the tree has open. In a worktree
-that path is a _file_ pointing into the parent repository and catches less; what
-covers the case there is the ordinary one, since a commit touches files in
+beside the folder, while touching no directory the tree has open. What covers
+the cases it misses is the ordinary one, since a commit touches files in
 directories the tree already has open and each of those schedules the same read.
 
 **Refresh is still in the header**, because a watcher is the fast path and not
@@ -1845,8 +1986,8 @@ listings by `movedPath` in `lib/files/paths.ts`. Those helpers accept both
 separators: the main process hands over whatever `node:path` produced, which on
 Windows has backslashes in it.
 
-**Every call is checked against the workspace's roots** — its folders, and the
-checkouts made of them. `insideAny` in `src/main/files.ts` is the gate in front
+**Every call is checked against the workspace's roots** — its folders.
+`insideAny` in `src/main/files.ts` is the gate in front
 of the eight `files:*` handlers, fed by `fileRoots` in `ipc.ts`, and it is why
 they are eight narrow calls rather than one general "run this fs operation": the main process has to be able to say what each one may touch. An
 absolute path from the renderer can name anything on the machine, and the case
@@ -2081,7 +2222,7 @@ along with the mirroring IPC and `hasTranscript`. **Nothing in the app reads
 
 What this costs, plainly: no conversation the CLI wrote is reachable from inside
 this app. `claude --resume` in a terminal still is. What is reachable here is
-what this app itself holds, which is a worktree's chats.
+what this app itself holds, which is a project's chats.
 
 ### The editor
 
@@ -2163,13 +2304,13 @@ pins the module. Both comments say so, and both are load-bearing.
 
 ### Hover and go-to-definition
 
-A real **`tsserver`**, one per Explorer root — each workspace folder, and each
-`git worktree` checkout of one — in the main process (`src/main/tsserver.ts`).
-A checkout gets its own because it has its own `node_modules` and its own
-`tsconfig.json`, and resolving one branch's imports against another branch's
-copy is how a hover ends up pointing at source nobody is looking at.
-`serverFor` takes the longest matching root and a checkout is nested inside no
-folder, so this falls out of the list it is given. The editor keeps what it is
+A real **`tsserver`**, one per Explorer root — each workspace folder — in the
+main process (`src/main/tsserver.ts`). Each gets its own because it has its own
+`node_modules` and its own `tsconfig.json`, and resolving one project's imports
+against another's copy is how a hover ends up pointing at source nobody is
+looking at.
+`serverFor` takes the longest matching root, so a folder added inside another
+one gets the inner server for the files under it. The editor keeps what it is
 good at — colouring, folding, bracket matching in the file in front of it — and
 a hover source and a key binding hand the two project-shaped questions to the
 server: what is this symbol, and where does it come from. Hovering an import gives its signature and its doc comment;
@@ -2258,16 +2399,16 @@ specs, webhook and Mail panels went. What went with it:
   settings file)
 
 **What replaced it is two things, not one.** An agent conversation is a
-worktree's chat — `claude -p` per turn in a checkout of its own, hosted by the
-app rather than read off a file (see Worktrees). A shell is the dock's `Terminal`
+project's chat — one agent turn at a time in that project's directory, hosted by
+the app rather than read off a file (see Chats). A shell is the dock's `Terminal`
 tab, one per project, pointed at whichever the column last had clicked (see The
 dock). The split is the point: the two halves of a session were a conversation
 and a directory, and each of them now lives where it belongs.
 
 What this costs, plainly. A turn cannot be interrupted with a keystroke at a real
 prompt, and cannot answer a permission prompt — print mode has nobody to ask,
-which is why a worktree's chat runs with edits pre-approved in a branch of its
-own. `/clear`, `/compact` and the CLI's own slash commands are not reachable. And
+which is why a project's chat runs with edits pre-approved and says so under the
+composer. `/clear`, `/compact` and the CLI's own slash commands are not reachable. And
 the strip of files a turn had touched went with the transcript it was read from:
 Explorer's own watchers are what notice a change now.
 

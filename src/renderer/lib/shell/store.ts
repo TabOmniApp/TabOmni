@@ -1,11 +1,9 @@
 import { create } from "zustand"
 
 import { useStudio } from "../store"
-import { useWorktrees } from "../worktree/store"
 
 /**
- * One shell in the dock: a pty, in a project's directory or in one of its
- * worktrees.
+ * One shell in the dock: a pty, in a project's directory.
  *
  * **Identified by where it runs**, which is the whole shape of this store:
  * there is one shell per place, and clicking a project in the column points the
@@ -23,24 +21,23 @@ import { useWorktrees } from "../worktree/store"
 export type Shell = {
   /** The place it runs in, which is also its identity — see `placeId`. */
   id: string
+  /** An **id**, never a path: main resolves the directory from its own
+   * record. */
   folderId: string
-  /** The worktree it runs in, or null for the project's own checkout. An
-   * **id**, never a path: main resolves the directory from its own record. */
-  worktreeId: string | null
   /** Bumped to remount the pane, which is what starting a shell over is. */
   attempt: number
   exited: boolean
 }
 
 /** A place a shell can run in, before one has been started there. */
-export type Place = { folderId: string; worktreeId: string | null }
+export type Place = { folderId: string }
 
 type ShellState = {
   shells: Shell[]
   /** The shell the dock's Terminal tab is showing, or null when there is none. */
   activeId: string | null
   /**
-   * Where the *next* shell would go: the project or checkout last clicked.
+   * Where the *next* shell would go: the project last clicked.
    *
    * Recorded rather than acted on, because acting on it would mean spawning a
    * process. Clicking a project is about the project — a pty started in it
@@ -52,7 +49,7 @@ type ShellState = {
 
   /** Points the dock at a place. Switches to that place's shell when it already
    * has one, and otherwise only records where the next one goes. */
-  showFor: (folderId: string, worktreeId?: string | null) => void
+  showFor: (folderId: string) => void
   /**
    * Starts a shell for the target if it has none, and shows it.
    *
@@ -73,13 +70,12 @@ type ShellState = {
 /**
  * The id of the shell that runs in a place.
  *
- * A worktree id when there is one, because that is the narrower answer: a
- * checkout of a project is a different directory from the project, and the two
- * must not share a pty. Both are uuids from the same generator, so one cannot
- * be mistaken for the other.
+ * Its own function rather than the folder id spelled out at each call site: a
+ * place was a pair while `git worktree` checkouts existed, and everything that
+ * asks "which shell runs here" still asks it in one voice.
  */
-export function placeId(folderId: string, worktreeId?: string | null): string {
-  return worktreeId ?? folderId
+export function placeId(folderId: string): string {
+  return folderId
 }
 
 export const useShells = create<ShellState>((set, get) => {
@@ -107,25 +103,15 @@ export const useShells = create<ShellState>((set, get) => {
     if (target && !kept.has(target.folderId)) set({ target: null })
   })
 
-  // And a removed worktree takes its own, for the stronger reason that the
-  // directory is deleted rather than merely unlisted.
-  useWorktrees.subscribe((state) => {
-    const kept = new Set(state.worktrees.map((worktree) => worktree.id))
-    keep((shell) => shell.worktreeId === null || kept.has(shell.worktreeId))
-    const target = get().target
-    if (target?.worktreeId && !kept.has(target.worktreeId))
-      set({ target: null })
-  })
-
   return {
     shells: [],
     activeId: null,
     target: null,
 
-    showFor(folderId, worktreeId = null) {
-      const id = placeId(folderId, worktreeId)
+    showFor(folderId) {
+      const id = placeId(folderId)
       set({
-        target: { folderId, worktreeId },
+        target: { folderId },
         // Only onto a shell that is already running. A place with none stays a
         // target until the Terminal tab asks for it.
         activeId: get().shells.some((shell) => shell.id === id)
@@ -137,13 +123,13 @@ export const useShells = create<ShellState>((set, get) => {
     ensure() {
       const guessed = (): Place | null => {
         const folder = useStudio.getState().folders[0]
-        return folder ? { folderId: folder.id, worktreeId: null } : null
+        return folder ? { folderId: folder.id } : null
       }
 
       const place = get().target ?? guessed()
       if (!place) return
 
-      const id = placeId(place.folderId, place.worktreeId)
+      const id = placeId(place.folderId)
       const known = get().shells.some((shell) => shell.id === id)
       set({
         target: place,

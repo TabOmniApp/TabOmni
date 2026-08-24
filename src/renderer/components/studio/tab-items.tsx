@@ -22,7 +22,6 @@ import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
 import { useNotes } from "@/lib/note/store"
 import { relationId, useTabGroups } from "@/lib/panels"
 import { useStudio, type Pane } from "@/lib/store"
-import { useWorktrees } from "@/lib/worktree/store"
 import { groupTabId, PREFIX } from "@/lib/tabs"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
 import { KIND_ICONS, KIND_LABELS } from "./db/database-tree"
@@ -61,6 +60,8 @@ export function useTabItems(): Map<string, TabStripItem> {
   const changesByRoot = useChanges((state) => state.byRoot)
 
   const fileOpenIds = useFiles((state) => state.openIds)
+  // The one tab drawn in italics: a file being looked at rather than kept.
+  const filePreviewId = useFiles((state) => state.previewId)
   const fileDocs = useFiles((state) => state.docs)
   const fileEntries = useFiles((state) => state.entries)
   // The whole record rather than one lookup: this builds every tab in a loop,
@@ -68,9 +69,6 @@ export function useTabItems(): Map<string, TabStripItem> {
   const gitStatus = useGitStatus()
 
   const workspaceFolders = useStudio((state) => state.folders)
-  // A chat lives in a worktree: the branch names the group's tab when the strip
-  // is grouping, and is a chat tab's hover line when it is not.
-  const worktrees = useWorktrees((state) => state.worktrees)
 
   const groups = useTabGroups()
 
@@ -100,6 +98,9 @@ export function useTabItems(): Map<string, TabStripItem> {
       // The same dot the tree marks the row with: whichever of the two is being
       // looked at says the file has edits that are not on disk.
       dirty: isDirty(fileDocs[filePath]),
+      // The editors' own mark for a preview tab. Nothing else in a strip is
+      // italic, so it reads as "this one is not staying" without a legend.
+      italic: filePath === filePreviewId,
       // And the same colour, so a tab and its row agree about what the file is.
       // `deleted` wins whatever git last said, because it is the state that
       // makes the tab the only thing left of the file.
@@ -158,14 +159,13 @@ export function useTabItems(): Map<string, TabStripItem> {
    *
    * The label is the same word for every one of them, which is the point: the
    * tab is about reviewing *here*, and *here* is said by the strip already — a
-   * tab is in it only while its checkout is the one being worked in. Not the
+   * tab is in it only while its project is the one being worked in. Not the
    * file's name either, which would make one tab look like the twelve this
-   * exists to avoid. The branch goes on the hover line, as a chat's does, and
+   * exists to avoid. The project goes on the hover line, as a chat's does, and
    * the count rides along as the `note`, since a tab that says how much is
    * waiting is the reason to look at it.
    */
   for (const rootId of changesOpenIds) {
-    const branch = worktrees.find((worktree) => worktree.id === rootId)?.branch
     const folder = workspaceFolders.find((entry) => entry.id === rootId)?.name
     const count = changesByRoot[rootId]?.length
 
@@ -173,15 +173,15 @@ export function useTabItems(): Map<string, TabStripItem> {
       id: PREFIX.changes + rootId,
       label: "Changes",
       icon: <GitCompare className="size-3.5 shrink-0" />,
-      // Nothing until the first read, and nothing for a clean checkout: a badge
+      // Nothing until the first read, and nothing for a clean project: a badge
       // reading zero is a thing to notice saying there is nothing to notice.
       note: count ? String(count) : undefined,
-      title: branch ?? folder ?? "Changes",
+      title: folder ?? "Changes",
     })
   }
 
   /*
-   * A worktree's chats, named by what was first asked in them.
+   * A project's chats, named by what was first asked in them.
    *
    * `Untitled` until there is something to name it after, which is what the
    * record already says: a title asked of the model would be a second turn to
@@ -191,15 +191,12 @@ export function useTabItems(): Map<string, TabStripItem> {
     const chat = chats.find((candidate) => candidate.id === id)
     if (!chat) continue
 
-    // Where it is on hover, because the label cannot carry it. This panel used
-    // to be grouped whatever the setting said, so the *outer* tab was the branch
-    // and the title alone was unambiguous inside it; ungrouped, two chats in two
-    // checkouts are two titles side by side with nothing saying which is which.
-    // The project's own name for a chat with no checkout, which is the same
-    // question and the same answer one level up.
-    const where = chat.worktreeId
-      ? worktrees.find((worktree) => worktree.id === chat.worktreeId)?.branch
-      : workspaceFolders.find((folder) => folder.id === chat.folderId)?.name
+    // Which project it is in, on hover, because the label cannot carry it:
+    // ungrouped, two chats in two projects are two titles side by side with
+    // nothing saying which is which.
+    const where = workspaceFolders.find(
+      (folder) => folder.id === chat.folderId
+    )?.name
 
     add({
       id: PREFIX.worktree + id,
@@ -239,7 +236,6 @@ export function useTabItems(): Map<string, TabStripItem> {
       workspaceFolders,
       apiFolders,
       noteFolders,
-      worktrees,
     })
 
     add({
@@ -271,34 +267,20 @@ function groupName(
     workspaceFolders: { id: string; name: string }[]
     apiFolders: { id: string; name: string }[]
     noteFolders: { id: string; name: string }[]
-    worktrees: { id: string; branch: string }[]
   }
 ): string {
   // A schema is its own name rather than a record to look up — the Database
   // panel groups by the schema a table belongs to, and there is no id in it.
   if (pane === "database") return group || "Queries"
 
-  // A chat's group is where it runs, and its id is a root's: a checkout, named
-  // for the branch it is *for* since the directory it lives in is bookkeeping,
-  // or the project's own working tree, named for the project.
+  // A chat's group is where it runs, and its id is a root's — the project.
   const rootId = groupRootId(group)
   if (rootId) {
     return (
-      lists.worktrees.find((entry) => entry.id === rootId)?.branch ??
       lists.workspaceFolders.find((entry) => entry.id === rootId)?.name ??
-      // Between the checkout being removed and its chats closing.
-      "Worktree"
+      // Between the project leaving the workspace and its chats closing.
+      "Project"
     )
-  }
-
-  // A file's group is its **root**, which is a workspace folder or one of that
-  // folder's checkouts — so a group this panel cannot find among the folders is
-  // a worktree, named for its branch like the chats' groups above.
-  if (pane === "files") {
-    const folder = lists.workspaceFolders.find((entry) => entry.id === group)
-    if (folder) return folder.name
-    const worktree = lists.worktrees.find((entry) => entry.id === group)
-    if (worktree) return worktree.branch
   }
 
   const found = {
@@ -307,10 +289,10 @@ function groupName(
     note: lists.noteFolders,
     database: [],
     // `Changes` has no `groupOf` either, for the reason a chat's group is
-    // never reached: there is one of these per checkout already.
+    // never reached: there is one of these per project already.
     changes: [],
-    // Every worktree chat is in a worktree, so the branch above is always the
-    // answer and this is never reached for one.
+    // Every chat is in a project, so the name above is always the answer and
+    // this is never reached for one.
     worktree: [],
   }[pane].find((folder) => folder.id === group)
 
@@ -319,7 +301,7 @@ function groupName(
   // The top level of a panel's own tree, which is a real place to file a
   // request or a note rather than an absence of one — so it is named for the
   // panel, not "Ungrouped". A file is always inside a root, so it only reaches
-  // here between a folder or a checkout going and its tabs closing.
+  // here between a folder going and its tabs closing.
   return {
     files: "Files",
     api: "Requests",

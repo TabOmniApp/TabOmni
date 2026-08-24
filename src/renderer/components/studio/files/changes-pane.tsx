@@ -13,9 +13,9 @@ import { fileRootsOf } from "@/lib/files/roots"
 import { useFiles } from "@/lib/files/store"
 import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio } from "@/lib/store"
-import { useWorktrees } from "@/lib/worktree/store"
 import { SECTION_ACCENT } from "../section-marks"
 import { FilePane } from "./file-workspace"
+import { ReviewPanel } from "./review-panel"
 
 /**
  * The diff of whichever changed file the Explorer's `Changes` tab has picked.
@@ -43,13 +43,10 @@ export function ChangesPane() {
   const selectedId = useChanges((state) => state.selectedId)
   const rootId = selectedId && openIds.includes(selectedId) ? selectedId : null
 
-  // Both lists rather than `fileRoots()`, which is a snapshot: this is the
-  // render that has to notice a checkout being removed under the tab.
+  // The store's list rather than `fileRoots()`, which is a snapshot: this is
+  // the render that has to notice a project leaving under the tab.
   const folders = useStudio((state) => state.folders)
-  const worktrees = useWorktrees((state) => state.worktrees)
-  const root = fileRootsOf(folders, worktrees).find(
-    (candidate) => candidate.id === rootId
-  )
+  const root = fileRootsOf(folders).find((candidate) => candidate.id === rootId)
 
   const path = useChanges((state) =>
     rootId ? (state.selectedPath[rootId] ?? null) : null
@@ -96,8 +93,8 @@ export function ChangesPane() {
   if (!root) {
     return (
       <Notice
-        title="That checkout has gone"
-        detail="The worktree this tab was opened for is no longer in the workspace. Close the tab, or pick a file under Changes in the Explorer."
+        title="That project has gone"
+        detail="The project this tab was opened for is no longer in the workspace. Close the tab, or pick a file under Changes in the Explorer."
       />
     )
   }
@@ -115,11 +112,19 @@ export function ChangesPane() {
     )
   }
 
-  // `preferred` rather than a write into `views` when a row is clicked: the pane
-  // is what knows a file is a diff here, and saying it on the way in is what
-  // stops the frame where the new path was drawn as its own default viewer.
-  // `Diff | Edit` in the header still writes `views`, which wins over this.
-  return <FilePane path={path} visible={shown} preferred="diff" />
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1">
+        <FilePane
+          path={path}
+          visible={shown}
+          preferred="diff"
+          reviewRootId={root.id}
+        />
+      </div>
+      <ReviewPanel rootId={root.id} rootPath={root.path} />
+    </div>
+  )
 }
 
 function Notice({ title, detail }: { title: string; detail: string }) {
