@@ -986,9 +986,57 @@ function readPermission(options: WorktreeChatOptions): ChatPermission {
   return DEFAULT_CHAT_OPTIONS.permission
 }
 
+/**
+ * Where a chat runs: a `git worktree` checkout, or a project's own working tree.
+ *
+ * Both halves, never one: `worktreeId ?? folderId` is the key everything about a
+ * *place* is already keyed by — `FileRoot.id`, the dock's shells — and the
+ * folder is what a checkout's chat still needs in order to say which project it
+ * is a branch of. Null `worktreeId` is the project itself, which is the same
+ * `worktreeId ?? folderId` resolve `terminalCreate` does.
+ */
+export type ChatPlace = {
+  folderId: string
+  /** Null for the project's own working tree. */
+  worktreeId: string | null
+}
+
+/**
+ * The place a record names, as the id everything keyed by place uses.
+ *
+ * Read through this rather than off the fields, the way `chatOptions` is: a chat
+ * written before this build has a `worktreeId` and no `folderId`, and one
+ * written in a project has the other way round. Null only for a record naming
+ * neither, which nothing writes.
+ */
+export function chatRootId(chat: {
+  folderId?: string
+  worktreeId: string | null
+}): string | null {
+  return chat.worktreeId ?? chat.folderId ?? null
+}
+
 export type WorktreeChat = {
   id: string
-  worktreeId: string
+  /**
+   * The checkout this chat is in, or null for the project's own working tree.
+   *
+   * Nullable rather than a second kind of record, because everything about a
+   * chat other than its directory is the same either way. What *does* differ is
+   * said out loud rather than left to the reader: the caption under the
+   * composer and the system prompt both stop claiming isolation for a chat that
+   * has none. See `SYSTEM_PROMPTS` in `main/worktree-chat.ts`.
+   */
+  worktreeId: string | null
+  /**
+   * The project it belongs to.
+   *
+   * Optional because it was added after the record was, like `started`: a chat
+   * written before chats could be in a project has only its worktree, and the
+   * folder is looked up from that. It is the *only* thing a chat with no
+   * worktree has, so read the pair through `chatRootId`.
+   */
+  folderId?: string
   /** The first thing asked, shortened — `"Untitled"` until there is one. */
   title: string
   /**
@@ -1478,9 +1526,9 @@ export type DesktopApi = {
   /** Every chat in every worktree — the listing; the lines are read one chat
    * at a time. */
   listWorktreeChats: () => Promise<WorktreeChat[]>
-  /** A new, empty chat in a worktree. Made up front so the tab exists before
-   * anything has been said in it. */
-  createWorktreeChat: (worktreeId: string) => Promise<WorktreeChat>
+  /** A new, empty chat in a checkout or in a project's own working tree. Made
+   * up front so the tab exists before anything has been said in it. */
+  createWorktreeChat: (place: ChatPlace) => Promise<WorktreeChat>
   readWorktreeChat: (id: string) => Promise<AssistantMessage[]>
   deleteWorktreeChat: (id: string) => Promise<void>
   /**

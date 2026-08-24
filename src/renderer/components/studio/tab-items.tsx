@@ -17,7 +17,7 @@ import { gitStateOf, GIT_TONES, useGitStatus } from "@/lib/files/git-status"
 import { iconFor } from "@/lib/files/icons"
 import { nameOf } from "@/lib/files/paths"
 import { isImage, isNote } from "@/lib/files/viewers"
-import { groupWorktreeId } from "@/lib/panels"
+import { groupRootId } from "@/lib/panels"
 import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
 import { useNotes } from "@/lib/note/store"
 import { relationId, useTabGroups } from "@/lib/panels"
@@ -191,19 +191,21 @@ export function useTabItems(): Map<string, TabStripItem> {
     const chat = chats.find((candidate) => candidate.id === id)
     if (!chat) continue
 
-    // The branch on hover, because the label cannot carry it. This panel used
+    // Where it is on hover, because the label cannot carry it. This panel used
     // to be grouped whatever the setting said, so the *outer* tab was the branch
     // and the title alone was unambiguous inside it; ungrouped, two chats in two
     // checkouts are two titles side by side with nothing saying which is which.
-    const branch = worktrees.find(
-      (worktree) => worktree.id === chat.worktreeId
-    )?.branch
+    // The project's own name for a chat with no checkout, which is the same
+    // question and the same answer one level up.
+    const where = chat.worktreeId
+      ? worktrees.find((worktree) => worktree.id === chat.worktreeId)?.branch
+      : workspaceFolders.find((folder) => folder.id === chat.folderId)?.name
 
     add({
       id: PREFIX.worktree + id,
       label: chat.title,
       icon: <MessageSquare className="size-3.5 shrink-0" />,
-      title: branch ? `${chat.title} — ${branch}` : chat.title,
+      title: where ? `${chat.title} — ${where}` : chat.title,
     })
   }
 
@@ -276,13 +278,15 @@ function groupName(
   // panel groups by the schema a table belongs to, and there is no id in it.
   if (pane === "database") return group || "Queries"
 
-  // A chat's group is its worktree, and the branch is what that worktree is
-  // *for* — the directory it lives in is bookkeeping.
-  const worktreeId = groupWorktreeId(group)
-  if (worktreeId) {
+  // A chat's group is where it runs, and its id is a root's: a checkout, named
+  // for the branch it is *for* since the directory it lives in is bookkeeping,
+  // or the project's own working tree, named for the project.
+  const rootId = groupRootId(group)
+  if (rootId) {
     return (
-      lists.worktrees.find((entry) => entry.id === worktreeId)?.branch ??
-      // Between the worktree being removed and its chats closing.
+      lists.worktrees.find((entry) => entry.id === rootId)?.branch ??
+      lists.workspaceFolders.find((entry) => entry.id === rootId)?.name ??
+      // Between the checkout being removed and its chats closing.
       "Worktree"
     )
   }

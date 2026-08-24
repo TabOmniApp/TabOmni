@@ -18,6 +18,7 @@ import {
   MCP_SETTING_KEYS,
   MCP_USER_SERVERS_KEY,
   mcpUserServerNames,
+  type ChatPlace,
   type DatabaseConnectionInput,
   type FileIndexEntry,
   type UpdateDatabaseInput,
@@ -380,6 +381,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           : null
       },
       worktreeDir: (worktreeId) => store.resolveWorktreeDir(worktreeId),
+      // Null rather than a throw for a folder that has left the workspace: the
+      // caller turns "nowhere to run" into a line in the chat, and one path
+      // through that is easier to be sure of than two.
+      folderDir: (folderId) =>
+        store.resolveFolderDir(folderId).catch(() => null),
       chats: () => store.listWorktreeChats(),
       saveChats: (chats) => store.saveWorktreeChats(chats),
       readChat: (id) => store.readWorktreeChat(id),
@@ -391,8 +397,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.listWorktreeChats, () => worktreeChats.list())
 
-  ipcMain.handle(IPC.createWorktreeChat, (_event, worktreeId: string) =>
-    worktreeChats.create(worktreeId)
+  ipcMain.handle(IPC.createWorktreeChat, (_event, place: ChatPlace) =>
+    worktreeChats.create(place)
   )
 
   ipcMain.handle(IPC.readWorktreeChat, (_event, id: string) =>

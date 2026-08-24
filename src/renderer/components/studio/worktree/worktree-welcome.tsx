@@ -1,36 +1,76 @@
-import { FolderGit2, GitBranch, Layers } from "lucide-react"
+import { FolderGit2, GitBranch, Layers, TriangleAlert } from "lucide-react"
 
+import type { ChatPlace } from "@shared/api"
 import { useStudio } from "@/lib/store"
 import { useWorktrees } from "@/lib/worktree/store"
 
 /**
- * What a chat in a fresh worktree opens on: where this checkout came from.
+ * What a chat with nothing in it yet opens on: where this chat actually is.
  *
- * A conversation with nothing in it yet has a whole pane and one sentence to
- * put in it, and in a worktree there is something worth saying instead — which
- * branch you are on, and what it was cut from. Somebody who has three
- * checkouts of one project open needs that before they type anything, because
- * the alternative is asking an agent to change the wrong one.
+ * A conversation with nothing in it has a whole pane and one sentence to put in
+ * it, and there is something worth saying instead — which directory the turn
+ * will run in. Somebody who has three checkouts of one project open needs that
+ * before they type anything, because the alternative is asking an agent to
+ * change the wrong one.
  *
- * It says **nothing was copied**, on purpose. That is the whole point of
- * `git worktree` over duplicating a directory: one object store, one clone, a
- * second working tree. A line claiming N files had been copied would be
- * describing a different tool.
+ * Two shapes, because the two places are not the same promise. In a checkout it
+ * says **nothing was copied**, on purpose: that is the whole point of
+ * `git worktree` over duplicating a directory, and a line claiming N files had
+ * been copied would be describing a different tool. In a project's own working
+ * tree it says the opposite of the reassurance — this is the branch you have
+ * checked out, and an edit here is an edit to your work — since that is the one
+ * fact that changes how the next sentence should be phrased.
  */
-export function WorktreeWelcome({ worktreeId }: { worktreeId: string }) {
-  const worktree = useWorktrees((state) =>
-    state.worktrees.find((entry) => entry.id === worktreeId)
-  )
+export function WorktreeWelcome({ place }: { place: ChatPlace | null }) {
+  const worktrees = useWorktrees((state) => state.worktrees)
   const folders = useStudio((state) => state.folders)
 
-  // Between the worktree being removed and its chats closing. The chat is
+  // Between the checkout being removed and its chats closing. The chat is
   // still readable — the conversation is on disk — so this says nothing rather
-  // than claiming a checkout that has gone.
-  if (!worktree) return null
+  // than claiming a directory that has gone.
+  if (!place) return null
 
   const project =
-    folders.find((folder) => folder.id === worktree.folderId)?.name ??
+    folders.find((folder) => folder.id === place.folderId)?.name ??
     "this project"
+
+  if (place.worktreeId === null) {
+    const path = folders.find((folder) => folder.id === place.folderId)?.path
+
+    return (
+      <div className="space-y-3">
+        <div className="rounded-lg bg-muted px-4 py-3 text-sm">
+          You are in <span className="font-medium">{project}</span> itself — the
+          working tree you have checked out
+        </div>
+
+        <dl className="space-y-2 text-xs text-muted-foreground">
+          {/* First, because it is the difference between this chat and every
+              other one in the app: there is no branch to throw away. */}
+          <Line Icon={TriangleAlert}>
+            Edits here change the files you are working in. Use{" "}
+            <span className="font-medium">Plan</span> or{" "}
+            <span className="font-medium">Ask</span> in the toolbar below if you
+            would rather be asked first.
+          </Line>
+
+          <Line Icon={GitBranch}>
+            Make a worktree from this project&rsquo;s <code>+</code> for work
+            that should happen on a branch of its own
+          </Line>
+
+          {path && (
+            <Line Icon={FolderGit2}>
+              <span className="font-mono break-all">{path}</span>
+            </Line>
+          )}
+        </dl>
+      </div>
+    )
+  }
+
+  const worktree = worktrees.find((entry) => entry.id === place.worktreeId)
+  if (!worktree) return null
 
   return (
     <div className="space-y-3">

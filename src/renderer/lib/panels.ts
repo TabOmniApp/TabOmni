@@ -1,3 +1,5 @@
+import { chatRootId } from "@shared/api"
+
 import { useExplorer, type OpenTab } from "./db/explorer-store"
 import type { Relation } from "./db/engines/types"
 import { useChanges } from "./files/changes"
@@ -219,23 +221,25 @@ const changesActive = (
 const fileRootOf = (filePath: string): string | null =>
   rootOfPath(fileRoots(), filePath)?.id ?? null
 
-/** The checkout a chat is in. A worktree's id *is* a root's id — `FileRoot.id`
- * is `worktreeId ?? folderId` — so no translation is needed. */
-const worktreeChatRootOf = (id: string): string | null =>
-  useWorktreeChats.getState().chats.find((chat) => chat.id === id)
-    ?.worktreeId ?? null
-
-/** The checkout a chat belongs to. */
-const worktreeChatGroupOf = (id: string): string => {
+/** The place a chat is in. A chat's root id *is* a `FileRoot.id` — both are
+ * `worktreeId ?? folderId` — so no translation is needed. */
+const worktreeChatRootOf = (id: string): string | null => {
   const chat = useWorktreeChats
     .getState()
     .chats.find((candidate) => candidate.id === id)
-  return chat ? `w:${chat.worktreeId}` : NO_GROUP
+  return chat ? chatRootId(chat) : null
 }
 
-/** The worktree a group names, or null when it is not one of a checkout's —
- * what the strip's label and the pane's welcome block ask. */
-export function groupWorktreeId(group: string): string | null {
+/** The place a chat belongs to. */
+const worktreeChatGroupOf = (id: string): string => {
+  const root = worktreeChatRootOf(id)
+  return root ? `w:${root}` : NO_GROUP
+}
+
+/** The place a group names, or null when it is not one of a chat's — what the
+ * strip's label and the pane's welcome block ask. Its id is a root's, so it is a
+ * checkout or a project and the caller looks up which. */
+export function groupRootId(group: string): string | null {
   return group.startsWith("w:") ? group.slice(2) : null
 }
 

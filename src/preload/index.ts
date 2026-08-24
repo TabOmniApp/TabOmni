@@ -121,8 +121,8 @@ const api: DesktopApi = {
   httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
 
   listWorktreeChats: () => ipcRenderer.invoke(IPC.listWorktreeChats),
-  createWorktreeChat: (worktreeId) =>
-    ipcRenderer.invoke(IPC.createWorktreeChat, worktreeId),
+  createWorktreeChat: (place) =>
+    ipcRenderer.invoke(IPC.createWorktreeChat, place),
   readWorktreeChat: (id) => ipcRenderer.invoke(IPC.readWorktreeChat, id),
   deleteWorktreeChat: (id) => ipcRenderer.invoke(IPC.deleteWorktreeChat, id),
   setWorktreeChatOptions: (id, options) =>

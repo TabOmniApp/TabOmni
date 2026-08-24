@@ -3,6 +3,7 @@ import {
   ChevronRight,
   Copy,
   ExternalLink,
+  MessageSquare,
   MoreHorizontal,
   Plus,
 } from "lucide-react"
@@ -129,6 +130,20 @@ export function ProjectCrumbs() {
             Reveal in file manager
           </DropdownMenuItem>
           <DropdownMenuSeparator />
+          {/* In whatever the crumb is currently saying — the checkout when there
+              is one, the project itself otherwise — since that is the directory
+              the rest of the window is already about. */}
+          <DropdownMenuItem
+            onClick={() =>
+              void useWorktreeChats.getState().create({
+                folderId: folder.id,
+                worktreeId: shown.worktreeId,
+              })
+            }
+          >
+            <MessageSquare className="text-muted-foreground" />
+            New chat here
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => setAddingWorktree(true)}>
             <Plus className="text-muted-foreground" />
             New worktree…
@@ -145,7 +160,9 @@ export function ProjectCrumbs() {
           // the left column do: a checkout nobody is working in is a directory.
           onCreated={(id) => {
             useProjects.getState().setActive(folder.id, id)
-            void useWorktreeChats.getState().openWorktree(id)
+            void useWorktreeChats
+              .getState()
+              .openPlace({ folderId: folder.id, worktreeId: id })
           }}
         />
       )}

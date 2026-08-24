@@ -1,11 +1,15 @@
 import { create } from "zustand"
 
-import type {
-  AssistantMessage,
-  WorktreeChat,
-  WorktreeChatAnswer,
-  WorktreeChatAsk,
-  WorktreeChatOptions,
+import {
+  chatRootId,
+  type AssistantMessage,
+  type ChatPlace,
+  type WorktreeChat,
+  type WorktreeChatAnswer,
+  type WorktreeChatAsk,
+  type WorkspaceFolder,
+  type WorktreeChatOptions,
+  type WorktreeRecord,
 } from "@shared/api"
 import { useProjects } from "../projects"
 import { useShells } from "../shell/store"
@@ -57,14 +61,15 @@ type WorktreeChatState = {
   reorder: (ids: string[]) => void
 
   /**
-   * Opens a worktree's chat: the one it was last on, or a new one.
+   * Opens a place's chat: the one it was last on, or a new one.
    *
-   * What a worktree row does. Resolves once there is something on screen, so a
-   * caller can await it before it moves the pane.
+   * What a worktree row does, and what `New chat` on a project does. Resolves
+   * once there is something on screen, so a caller can await it before it moves
+   * the pane.
    */
-  openWorktree: (worktreeId: string) => Promise<void>
-  /** Another chat in the same checkout — the `+` in the strip. */
-  create: (worktreeId: string) => Promise<void>
+  openPlace: (place: ChatPlace) => Promise<void>
+  /** Another chat in the same place — the `+` in the strip. */
+  create: (place: ChatPlace) => Promise<void>
   remove: (id: string) => Promise<void>
 
   send: (id: string, prompt: string) => Promise<void>
@@ -133,12 +138,10 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
      * reason — the tree draws one checkout, so putting something from another one
      * on screen has to move that selection first.
      */
-    const worktree = useWorktrees
-      .getState()
-      .worktrees.find((entry) => entry.id === chat?.worktreeId)
-    if (worktree) {
-      useProjects.getState().setActive(worktree.folderId, worktree.id)
-      useShells.getState().showFor(worktree.folderId, worktree.id)
+    const place = chat ? placeOf(chat, useWorktrees.getState().worktrees) : null
+    if (place) {
+      useProjects.getState().setActive(place.folderId, place.worktreeId)
+      useShells.getState().showFor(place.folderId, place.worktreeId)
     }
 
     // Read once per run. The main process holds the lines and appends to them,
@@ -182,10 +185,10 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     set({ openIds: ids.filter((id) => open.has(id)) })
   },
 
-  async openWorktree(worktreeId) {
+  async openPlace(place) {
     if (get().chats.length === 0) await get().refresh()
 
-    const own = get().chats.filter((chat) => chat.worktreeId === worktreeId)
+    const own = chatsOf(get().chats, place.worktreeId ?? place.folderId)
     // The most recently touched, which is where somebody left off.
     const last = [...own].sort((a, b) =>
       b.updatedAt.localeCompare(a.updatedAt)
@@ -195,12 +198,12 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
       get().select(last.id)
       return
     }
-    await get().create(worktreeId)
+    await get().create(place)
   },
 
-  async create(worktreeId) {
+  async create(place) {
     try {
-      const chat = await window.desktop.createWorktreeChat(worktreeId)
+      const chat = await window.desktop.createWorktreeChat(place)
       set({
         chats: [...get().chats, chat],
         messages: { ...get().messages, [chat.id]: [] },
@@ -400,12 +403,56 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
   },
 }))
 
-/** One worktree's chats, oldest first — the strip inside its tab. */
-export function chatsOf(
-  chats: WorktreeChat[],
-  worktreeId: string
-): WorktreeChat[] {
-  return chats.filter((chat) => chat.worktreeId === worktreeId)
+/** One place's chats, oldest first — the strip inside its tab. Keyed by root id
+ * (`worktreeId ?? folderId`), which is what a chat's group and scope are. */
+export function chatsOf(chats: WorktreeChat[], rootId: string): WorktreeChat[] {
+  return chats.filter((chat) => chatRootId(chat) === rootId)
+}
+
+/**
+ * The place a record names, with the folder filled in for a chat that predates
+ * the field.
+ *
+ * The lookup is why this is not `chatRootId`: a chat written before a chat could
+ * be in a project has only its worktree, and everything that moves the workbench
+ * — the crumb, the Explorer's root, the dock's shell — is asked for a folder and
+ * a checkout rather than for one id. Null once the worktree it names has been
+ * removed, which is the frame before its chats close.
+ *
+ * Takes the worktrees rather than reading them, so a component can subscribe to
+ * the list it is answered from: the listing arrives after the chats do on a
+ * launch, and a place resolved off a snapshot would stay null.
+ */
+export function placeOf(
+  chat: WorktreeChat,
+  worktrees: WorktreeRecord[]
+): ChatPlace | null {
+  if (chat.worktreeId === null) {
+    return chat.folderId ? { folderId: chat.folderId, worktreeId: null } : null
+  }
+
+  const worktree = worktrees.find((entry) => entry.id === chat.worktreeId)
+  if (worktree) {
+    return { folderId: worktree.folderId, worktreeId: worktree.id }
+  }
+  return chat.folderId
+    ? { folderId: chat.folderId, worktreeId: chat.worktreeId }
+    : null
+}
+
+/** The place a root id names, for the callers that have only the id: the `+` at
+ * the end of a group's strip, and `New chat` on a row. */
+export function placeOfRoot(
+  rootId: string,
+  folders: WorkspaceFolder[],
+  worktrees: WorktreeRecord[]
+): ChatPlace | null {
+  const worktree = worktrees.find((entry) => entry.id === rootId)
+  if (worktree) {
+    return { folderId: worktree.folderId, worktreeId: worktree.id }
+  }
+  const folder = folders.find((entry) => entry.id === rootId)
+  return folder ? { folderId: folder.id, worktreeId: null } : null
 }
 
 /** One key dropped from a record. Written out because the destructuring form

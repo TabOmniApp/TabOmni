@@ -70,6 +70,11 @@ export function ProjectsSection() {
               <ProjectRow
                 name={folder.name}
                 shut={shut}
+                onNewChat={() =>
+                  void useWorktreeChats
+                    .getState()
+                    .openPlace({ folderId: folder.id, worktreeId: null })
+                }
                 onToggle={() => {
                   toggleFolder(folder.id)
                   // And the dock's shell follows: a project row is the one
@@ -99,7 +104,11 @@ export function ProjectsSection() {
           onClose={() => setAddingWorktree(null)}
           // Straight into a chat in it, which is the only reason to have made
           // one: a checkout nobody is working in is a directory.
-          onCreated={(id) => void useWorktreeChats.getState().openWorktree(id)}
+          onCreated={(id) =>
+            void useWorktreeChats
+              .getState()
+              .openPlace({ folderId: addingWorktree.folderId, worktreeId: id })
+          }
         />
       )}
     </nav>
@@ -107,50 +116,78 @@ export function ProjectsSection() {
 }
 
 /**
- * One project: the folder's name, and a `+` that makes a worktree of it.
+ * One project: the folder's name, a `+` that makes a worktree of it, and a menu
+ * offering that plus a chat in the project itself.
  *
  * The `+` is Conductor's, and it belongs on the row rather than in a header
- * above the list: it acts on *this* project. A chat is not offered here — a
- * chat happens *in* a checkout, so it is the worktree rows below that start
- * one.
+ * above the list: it acts on *this* project. It stays a worktree rather than
+ * becoming a menu, because a hover button that needs a second click to say what
+ * it does is worse at the common case than it is good at the other one.
+ *
+ * `New chat here` **is** offered, which it was not: a chat used to happen only
+ * in a checkout, on the argument that a branch of its own is what makes edits
+ * pre-approved honest. That argument holds for the permission and not for the
+ * feature — plenty of what somebody asks an agent is a question about the
+ * project they have open, and making them cut a branch first is a worktree
+ * nobody wanted and a directory to remove afterwards. What changes for a chat
+ * here is that nothing claims isolation: see `captionFor` in `chat-pane.tsx` and
+ * `SYSTEM_PROMPTS` in `main/worktree-chat.ts`.
  */
 function ProjectRow({
   name,
   shut,
   onToggle,
+  onNewChat,
   onNewWorktree,
 }: {
   name: string
   shut: boolean
   onToggle: () => void
+  onNewChat: () => void
   onNewWorktree: () => void
 }) {
   return (
-    <div className="group/project relative flex items-center">
-      <SideRow onClick={onToggle} title={name} className="font-medium">
-        <ChevronRight
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground transition-transform",
-            !shut && "rotate-90"
-          )}
-        />
-        <span className="min-w-0 flex-1 truncate text-left">{name}</span>
-      </SideRow>
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div className="group/project relative flex items-center">
+            <SideRow onClick={onToggle} title={name} className="font-medium">
+              <ChevronRight
+                className={cn(
+                  "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                  !shut && "rotate-90"
+                )}
+              />
+              <span className="min-w-0 flex-1 truncate text-left">{name}</span>
+            </SideRow>
 
-      {/*
-        Over the row rather than in it: a row is a button, and a button inside a
-        button is neither valid markup nor clickable. Shown on hover, like the ✕
-        on a tab — a column of projects each wearing a permanent `+` is a column
-        of plus signs.
-      */}
-      <IconButton
-        label={`New worktree in ${name}`}
-        onClick={onNewWorktree}
-        className="absolute right-1 size-5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-visible:opacity-100"
-      >
-        <Plus className="size-3" />
-      </IconButton>
-    </div>
+            {/*
+              Over the row rather than in it: a row is a button, and a button
+              inside a button is neither valid markup nor clickable. Shown on
+              hover, like the ✕ on a tab — a column of projects each wearing a
+              permanent `+` is a column of plus signs.
+            */}
+            <IconButton
+              label={`New worktree in ${name}`}
+              onClick={onNewWorktree}
+              className="absolute right-1 size-5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-visible:opacity-100"
+            >
+              <Plus className="size-3" />
+            </IconButton>
+          </div>
+        }
+      />
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem onClick={onNewChat}>
+          <MessageSquare className="text-muted-foreground" />
+          New chat here
+        </ContextMenuItem>
+        <ContextMenuItem onClick={onNewWorktree}>
+          <GitBranch className="text-muted-foreground" />
+          New worktree…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -171,7 +208,7 @@ function ProjectWorktrees({ folderId }: { folderId: string }) {
   const remove = useWorktrees((state) => state.remove)
   const chats = useWorktreeChats((state) => state.chats)
   const selectedId = useWorktreeChats((state) => state.selectedId)
-  const openWorktree = useWorktreeChats((state) => state.openWorktree)
+  const openPlace = useWorktreeChats((state) => state.openPlace)
   const create = useWorktreeChats((state) => state.create)
 
   const own = worktreesOf(worktrees, folderId)
@@ -199,7 +236,10 @@ function ProjectWorktrees({ folderId }: { folderId: string }) {
                   // starts one when it has none. Nothing else would be a
                   // sensible thing to do with a directory.
                   onClick={() => {
-                    void openWorktree(worktree.id)
+                    void openPlace({
+                      folderId: worktree.folderId,
+                      worktreeId: worktree.id,
+                    })
                     // The shell too, in this checkout rather than the project's
                     // own: a chat here edits this branch, and a terminal beside
                     // it pointed somewhere else would be a trap.
@@ -225,7 +265,14 @@ function ProjectWorktrees({ folderId }: { folderId: string }) {
               }
             />
             <ContextMenuContent className="w-52">
-              <ContextMenuItem onClick={() => void create(worktree.id)}>
+              <ContextMenuItem
+                onClick={() =>
+                  void create({
+                    folderId: worktree.folderId,
+                    worktreeId: worktree.id,
+                  })
+                }
+              >
                 <MessageSquare className="text-muted-foreground" />
                 New chat here
               </ContextMenuItem>
