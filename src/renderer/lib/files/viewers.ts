@@ -110,11 +110,11 @@ export function viewersFor(filePath: string): Viewer[] {
       : ["image"]
   }
 
-  // A `.md` opens in the editor, not the preview. The Explorer is where a
-  // project's files are worked on, and a README clicked from a tree of source
-  // is more often on the way to being changed than being read — so the
-  // rendered view is the one asked for rather than the one arrived at.
-  if (isMarkdown(filePath)) return ["text", "markdown", "blocks", "diff"]
+  // A `.md` opens as the document, not the source. The Explorer is where a
+  // project's files are worked on, and a README reached from a tree of source
+  // is more often being read than changed — so the rendered view is the one
+  // arrived at, and the editor is the one asked for.
+  if (isMarkdown(filePath)) return ["markdown", "text", "blocks", "diff"]
 
   // A `.note` is the other way round from a `.md`: the editor is the point of
   // the file, and the block document underneath it is JSON nobody writes by

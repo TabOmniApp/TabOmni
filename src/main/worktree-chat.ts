@@ -22,6 +22,7 @@ import {
   type AskDecision,
   type AskRequest,
 } from "./claude-agent"
+import type { DshQuestion, DshService } from "./dsh"
 
 /**
  * A project's chats: one agent turn at a time, in that project's directory.
@@ -59,17 +60,22 @@ import {
  *
  * The workspace's MCP servers are handed over, which is the thing no other
  * agent-in-an-editor has: the databases, the saved requests and the notes, in
- * the same conversation as the code: the config, the servers pre-approved,
- * a strict config so the user's own `claude` servers are not pulled into a
- * conversation this app is hosting, and two `delete_*` tools refused. See
- * `ALLOWED_TOOLS` and `DISALLOWED_TOOLS`.
+ * the same conversation as the code — the config, the servers pre-approved,
+ * and two `delete_*` tools refused. See `ALLOWED_TOOLS` and
+ * `DISALLOWED_TOOLS`.
  *
- * A server the user has configured in their own `claude` can be added to that
- * config from Settings › MCP — copied in by name, never inherited, which is
- * what keeps the strict flag meaning something. What one is to a turn is per
- * mode and is `withUserServers`, not a fourth thing to remember: pre-approved
- * where writing is, refused outright in the two read-only modes, and a card in
- * `ask`.
+ * **A turn is started without `--strict-mcp-config`.** There used to be a
+ * fence here — a turn saw only the file this app wrote, and a server from the
+ * user's own `claude` had to be copied in by name from Settings › MCP before a
+ * chat could reach it, which meant an issue tracker already set up in the
+ * terminal was invisible from the chat editing the branch the issue is about,
+ * for no reason on screen. That copying, the per-server switches and the
+ * strict flag are gone: the config named here still carries this app's own
+ * three servers, but the CLI is left to merge it with whatever it would
+ * already find running plain `claude` in this directory — `~/.claude.json`,
+ * a repository's own `.mcp.json`, enabled plugins, claude.ai connectors. A
+ * server that works from the dock's Terminal now works from a chat here with
+ * nothing switched on for it.
  *
  * **What the chat's own toolbar decides** is on the record rather than here:
  * `WorktreeChatOptions` is a model, an effort and a permission per chat, and a
@@ -87,28 +93,11 @@ type Live = {
   starting: boolean
 }
 
-/**
- * The MCP config a turn is handed, and what is in it.
- *
- * The names come back beside the path because the two halves are answered in
- * different places and have to agree: `mcp.ts` writes the file, and this file
- * decides what a turn may call without asking. A config naming a server no tool
- * list mentions is the gap that was already fixed once for the workspace's own
- * three — the tools exist and the turn stalls trying to use them — so a server
- * added to the file has to arrive with its name attached.
- */
-export type McpHandover = {
-  /** The file `--mcp-config` is pointed at. */
-  path: string
-  /** The user's own servers written into it, by config name — `clickup` for
-   * tools called `mcp__clickup__…`. Empty for a config holding only this app's
-   * own three. */
-  userServers: string[]
-}
-
 export type WorktreeChatSource = {
-  /** The MCP config for the servers that are switched on, or null. */
-  mcpConfig: () => Promise<McpHandover | null>
+  /** The file `--mcp-config` is pointed at for this app's own three servers,
+   * or null when none of them are switched on. Never paired with
+   * `--strict-mcp-config` — see the class comment above. */
+  mcpConfig: () => Promise<string | null>
   /** The directory a project names, or null when it has left the workspace —
    * what a chat runs in. */
   folderDir: (folderId: string) => Promise<string | null>
@@ -118,6 +107,8 @@ export type WorktreeChatSource = {
   readChat: (id: string) => Promise<AssistantMessage[]>
   writeChat: (id: string, messages: AssistantMessage[]) => Promise<void>
   deleteChat: (id: string) => Promise<void>
+  /** The DeepSeek Harness gateway, for a chat whose toolbar picked it. */
+  dsh: DshService
 }
 
 /**
@@ -182,11 +173,13 @@ const DISALLOWED_TOOLS = [
 /**
  * The tool a turn asks a question with.
  *
- * Not a permission but a delivery mechanism: it reaches this app by *not* being
- * pre-approved, so the request comes through `canUseTool` and the questions
- * arrive with it. Which means it is only usable in the one mode that has a
- * `canUseTool` at all — `REFUSED_ASKING` is what keeps the other four from
- * reaching for something nobody there can answer.
+ * Not a permission but a delivery mechanism: it reaches this app by *not*
+ * being pre-approved, so the request comes through `canUseTool` and the
+ * questions arrive with it. Every mode has a `canUseTool` now — see
+ * `orgApproving` in `claude-agent.ts` — but that one only ever answers a call
+ * an account's own policy forced, and `AskUserQuestion` is never that;
+ * `REFUSED_ASKING` names it so the other four refuse it outright rather than
+ * having it fall through to a handler that would just deny it anyway.
  */
 const ASK_TOOL = "AskUserQuestion"
 
@@ -219,6 +212,12 @@ const REFUSED_ASKING = [ASK_TOOL]
  * write, and no reading of an argument list decides which ones do. What it costs
  * is `git log` and `rg`, and `Glob` and `Grep` are the same reconnaissance
  * without a shell.
+ *
+ * The one hole in it that is not this app's to close: `orgApproving` in
+ * `claude-agent.ts` lets a `matchedAskRule` call through in every mode,
+ * `plan` and `read` included, because an account's own policy on a connector
+ * carries no read/write shape this app can see. A plan turn that reaches one
+ * of those is trusting that policy rather than this list.
  */
 const READ_TOOLS = [
   "mcp__tabomni-database__list_databases",
@@ -320,12 +319,10 @@ const PERMISSIONS: Record<
     mode: string
     /** Appended to `SYSTEM_PROMPT`, when the mode is worth saying out loud. */
     prompt?: string
-    /** Whether a turn may stop and put the question on screen. The one mode
-     * that does is the reason `canUseTool` is wired at all. */
+    /** Whether a turn may stop and put an arbitrary question on screen — the
+     * one mode where `onAsk` is handed to `runAgentTurn` rather than left for
+     * `orgApproving` to answer on its own. See `claude-agent.ts`. */
     asks?: boolean
-    /** What a server switched on from the user's own `claude` config is to this
-     * mode. See `withUserServers`. */
-    userServers: "allow" | "refuse" | "ask"
   }
 > = {
   plan: {
@@ -333,14 +330,12 @@ const PERMISSIONS: Record<
     refused: [...WRITE_REFUSED, ...REFUSED_ASKING],
     mode: "acceptEdits",
     prompt: PLAN_PROMPT,
-    userServers: "refuse",
   },
   read: {
     allowed: READ_TOOLS,
     refused: [...WRITE_REFUSED, ...REFUSED_ASKING],
     mode: "acceptEdits",
     prompt: READ_PROMPT,
-    userServers: "refuse",
   },
   /*
    * The one that stops and asks.
@@ -369,23 +364,25 @@ const PERMISSIONS: Record<
     mode: "manual",
     prompt: ASK_PROMPT,
     asks: true,
-    userServers: "ask",
   },
   edits: {
     allowed: ALLOWED_TOOLS,
     refused: [...DISALLOWED_TOOLS, ...REFUSED_ASKING],
     mode: "acceptEdits",
-    userServers: "allow",
   },
   /*
-   * Nothing is asked, including about tools this app never listed.
+   * Nothing is asked of a person, including about tools this app never
+   * listed.
    *
    * `ALLOWED_TOOLS` is broad but it is still a list, and a turn that reaches
-   * for something not on it — `BashOutput` after a background command, a skill,
-   * a tool a newer CLI grew — meets a prompt, and in print mode that is a turn
-   * that stalls. This is the escape hatch for exactly that, and it is a choice
-   * somebody makes per chat rather than the default, because "no list at all"
-   * should not be what a chat opens on.
+   * for something not on it — `BashOutput` after a background command, a
+   * skill, a tool a newer CLI grew — is refused by `orgApproving` rather than
+   * left to stall, unless it is a call an account's own policy forced
+   * (`matchedAskRule`), which is the one thing this mode still lets through
+   * without a person answering — see `orgApproving` in `claude-agent.ts`.
+   * This mode is the escape hatch for the rest of what is unlisted, and it is
+   * a choice somebody makes per chat rather than the default, because "no
+   * list at all" should not be what a chat opens on.
    *
    * The two `delete_*` are still named. Whether `bypassPermissions` honours a
    * deny list is the CLI's business rather than this app's, so this is the one
@@ -397,50 +394,7 @@ const PERMISSIONS: Record<
     mode: "bypassPermissions",
     // Nothing to say: this is the mode with no allow list, and a refusal here
     // would be the one thing `Full access` promises not to do.
-    userServers: "ask",
   },
-}
-
-/**
- * A mode's two tool lists, with the user's own servers folded in.
- *
- * Written as a function over the table rather than as more entries in it,
- * because what a third-party server is to a mode does not follow from the
- * mode's own lists: those name tools this app ships and knows the shape of, and
- * a server somebody added is a name with an unknown set behind it.
- *
- * - **`allow`** — pre-approved by server name, the way the `tabomni-*` three
- *   are, so a tool added to it later is covered without a release here.
- * - **`refuse`** — the read-only pair. The whole server goes, not some of it:
- *   nothing in a config file says which of `clickup`'s tools read and which
- *   file a ticket, and a read-only mode that lets a turn find out by calling one
- *   is not read-only. Named rather than left off `READ_TOOLS` for the reason
- *   every refusal here is named — unlisted is *askable*, and in a mode with
- *   nobody to ask that is a turn that stalls.
- * - **`ask`** — neither list, which is exactly how a question reaches the
- *   screen. In `ask` mode that is the point: the card comes up and somebody
- *   answers it. In `full` there is no allow list at all and nothing is asked.
- *
- * `allowed` stays undefined when the mode has none, since an empty array is a
- * list that allows nothing rather than the absence of one.
- */
-export function withUserServers(
-  permission: { allowed?: string[]; refused: string[]; userServers: string },
-  servers: string[]
-): { allowed?: string[]; refused: string[] } {
-  const tools = servers.map((name) => `mcp__${name}`)
-  if (tools.length === 0 || permission.userServers === "ask") {
-    return { allowed: permission.allowed, refused: permission.refused }
-  }
-  return permission.userServers === "allow"
-    ? {
-        allowed: permission.allowed ? [...permission.allowed, ...tools] : tools,
-        refused: permission.refused,
-      }
-    : {
-        allowed: permission.allowed,
-        refused: [...permission.refused, ...tools],
-      }
 }
 
 /**
@@ -493,6 +447,29 @@ export class WorktreeChats {
   private readonly messages = new Map<string, AssistantMessage[]>()
 
   /**
+   * Each chat's DeepSeek Harness session id, for the chats whose toolbar picked
+   * the gateway.
+   *
+   * Reused for the life of the run so a conversation continues in the gateway's
+   * own log — the gateway holds the session, and this is the only thing this
+   * app needs to talk to it again. Not written down: a DeepSeek session id is
+   * the gateway's, not a record the app owns, and a restarted app starts a
+   * fresh one.
+   */
+  private readonly dshSessions = new Map<string, string>()
+
+  /**
+   * The model and reasoning effort each chat's DeepSeek session is currently
+   * on, so a change is only sent to the gateway when it actually changed —
+   * and, just as importantly, so the session is told on EVERY later turn, not
+   * only the one that created it.
+   */
+  private readonly dshModelByChat = new Map<
+    string,
+    { model: string; effort: string | null }
+  >()
+
+  /**
    * Questions a turn has stopped on, keyed by ask id.
    *
    * By ask rather than by chat, even though a chat has one at a time: an answer
@@ -511,6 +488,13 @@ export class WorktreeChats {
        * what was decided *about*: an answer on its own is a bare "Allowed". */
       ask: WorktreeChatAsk
       answered: (decision: AskDecision) => void
+      /** Set for a DeepSeek turn: how to send the answer back to the gateway,
+       * which is what the resolver submits before it releases the turn. */
+      gateway?: {
+        rpcId: string
+        sessionId: string
+        questions: DshQuestion[]
+      }
     }
   >()
 
@@ -561,6 +545,8 @@ export class WorktreeChats {
     this.live.delete(id)
     this.messages.delete(id)
     this.started.delete(id)
+    this.dshSessions.delete(id)
+    this.dshModelByChat.delete(id)
 
     await this.source.saveChats(
       (await this.source.chats()).filter((chat) => chat.id !== id)
@@ -686,6 +672,32 @@ export class WorktreeChats {
       role: "ask",
       text: said(pending.ask, answer),
     })
+
+    // A DeepSeek turn's question is answered by sending the picked options
+    // back to the gateway; only then does the turn resume. The decision the
+    // `answered` resolver wants is not meaningful to the gateway, so it is
+    // released with a no-op allow once the answer is accepted.
+    const gateway = pending.gateway
+    if (gateway !== undefined) {
+      const answers =
+        answer.kind === "answers"
+          ? Object.entries(answer.answers).map(([questionText, selected]) => {
+              const question = gateway.questions.find(
+                (entry) => entry.question === questionText
+              )
+              return { id: question?.id ?? questionText, selected }
+            })
+          : []
+      void this.source.dsh
+        .answerQuestion(gateway.rpcId, gateway.sessionId, answers)
+        .then(() => pending.answered({ allow: true }))
+        .catch((error: unknown) => {
+          console.error("Could not answer the DeepSeek question", error)
+          pending.answered({ allow: true })
+        })
+      return
+    }
+
     pending.answered(decided(answer))
   }
 
@@ -730,12 +742,15 @@ export class WorktreeChats {
     // would otherwise run with `undefined` for the whole argument list.
     const permission = PERMISSIONS[options.permission] ?? PERMISSIONS.edits
 
-    // The config and the tool lists out of one read, so the servers written
-    // into the file are the ones the lists were built from. Asked per turn
-    // rather than held, because Settings can be changed between two messages in
-    // the same chat.
-    const mcp = await this.source.mcpConfig()
-    const tools = withUserServers(permission, mcp?.userServers ?? [])
+    // A chat whose toolbar picked the gateway is the gateway's turn to run.
+    if (options.provider === "deepseek") {
+      await this.runDeepSeekTurn(id, cwd, prompt, options)
+      return
+    }
+
+    // Asked per turn rather than held, because Settings can be changed between
+    // two messages in the same chat.
+    const mcpConfig = await this.source.mcpConfig()
 
     const run = await runAgentTurn(
       {
@@ -747,17 +762,14 @@ export class WorktreeChats {
         // own `claude` deciding — see `AgentTurn`.
         model: options.model,
         effort: options.effort,
-        // Every one of these four out of one entry, so a turn cannot be
+        // Every one of these three out of one entry, so a turn cannot be
         // assembled half in one mode and half in another. See `PERMISSIONS`.
-        allowedTools: tools.allowed,
-        disallowedTools: tools.refused,
+        allowedTools: permission.allowed,
+        disallowedTools: permission.refused,
         permissionMode: permission.mode,
-        // Strict, still: what is in that file is what this app put there — its
-        // own servers, plus whichever of the user's `claude` servers Settings
-        // switched on. Nothing is inherited from the directory the CLI happens
-        // to be started in. See `user-mcp.ts`.
-        mcpConfig: mcp?.path ?? null,
-        strictMcp: true,
+        // No `--strict-mcp-config` — see the class comment above. The CLI
+        // merges this with whatever it would already find on its own.
+        mcpConfig,
         appendSystemPrompt: permission.prompt
           ? `${system} ${permission.prompt}`
           : system,
@@ -796,6 +808,24 @@ export class WorktreeChats {
             void this.run(id, cwd, prompt, true, options, system)
             return
           }
+          // The CLI refused the model the toolbar named — it does not exist or
+          // this account has no access to it. Fall back to the CLI's own default
+          // so a chat carries on rather than failing on every message, and
+          // record it so the toolbar stops offering a model that cannot run.
+          if (
+            error !== null &&
+            options.model !== null &&
+            isModelRejected(error)
+          ) {
+            const fallback: WorktreeChatOptions = {
+              ...options,
+              model: null,
+              effort: null,
+            }
+            void this.run(id, cwd, prompt, false, fallback, system)
+            void this.setOptions(id, fallback)
+            return
+          }
           this.finish(id, error)
         },
       }
@@ -826,6 +856,232 @@ export class WorktreeChats {
      * same race a much narrower one.
      */
     if (run && this.live.has(id)) this.live.set(id, { run, starting: false })
+  }
+
+  /**
+   * One DeepSeek turn — a chat whose toolbar picked the gateway.
+   *
+   * Unlike a `claude` turn it has no permission modes, tool gates or asks: the
+   * gateway owns the session and its tools run under the gateway's own policy.
+   * What this app draws is the gateway's session-event stream as the same lines
+   * a `claude` turn writes — assistant text, tool calls and their results — so
+   * a chat reads the same whichever provider answered.
+   */
+  private async runDeepSeekTurn(
+    id: string,
+    cwd: string,
+    prompt: string,
+    options: WorktreeChatOptions
+  ): Promise<void> {
+    // The chat's gateway session is created on the first DeepSeek turn and
+    // reused after, so a conversation continues itself in the gateway's log.
+    let sessionId = this.dshSessions.get(id)
+    if (!sessionId) {
+      try {
+        sessionId = await this.source.dsh.createSession({ cwd })
+      } catch (error) {
+        this.finish(id, error instanceof Error ? error.message : String(error))
+        return
+      }
+      this.dshSessions.set(id, sessionId)
+    }
+
+    // A session starts on the gateway's default model and keeps the model it
+    // was given — so a chat that switches models between two messages has to
+    // say so again, or the next turn answers on the model the first one did.
+    // Applied only when the chosen model or effort differs from what this
+    // chat's session already runs, which is what keeps a same-model turn from
+    // paying for an extra round trip.
+    const applied = this.dshModelByChat.get(id)
+    const wantedEffort = options.effort ?? null
+    if (
+      options.model !== null &&
+      (applied === undefined ||
+        applied.model !== options.model ||
+        applied.effort !== wantedEffort)
+    ) {
+      try {
+        await this.source.dsh.applyModel(
+          sessionId,
+          options.model,
+          wantedEffort ?? undefined
+        )
+        this.dshModelByChat.set(id, {
+          model: options.model,
+          effort: wantedEffort,
+        })
+      } catch (error) {
+        // Non-fatal: the gateway keeps the current model, and the turn still runs.
+        console.error("Could not set the DeepSeek model", error)
+      }
+    }
+
+    // TODO(dsh): the permission preset picker still shows in the composer,
+    // but nothing applies it to the gateway session — `sessions.setPermission`
+    // isn't on the published @deepseek-ai/dsh-host-apiproxy yet (only on an
+    // in-progress harness checkout), so `dsh.ts`'s setPermissionPreset was
+    // removed rather than shipped calling an RPC that doesn't exist on the
+    // registry build. Restore both once that method ships and the dependency
+    // is bumped past 0.1.1-rc.2.
+
+    // The turn owns this socket: it is opened here and closed with the turn,
+    // so a stop (or the app quitting) ends it.
+    const controller = new AbortController()
+    this.live.set(id, {
+      run: { kill: () => controller.abort() },
+      starting: false,
+    })
+
+    let assistantText = ""
+    // The model the turn ran on, and the token figures per step. The gateway
+    // reports them per step, so they are keyed by step and summed at the end
+    // into one usage line, the way a `claude` turn writes one.
+    let lastModel: string | null = null
+    const stepUsage = new Map<
+      number,
+      { input: number; output: number; cacheRead: number; thinking: number }
+    >()
+    const completed = (async () => {
+      try {
+        for await (const entry of this.source.dsh.openSessionTurn(
+          sessionId,
+          controller.signal
+        )) {
+          // The gateway paused the turn on a question. Show it and wait — the
+          // turn does not end here; it resumes once the answer lands.
+          if ("kind" in entry) {
+            await this.askDeepSeek(
+              id,
+              entry.rpcId,
+              entry.sessionId,
+              entry.questions
+            )
+            continue
+          }
+          if (entry.type === "assistant/chunk") {
+            const text = chunkTextOf(entry.data)
+            if (text !== null) {
+              assistantText += text
+            } else {
+              const usage = usageOf(entry.data)
+              if (usage !== null) stepUsage.set(usage.step, usage.counts)
+            }
+          } else if (entry.type === "assistant/message") {
+            // The complete message replaces the chunks that streamed to it.
+            assistantText = messageTextOf(entry.data)
+            lastModel = messageModelOf(entry.data) ?? lastModel
+            const usage = usageOf(entry.data)
+            if (usage !== null) stepUsage.set(usage.step, usage.counts)
+          } else if (entry.type === "tool/call") {
+            const call = toolCallOf(entry.data)
+            if (call !== null) {
+              void this.append(id, {
+                id: lineId(),
+                role: "tool",
+                name: call.name,
+                summary: summaryOf(call.arguments),
+                toolId: call.toolId,
+              })
+            }
+          } else if (entry.type === "tool/result") {
+            const result = toolResultOf(entry.data)
+            if (result !== null) {
+              this.recordResult(id, result.toolId, result.text, result.failed)
+            }
+          } else if (entry.type === "turn/end") {
+            break
+          }
+        }
+      } catch (error) {
+        this.finish(id, error instanceof Error ? error.message : String(error))
+        return
+      }
+      // A turn that ended without a final assistant message still shows what it
+      // streamed.
+      if (assistantText !== "") {
+        await this.append(id, {
+          id: lineId(),
+          role: "assistant",
+          text: assistantText,
+        })
+      }
+      // One usage line per turn, summed across its steps, like a `claude`
+      // turn's. `costUsd` is unknown for the gateway — it does not report a
+      // price — so it stays null and the line shows the tokens, not a cost.
+      const totals = totalUsage(stepUsage)
+      if (totals !== null) {
+        await this.append(id, {
+          id: lineId(),
+          role: "usage",
+          usage: {
+            model: lastModel,
+            input: totals.input,
+            cacheWrite: 0,
+            cacheRead: totals.cacheRead,
+            output: totals.output,
+            thinking: totals.thinking,
+            costUsd: null,
+          },
+        })
+      }
+      this.finish(id, null)
+    })()
+
+    // The stream is already iterating, so a prompt sent now has a live socket
+    // for its events — the ordering that a silent turn used to get wrong.
+    try {
+      await this.source.dsh.sendPrompt({ sessionId, text: prompt })
+    } catch (error) {
+      controller.abort()
+      this.finish(id, error instanceof Error ? error.message : String(error))
+      return
+    }
+    await completed
+  }
+
+  /**
+   * A DeepSeek turn stopped on a question.
+   *
+   * Builds the same questions ask a `claude` turn raises, so the same card
+   * draws, and holds the turn until `answer` submits the answer to the
+   * gateway — the `gateway` the pending entry carries is how `answer` knows
+   * where to send it.
+   */
+  private async askDeepSeek(
+    chatId: string,
+    rpcId: string,
+    sessionId: string,
+    questions: DshQuestion[]
+  ): Promise<void> {
+    // A question with nothing answerable is no question: the card would have
+    // nothing to click and the turn would wait for ever.
+    const askQuestions = asked({
+      questions: questions as unknown as Record<string, unknown>[],
+    })
+    if (askQuestions === null) return
+
+    const id = randomUUID()
+    const ask: WorktreeChatAsk = {
+      id,
+      chatId,
+      kind: "questions",
+      questions: askQuestions,
+    }
+    return new Promise<void>((resolve) => {
+      const settle = (decision: AskDecision): void => {
+        // The turn resumes on the gateway's own timing once the answer lands;
+        // the decision this resolver is handed is not meaningful to it.
+        void decision
+        if (!this.asks.delete(id)) return
+        resolve()
+      }
+      this.asks.set(id, {
+        ask,
+        answered: settle,
+        gateway: { rpcId, sessionId, questions },
+      })
+      this.emit({ chatId, type: "ask", ask })
+    })
   }
 
   stop(id: string): void {
@@ -1183,10 +1439,191 @@ function isSessionTaken(error: string): boolean {
   return /session id .* is already in use/i.test(error)
 }
 
+/**
+ * Whether the CLI refused the model a turn asked for.
+ *
+ * The CLI writes its own sentence and exits; matched on the two phrases it
+ * uses rather than on the model name, because the name is what varies. Only
+ * matched for a turn that actually named a model, so a bare CLI failure is
+ * still reported.
+ */
+function isModelRejected(error: string): boolean {
+  return /there's an issue with the selected model|you may not have access to it/i.test(
+    error
+  )
+}
+
 /** A chat's name: the first thing asked, on one line and short enough for a tab
  * in a strip. */
 function titleOf(text: string): string {
   const line = collapse(text)
   if (!line) return "Untitled"
   return line.length > 40 ? `${line.slice(0, 39)}…` : line
+}
+
+/*
+ * The DeepSeek turn's session events, narrowed to the fields a line draws.
+ * The gateway's own event `data` shapes are used here rather than imported:
+ * they are the harness's, and this app only needs the four of these it can
+ * draw.
+ */
+
+/** The text carried by one `assistant/chunk`, or null for a non-text chunk.
+ * The gateway streams text as `text-delta` chunks and closes a block with a
+ * `block-end`; the usage and finish chunks carry no text. */
+function chunkTextOf(data: unknown): string | null {
+  const chunk = (data as { chunk?: { type?: unknown; text?: unknown } }).chunk
+  if (chunk?.type !== "text-delta") return null
+  return typeof chunk.text === "string" ? chunk.text : null
+}
+
+/** The full text of a final `assistant/message`, joined across its text blocks. */
+function messageTextOf(data: unknown): string {
+  const message = (data as { message?: { content?: unknown } }).message
+  if (!Array.isArray(message?.content)) return ""
+  return message.content
+    .filter(
+      (block) =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "text"
+    )
+    .map((block) => (block as { text?: unknown }).text ?? "")
+    .join("")
+}
+
+/** The model a turn's final message names, or null when it was not `model`. */
+function messageModelOf(data: unknown): string | null {
+  const source = (data as { message?: { source?: { model?: unknown } } })
+    .message?.source
+  return typeof source?.model === "string" ? source.model : null
+}
+
+/** One `tool/call`, or null when the event does not carry the fields. */
+function toolCallOf(data: unknown): {
+  toolId: string
+  name: string
+  arguments: string
+} | null {
+  const call = data as {
+    callId?: unknown
+    name?: unknown
+    arguments?: unknown
+  }
+  if (typeof call.callId !== "string" || typeof call.name !== "string")
+    return null
+  return {
+    toolId: call.callId,
+    name: call.name,
+    arguments: typeof call.arguments === "string" ? call.arguments : "",
+  }
+}
+
+/** One `tool/result`, narrowed to the tool row's fill-in fields. The gateway
+ * nests the returned text one more level than a call's: `content` is a list of
+ * text blocks, joined here. */
+function toolResultOf(data: unknown): {
+  toolId: string
+  text: string
+  failed: boolean
+} | null {
+  const message = (
+    data as {
+      message?: { content?: unknown; source?: { callId?: unknown } }
+    }
+  ).message
+  const callId = message?.source?.callId
+  if (typeof callId !== "string") return null
+  const block = Array.isArray(message?.content)
+    ? (message.content[0] as
+        { content?: unknown; isError?: unknown } | undefined)
+    : undefined
+  const inner = Array.isArray(block?.content) ? block!.content : []
+  const text = inner
+    .filter(
+      (part): part is { text: string } =>
+        typeof part === "object" &&
+        part !== null &&
+        (part as { type?: unknown }).type === "text" &&
+        typeof (part as { text?: unknown }).text === "string"
+    )
+    .map((part) => part.text)
+    .join("")
+  return { toolId: callId, text, failed: block?.isError === true }
+}
+
+/** The step's token figures, read off a `usage` chunk or a final message's
+ * `usage`, or null when the event carries none. */
+function usageOf(data: unknown): {
+  step: number
+  counts: { input: number; output: number; cacheRead: number; thinking: number }
+} | null {
+  const record = data as {
+    step?: unknown
+    usage?: {
+      inputTokens?: unknown
+      outputTokens?: unknown
+      cacheReadTokens?: unknown
+      reasoningTokens?: unknown
+    }
+    chunk?: {
+      type?: unknown
+      usage?: {
+        inputTokens?: unknown
+        outputTokens?: unknown
+        cacheReadTokens?: unknown
+        reasoningTokens?: unknown
+      }
+    }
+  }
+  const usage = record.usage ?? record.chunk?.usage
+  if (typeof record.step !== "number" || usage === undefined) return null
+  return {
+    step: record.step,
+    counts: {
+      input: typeof usage.inputTokens === "number" ? usage.inputTokens : 0,
+      output: typeof usage.outputTokens === "number" ? usage.outputTokens : 0,
+      cacheRead:
+        typeof usage.cacheReadTokens === "number" ? usage.cacheReadTokens : 0,
+      thinking:
+        typeof usage.reasoningTokens === "number" ? usage.reasoningTokens : 0,
+    },
+  }
+}
+
+/** The per-step usages summed into one turn total, or null for none. */
+function totalUsage(
+  steps: Map<
+    number,
+    { input: number; output: number; cacheRead: number; thinking: number }
+  >
+): {
+  input: number
+  output: number
+  cacheRead: number
+  thinking: number
+} | null {
+  if (steps.size === 0) return null
+  let input = 0
+  let output = 0
+  let cacheRead = 0
+  let thinking = 0
+  for (const step of steps.values()) {
+    input += step.input
+    output += step.output
+    cacheRead += step.cacheRead
+    thinking += step.thinking
+  }
+  return { input, output, cacheRead, thinking }
+}
+
+/** One line of what a tool call was about: its parsed arguments, or the raw
+ * string when they were not JSON. */
+function summaryOf(argumentsJson: string): string {
+  if (argumentsJson === "") return ""
+  try {
+    return summarise(JSON.parse(argumentsJson) as unknown)
+  } catch {
+    return collapse(argumentsJson)
+  }
 }

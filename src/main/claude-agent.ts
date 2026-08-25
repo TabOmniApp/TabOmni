@@ -74,20 +74,20 @@ export type AgentTurn = {
    * CLI's modes are paired with one and what each is for.
    */
   permissionMode?: string
-  /** The MCP config **file**, and whether to refuse the user's own servers with
-   * it. A path rather than the servers themselves — see `mcpArgs`. */
+  /** The MCP config **file** this app wrote, as a path rather than the servers
+   * themselves — see `mcpArgs`. No `--strict-mcp-config` goes with it, so the
+   * CLI merges it with whatever it would already have found on its own. */
   mcpConfig?: string | null
-  strictMcp?: boolean
   /** Directories outside `cwd` the turn may read. */
   addDirs?: string[]
   appendSystemPrompt?: string
   /**
-   * Who answers a permission prompt, when there is one to answer.
+   * Who answers a permission prompt, for a turn that may stop and put one on
+   * screen.
    *
-   * Left unset for a turn that must not stop — every mode but `ask` — and
-   * setting it is what makes the CLI ask at all: the SDK adds
-   * `--permission-prompt-tool stdio` when it is present, and without it a
-   * request is decided by the rules alone.
+   * Left unset for every mode but `ask` — those must not stop — but a
+   * `canUseTool` is wired up regardless: see `orgApproving` for why a mode
+   * with no `onAsk` still needs one.
    */
   onAsk?: AskHandler
 }
@@ -238,7 +238,7 @@ export async function runAgentTurn(
         ? { disallowedTools: turn.disallowedTools }
         : {}),
       ...permissionArgs(turn.permissionMode),
-      ...mcpArgs(turn.mcpConfig, turn.strictMcp),
+      ...mcpArgs(turn.mcpConfig),
       ...(turn.addDirs?.length ? { additionalDirectories: turn.addDirs } : {}),
       // The CLI's own system prompt with this app's note after it, rather than
       // in place of it: a bare string here would *replace* the preset, and a
@@ -252,7 +252,7 @@ export async function runAgentTurn(
             },
           }
         : {}),
-      ...(turn.onAsk ? { canUseTool: asking(turn.onAsk) } : {}),
+      canUseTool: turn.onAsk ? asking(turn.onAsk) : orgApproving(),
       stderr: (data) => {
         // Kept rather than reported as it arrives: the CLI writes warnings here
         // on a turn that goes on to succeed, and only a failure makes them
@@ -344,6 +344,49 @@ function asking(onAsk: AskHandler): Options["canUseTool"] {
 }
 
 /**
+ * The `canUseTool` for every mode but `ask` — which until now had none at all.
+ *
+ * **Why a mode that decides everything up front needs one anyway.** A
+ * connector an account has set to require approval — a claude.ai ClickUp, say
+ * — forces `canUseTool` for its tools no matter what: ahead of
+ * `bypassPermissions`, and even past an `allowedTools` entry that matched.
+ * `matchedAskRule` on the context is how the SDK says so. Without a
+ * `canUseTool` at all, a turn reaching for one of those tools had nobody to
+ * ask and was simply denied — `Full access` bypassing every permission check
+ * this app knows about was never the same promise as bypassing one an
+ * account holder set on a connector, and there was no way to keep it. This
+ * function is what keeps that promise now: it allows exactly the calls
+ * `matchedAskRule` marks, and denies everything else the same way an absent
+ * `canUseTool` used to.
+ *
+ * **What "allows" means here is a choice this app makes, not the org's.**
+ * Approving without a person reading the request is exactly what setting an
+ * `ask` rule on a connector was against — this substitutes the app's own
+ * judgment for the human prompt the rule asked for, in every mode including
+ * `plan` and `read`. A connector's tool carries no read/write shape this app
+ * can see, so a `plan` turn that reaches one is trusting the account's own
+ * policy rather than this app's read-only guarantee. `Ask` mode does not need
+ * this at all — its `onAsk` already puts every unlisted call, `matchedAskRule`
+ * included, in front of somebody.
+ *
+ * Anything else that reaches here is a tool named on none of this app's own
+ * lists, which under the four modes without `onAsk` was always meant to be
+ * refused rather than asked about — this only makes the refusal a message the
+ * model reads instead of a silent one.
+ */
+function orgApproving(): Options["canUseTool"] {
+  return async (toolName, input, context) => {
+    if (context.matchedAskRule) {
+      return { behavior: "allow", updatedInput: input }
+    }
+    return {
+      behavior: "deny",
+      message: `${toolName} is not one of the tools this chat may use without asking, and this mode has nobody to ask.`,
+    }
+  }
+}
+
+/**
  * `bypassPermissions` is the one mode the SDK asks twice about.
  *
  * It refuses the mode outright unless `allowDangerouslySkipPermissions` is set
@@ -370,13 +413,18 @@ function permissionArgs(mode: string | undefined): Options {
  * `mcp.ts` writes is `0600` in `~/.tabomni`. So the path goes through
  * `extraArgs`, which is the same flag with the same file the spawned CLI was
  * given before.
+ *
+ * No `--strict-mcp-config` alongside it: that flag is what would make this the
+ * *only* config a turn sees, and the point now is the opposite — the CLI
+ * merges this file with whatever it would already have found running plain
+ * `claude` in this directory (`~/.claude.json`, a repository's own
+ * `.mcp.json`, enabled plugins). A turn started with no file at all — every
+ * server switched off in Settings › MCP — gets no `--mcp-config` flag either,
+ * which is exactly what running the bare CLI does.
  */
-function mcpArgs(config: string | null | undefined, strict?: boolean): Options {
+function mcpArgs(config: string | null | undefined): Options {
   if (!config) return {}
-  return {
-    extraArgs: { "mcp-config": config },
-    ...(strict ? { strictMcpConfig: true } : {}),
-  }
+  return { extraArgs: { "mcp-config": config } }
 }
 
 function failure(error: unknown, stderr: string): string {

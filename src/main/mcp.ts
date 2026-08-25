@@ -178,26 +178,21 @@ export class McpServers {
    *
    * A file rather than the JSON inline on the command line: the URL carries
    * this run's secret, and a command line is readable by every process on the
-   * machine while a file in `~/.tabomni` is not. That argument now covers
-   * `extra` as well, and more sharply: a server the user configured carries its
-   * own credentials in `env`, and this file is the one place they are copied
-   * to. Mode `0600`, like the secret it was written for.
+   * machine while a file in `~/.tabomni` is not. Mode `0600`, like the secret
+   * it was written for.
    *
-   * `extra` is the servers from the user's own `claude` that Settings has
-   * switched on (`user-mcp.ts`) — copied in rather than inherited, which is the
-   * distinction `--strict-mcp-config` is there to keep. This app's own three
-   * are written last, so a user server that happens to be called
-   * `tabomni-notes` cannot take the name the tool list pre-approves.
+   * Holds only this app's own three. Nothing is copied in from the user's own
+   * `claude` config any more — a turn is started without
+   * `--strict-mcp-config`, so the CLI merges this file with whatever it would
+   * already have found on its own. See the class comment on `WorktreeChats`.
    */
-  async configPath(
-    extra: Record<string, unknown> = {}
-  ): Promise<string | null> {
+  async configPath(): Promise<string | null> {
     const on: McpServerName[] = []
     for (const name of MCP_SERVER_NAMES) {
       if (await this.source.enabled(name)) on.push(name)
     }
 
-    const mcpServers: Json = { ...extra }
+    const mcpServers: Json = {}
     // Only started when something is actually being served from it: three
     // panels switched off and one ClickUp switched on is a config that needs no
     // loopback server at all.

@@ -205,9 +205,10 @@ export function isAllowedAttribute(
  * Whether a URL is one of the two things a document may point at: somewhere to
  * go, or a picture to show.
  *
- * A relative URL is allowed and does nothing — the preview has no base to
- * resolve one against, so `./logo.png` is a broken image rather than a file
- * read, which is the right answer for markup that came from a repository.
+ * A relative URL is allowed: the markdown preview resolves a local picture
+ * against the document's own directory and reads it in (`baseDir` on
+ * `MarkdownView`) — a relative `href`, which has no picture to load, is a
+ * link that goes nowhere, and so does nothing either way.
  */
 export function isAllowedUrl(value: string): boolean {
   // Control characters and whitespace go first, because `java\nscript:` is how a

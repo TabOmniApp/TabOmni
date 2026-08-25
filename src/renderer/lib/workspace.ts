@@ -1,10 +1,6 @@
-import type {
-  UserMcpServer,
-  WorkspaceFolder,
-  WorkspaceRecord,
-} from "@shared/api"
+import type { WorkspaceFolder, WorkspaceRecord } from "@shared/api"
 
-export type { UserMcpServer, WorkspaceFolder, WorkspaceRecord }
+export type { WorkspaceFolder, WorkspaceRecord }
 
 /** The workspace and the folders in it. */
 export async function getWorkspace(): Promise<WorkspaceRecord> {
@@ -46,10 +42,4 @@ export async function getSetting(key: string): Promise<string | null> {
 
 export async function setSetting(key: string, value: string): Promise<void> {
   await window.desktop.setSetting(key, value)
-}
-
-/** The MCP servers the user's own `claude` is configured with, for Settings ›
- * MCP to offer beside this app's three. */
-export async function listUserMcpServers(): Promise<UserMcpServer[]> {
-  return window.desktop.listUserMcpServers()
 }

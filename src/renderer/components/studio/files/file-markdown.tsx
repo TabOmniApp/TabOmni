@@ -4,6 +4,7 @@ import {
   type FrontmatterEntry,
 } from "@/lib/files/frontmatter"
 import { splitFrontmatter } from "@/lib/files/block-doc"
+import { parentOf } from "@/lib/files/paths"
 import { MarkdownView } from "../markdown-view"
 import "./file-markdown.css"
 
@@ -35,7 +36,14 @@ import "./file-markdown.css"
  * against the editor's 60 — a document with half the pane empty on either side,
  * and a visible jump every time the view was switched.
  */
-export function FileMarkdown({ text }: { text: string }) {
+export function FileMarkdown({
+  text,
+  path,
+}: {
+  text: string
+  /** The file, whose directory the document's own pictures sit next to. */
+  path: string
+}) {
   const { frontmatter, body } = splitFrontmatter(text)
   const entries =
     frontmatter === "" ? null : parseFrontmatterEntries(frontmatter)
@@ -60,6 +68,7 @@ export function FileMarkdown({ text }: { text: string }) {
         <MarkdownView
           source={body}
           rawHtml
+          baseDir={parentOf(path)}
           className="markdown-document text-[0.9375rem]"
         />
       </div>

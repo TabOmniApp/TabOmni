@@ -30,6 +30,7 @@ const HINTS: Record<Pane, string> = {
   note: "Find a note with ⌘P.",
   worktree:
     "Pick a chat under a project on the left, or start one from its row.",
+  deepseek: "Open DeepSeek chat from the projects list on the left.",
 }
 
 /**

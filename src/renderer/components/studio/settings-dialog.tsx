@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { useTheme } from "next-themes"
 import {
   Dialog,
@@ -270,14 +270,6 @@ function McpSection() {
   const mcp = useSettings((state) => state.mcp)
   const setMcpEnabled = useSettings((state) => state.setMcpEnabled)
 
-  // Re-read every time the section is shown rather than at launch: `claude mcp
-  // add` is run in the dock's Terminal, and the moment somebody comes here is
-  // the moment they expect to find what they just added.
-  const loadUserServers = useSettings((state) => state.loadUserServers)
-  useEffect(() => {
-    void loadUserServers()
-  }, [loadUserServers])
-
   return (
     <div className="space-y-6">
       <div className="space-y-4">
@@ -300,78 +292,14 @@ function McpSection() {
         </p>
       </div>
 
-      <UserServers />
-    </div>
-  )
-}
-
-/**
- * The servers the user's own `claude` has, offered one at a time.
- *
- * A chat here runs with a config this app wrote and `--strict-mcp-config`, so
- * nothing in the CLI's own config reaches it — which is right, and is also why
- * this list exists: the alternative to a switch per server is either inheriting
- * a config this app never saw or telling somebody their issue tracker is
- * unreachable from the chat editing the branch the issue is about. Switching
- * one on copies it into the config a turn is handed. Nothing here is read
- * except to list it: the `env` a server carries stays in main.
- *
- * A word about what a read-only chat does with them, because it is the one
- * thing that is not obvious from a switch: `Plan` and `Read only` refuse these
- * outright. Nothing in a config file says which of a server's tools read and
- * which file a ticket, and a read-only turn that finds out by calling one was
- * never read-only.
- */
-function UserServers() {
-  const servers = useSettings((state) => state.userServers)
-  const loaded = useSettings((state) => state.userServersLoaded)
-  const enabled = useSettings((state) => state.mcpUserServers)
-  const setMcpUserServer = useSettings((state) => state.setMcpUserServer)
-
-  return (
-    <div className="space-y-4">
-      <div className="space-y-1">
-        <p className="text-sm leading-none font-medium">Your own servers</p>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          The MCP servers your <code>claude</code> is configured with. Off until
-          you say otherwise, and switched on one at a time: a chat here is
-          handed what this app was told to hand it, never whatever config a
-          directory happens to be under.
-        </p>
-      </div>
-
-      {servers.length === 0 ? (
-        <p className="rounded-lg border border-dashed p-4 text-xs leading-relaxed text-muted-foreground">
-          {loaded
-            ? "None configured. `claude mcp add` in the dock's Terminal adds one, and it will be listed here."
-            : "Reading your Claude Code config…"}
-        </p>
-      ) : (
-        <Card>
-          {servers.map((server) => (
-            <Row
-              key={server.name}
-              title={server.name}
-              description={
-                server.scope === "project"
-                  ? `${server.detail} · added under ${server.project}`
-                  : server.detail
-              }
-            >
-              <Switch
-                checked={enabled.includes(server.name)}
-                onCheckedChange={(next) => setMcpUserServer(server.name, next)}
-              />
-            </Row>
-          ))}
-        </Card>
-      )}
-
       <p className="text-xs leading-relaxed text-muted-foreground">
-        A server added under a project is offered here too. A checkout lives
-        outside the project it is a branch of, so matching by directory would
-        hide exactly the servers a chat wants — and a switch here belongs to the
-        whole workspace rather than to one checkout.
+        A chat here also sees whatever your own <code>claude</code> is
+        configured with — servers added with <code>claude mcp add</code>, a
+        repository&rsquo;s own <code>.mcp.json</code>, enabled plugins,
+        claude.ai connectors — the same way running <code>claude</code> in the
+        dock&rsquo;s Terminal would. Nothing to switch on here: a turn no longer
+        runs with <code>--strict-mcp-config</code>, so it is handed the three
+        above plus whatever the CLI would already have found on its own.
       </p>
     </div>
   )

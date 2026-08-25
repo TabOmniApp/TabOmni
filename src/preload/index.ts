@@ -9,6 +9,7 @@ import {
   IPC,
   type DesktopApi,
   type DirectoryChange,
+  type DshEvent,
   type MenuCommand,
   type ProcessExit,
   type ProcessOutput,
@@ -82,6 +83,8 @@ const api: DesktopApi = {
   trashPath: (target) => ipcRenderer.invoke(IPC.trashPath, target),
   revealPath: (target) => ipcRenderer.invoke(IPC.revealPath, target),
   readImageFile: (filePath) => ipcRenderer.invoke(IPC.readImageFile, filePath),
+  readImageRelative: (dir, relative) =>
+    ipcRenderer.invoke(IPC.readImageRelative, dir, relative),
   listWorkspaceFiles: () => ipcRenderer.invoke(IPC.listWorkspaceFiles),
   watchDirectories: (dirs) => ipcRenderer.invoke(IPC.watchDirectories, dirs),
   onDirectoryChanged: (listener) =>
@@ -98,7 +101,6 @@ const api: DesktopApi = {
 
   getSetting: (key) => ipcRenderer.invoke(IPC.getSetting, key),
   setSetting: (key, value) => ipcRenderer.invoke(IPC.setSetting, key, value),
-  listUserMcpServers: () => ipcRenderer.invoke(IPC.listUserMcpServers),
 
   dbQuery: (databaseId, sql, params) =>
     ipcRenderer.invoke(IPC.dbQuery, databaseId, sql, params),
@@ -133,6 +135,19 @@ const api: DesktopApi = {
   stopWorktreeChat: (id) => ipcRenderer.invoke(IPC.stopWorktreeChat, id),
   onWorktreeChatEvent: (listener) =>
     subscribe<WorktreeChatEvent>(IPC.worktreeChatEvent, listener),
+  dshStatus: () => ipcRenderer.invoke(IPC.dshStatus),
+  dshListSessions: () => ipcRenderer.invoke(IPC.dshListSessions),
+  dshCreateSession: (input) => ipcRenderer.invoke(IPC.dshCreateSession, input),
+  dshSendPrompt: (input) => ipcRenderer.invoke(IPC.dshSendPrompt, input),
+  dshHistory: (sessionId, maxMessages) =>
+    ipcRenderer.invoke(IPC.dshHistory, sessionId, maxMessages),
+  dshCancel: (sessionId) => ipcRenderer.invoke(IPC.dshCancel, sessionId),
+  dshListModels: (sessionId) =>
+    ipcRenderer.invoke(IPC.dshListModels, sessionId),
+  dshModelCatalog: () => ipcRenderer.invoke(IPC.dshModelCatalog),
+  dshEventsStart: () => ipcRenderer.invoke(IPC.dshEventsStart),
+  dshEventsStop: () => ipcRenderer.invoke(IPC.dshEventsStop),
+  onDshEvent: (listener) => subscribe<DshEvent>(IPC.dshEvent, listener),
   listNotes: () => ipcRenderer.invoke(IPC.listNotes),
   saveNotes: (notes) => ipcRenderer.invoke(IPC.saveNotes, notes),
   listNoteFolders: () => ipcRenderer.invoke(IPC.listNoteFolders),

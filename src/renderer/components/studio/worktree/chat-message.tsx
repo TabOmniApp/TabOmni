@@ -1,6 +1,9 @@
+import { useState } from "react"
 import {
   Brain,
+  Check,
   Coins,
+  Copy,
   FileText,
   ShieldCheck,
   TriangleAlert,
@@ -19,6 +22,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { MarkdownView } from "../markdown-view"
+import { IconButton } from "../icon-button"
 import { MentionText } from "./chat-composer"
 import { toolLabel, toolMark } from "./chat-marks"
 
@@ -49,8 +53,11 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
 
   if (of.role === "user") {
     return (
-      <div className="ml-4 rounded-lg rounded-br-sm bg-accent/60 px-2.5 py-1.5 text-xs">
-        <MentionText text={of.text} />
+      <div className="relative ml-4">
+        <div className="rounded-lg rounded-br-sm bg-accent/60 py-1.5 pr-8 pl-2.5 text-xs">
+          <MentionText text={of.text} />
+        </div>
+        <CopyMessage text={of.text} />
       </div>
     )
   }
@@ -123,7 +130,7 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
       <p
         className={cn(
           "rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 py-1.5",
-          "text-xs whitespace-pre-wrap text-destructive"
+          "text-xs break-words whitespace-pre-wrap text-destructive"
         )}
       >
         <TriangleAlert className="mr-1.5 inline size-3 shrink-0 -translate-y-px" />
@@ -134,7 +141,41 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
 
   // The renderer the Explorer's Markdown preview uses, so a table or a code
   // block in a reply reads the way it does in a file.
-  return <MarkdownView source={of.text} className="px-1 text-xs" />
+  return (
+    <div className="relative">
+      <MarkdownView source={of.text} className="pr-8 pl-1 text-xs" />
+      <CopyMessage text={of.text} />
+    </div>
+  )
+}
+
+/**
+ * A message's copy button, always on screen in the message's top-right corner.
+ *
+ * In the corner rather than under, and always there rather than on hover: the
+ * button belongs to the message, so it sits against the message itself, and a
+ * button that is only revealed by hovering is one nobody new knows is there.
+ * The content clears it by the right padding the message already reserves, so
+ * it never covers a word. The check on the button and the tooltip both say
+ * "Copied" for a moment, the way the grid's cell dialog does, so a click
+ * answers itself.
+ */
+function CopyMessage({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+
+  return (
+    <IconButton
+      label={copied ? "Copied" : "Copy message"}
+      onClick={() => {
+        void navigator.clipboard.writeText(text)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1200)
+      }}
+      className="absolute top-0.5 right-0.5 text-muted-foreground"
+    >
+      {copied ? <Check /> : <Copy />}
+    </IconButton>
+  )
 }
 
 /**

@@ -1,4 +1,4 @@
-import { ChevronRight, MessageSquare, Plus, Trash2 } from "lucide-react"
+import { Bot, ChevronRight, MessageSquare, Plus, Trash2 } from "lucide-react"
 
 import {
   ContextMenu,
@@ -13,6 +13,7 @@ import { IconButton } from "../icon-button"
 import { SideRow } from "../side-row"
 import { useShells } from "@/lib/shell/store"
 import { chatsOf, useWorktreeChats } from "@/lib/worktree-chat/store"
+import { DEEPSEEK_TAB_ID, useDeepseekChats } from "@/lib/deepseek/store"
 
 /**
  * The workspace's projects, and the chats held in each.
@@ -40,12 +41,34 @@ export function ProjectsSection() {
 
   const folders = useStudio((state) => state.folders)
 
+  // The DeepSeek row's active state, read here so the column marks the tab
+  // that is open the way a project's chat row does.
+  const deepseekOpen = useDeepseekChats(
+    (state) => state.selectedId === DEEPSEEK_TAB_ID
+  )
+
   return (
     <nav
       aria-label="Projects"
       className="flex h-full min-h-0 flex-col overflow-hidden"
     >
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
+        {/*
+          The one conversation with the DeepSeek Harness gateway, above the
+          projects: it is not a project's — the gateway owns the session's
+          directory — and it is the only row here that is not one.
+        */}
+        <SideRow
+          active={deepseekOpen}
+          title="DeepSeek chat"
+          onClick={() => useDeepseekChats.getState().open()}
+        >
+          <Bot className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-left">
+            DeepSeek chat
+          </span>
+        </SideRow>
+
         {folders.length === 0 && (
           <p className="px-3 py-1 text-xs leading-relaxed text-muted-foreground">
             No folders yet. Add one from Explorer and it will show up here.

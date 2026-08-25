@@ -3,13 +3,10 @@ import { create } from "zustand"
 import {
   MCP_SERVER_NAMES,
   MCP_SETTING_KEYS,
-  MCP_USER_SERVERS_KEY,
-  mcpUserServerNames,
   type McpServerName,
-  type UserMcpServer,
 } from "@shared/api"
 import { recall, remember } from "./tab-memory"
-import { getSetting, listUserMcpServers, setSetting } from "./workspace"
+import { getSetting, setSetting } from "./workspace"
 
 /** Where the studio's own preferences live, beside the strip's arrangement. */
 const SETTINGS_KEY = "workbench.settings"
@@ -98,31 +95,11 @@ type SettingsState = Stored & {
    */
   mcp: McpEnabled
 
-  /**
-   * The user's own `claude` servers, and which of them are switched on.
-   *
-   * Two fields because they answer to different things: the list is whatever
-   * `~/.claude.json` says right now and is re-read, while the names are the
-   * workspace's own setting and outlive any of them — a server switched on,
-   * removed with `claude mcp remove` and added back is still switched on, which
-   * is the behaviour somebody who reinstalls a server expects.
-   *
-   * The list starts empty and is filled by `loadUserServers`, so nothing is
-   * read until the dialog is opened.
-   */
-  userServers: UserMcpServer[]
-  userServersLoaded: boolean
-  mcpUserServers: string[]
-
   setTabsPlacement: (placement: TabsPlacement) => void
   setGroupTabs: (group: boolean) => void
   setDiffSideBySide: (sideBySide: boolean) => void
   setDiffWhitespace: (show: boolean) => void
   setMcpEnabled: (server: McpServerName, enabled: boolean) => void
-  setMcpUserServer: (name: string, enabled: boolean) => void
-  /** Re-reads the user's `claude` config. Called each time Settings › MCP is
-   * shown, since `claude mcp add` is a command run while this window is open. */
-  loadUserServers: () => Promise<void>
   setShowToolCalls: (show: boolean) => void
   setShowThinking: (show: boolean) => void
   /** Reads the stored preferences. Called once, at launch. */
@@ -183,9 +160,6 @@ export const useSettings = create<SettingsState>((set, get) => {
     // a word in its summary rather than a screen of reasoning.
     showThinking: true,
     mcp: { database: false, api: false, notes: false },
-    userServers: [],
-    userServersLoaded: false,
-    mcpUserServers: [],
     loaded: false,
 
     setTabsPlacement(tabsPlacement) {
@@ -213,25 +187,6 @@ export const useSettings = create<SettingsState>((set, get) => {
       void setSetting(MCP_SETTING_KEYS[server], String(enabled))
     },
 
-    setMcpUserServer(name, enabled) {
-      // Filtered and appended rather than toggled in place, so a name stored
-      // twice by an older write comes out once.
-      const next = [
-        ...get().mcpUserServers.filter((stored) => stored !== name),
-        ...(enabled ? [name] : []),
-      ]
-      set({ mcpUserServers: next })
-      void setSetting(MCP_USER_SERVERS_KEY, JSON.stringify(next))
-    },
-
-    async loadUserServers() {
-      // An empty list on failure, and `userServersLoaded` either way: not
-      // having a `claude` config is the ordinary case, and the section has an
-      // empty state that says what to do about it.
-      const servers = await listUserMcpServers().catch(() => [])
-      set({ userServers: servers, userServersLoaded: true })
-    },
-
     setShowToolCalls(showToolCalls) {
       set({ showToolCalls })
       void setSetting(SHOW_TOOL_CALLS_KEY, String(showToolCalls))
@@ -244,16 +199,14 @@ export const useSettings = create<SettingsState>((set, get) => {
 
     restore() {
       restorePromise ??= (async () => {
-        const [stored, toolCalls, thinking, userServers, ...servers] =
-          await Promise.all([
-            recall(SETTINGS_KEY, isStored),
-            getSetting(SHOW_TOOL_CALLS_KEY).catch(() => null),
-            getSetting(SHOW_THINKING_KEY).catch(() => null),
-            getSetting(MCP_USER_SERVERS_KEY).catch(() => null),
-            ...MCP_SERVER_NAMES.map((server) =>
-              getSetting(MCP_SETTING_KEYS[server]).catch(() => null)
-            ),
-          ])
+        const [stored, toolCalls, thinking, ...servers] = await Promise.all([
+          recall(SETTINGS_KEY, isStored),
+          getSetting(SHOW_TOOL_CALLS_KEY).catch(() => null),
+          getSetting(SHOW_THINKING_KEY).catch(() => null),
+          ...MCP_SERVER_NAMES.map((server) =>
+            getSetting(MCP_SETTING_KEYS[server]).catch(() => null)
+          ),
+        ])
 
         set({
           // Nothing stored is the default, not a failure: the spread of a null
@@ -270,9 +223,6 @@ export const useSettings = create<SettingsState>((set, get) => {
               storedFlag(servers[index] ?? null, false),
             ])
           ) as McpEnabled,
-          // The names only. Which of them still exist is the list's business,
-          // and the list is not read until the dialog asks for it.
-          mcpUserServers: mcpUserServerNames(userServers),
           loaded: true,
         })
       })()

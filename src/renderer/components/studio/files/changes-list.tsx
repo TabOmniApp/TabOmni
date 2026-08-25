@@ -70,9 +70,9 @@ function ChangeRow({ change, root }: { change: GitChange; root: FileRoot }) {
           // (`preferred` on `FilePane`), not by this writing `views` on the way
           // past. That write was a frame behind the path — the pane rendered the
           // new file as its own default viewer first, which for a `.md` is the
-          // text editor — and a click that flickers through another editor is
-          // the one thing a review list must not do. `Diff | Edit` in the header
-          // is still what changes it, and still writes `views`.
+          // markdown preview — and a click that flickers through another view
+          // is the one thing a review list must not do. `Diff | Edit` in the
+          // header is still what changes it, and still writes `views`.
         }}
       >
         {/*

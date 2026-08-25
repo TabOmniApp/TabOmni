@@ -428,22 +428,38 @@ the project's `.claude/settings.local.json`, and it is offered only when the SDK
 had a rule to suggest. **`AskUserQuestion` arrives down the same callback** — the
 model's own multiple-choice question, and it reaches the app by _not_ being
 pre-approved, which is why `REFUSED_ASKING` names it in the other four modes:
-there, a question nobody can answer is a stalled turn. It is answered by
-_allowing_ the call with the picks merged into its input, questions included,
-which is why `AskDecision.input` merges rather than replaces. `titleFor` is what
-the card actually reads — the SDK documents a rendered `title` and does not send
-one for a plain SDK run — and `asked`/`decided`/`said`/`titleFor` are the pure
-half, tested in `test/chat-ask.ts`. The `+` at
+there, a question nobody can answer is refused rather than left to stall. It is
+answered by _allowing_ the call with the picks merged into its input, questions
+included, which is why `AskDecision.input` merges rather than replaces.
+`titleFor` is what the card actually reads — the SDK documents a rendered
+`title` and does not send one for a plain SDK run — and
+`asked`/`decided`/`said`/`titleFor` are the pure half, tested in
+`test/chat-ask.ts`.
+
+**The other four modes have a `canUseTool` too now**, and `orgApproving` in
+`main/claude-agent.ts` is it: `matchedAskRule` on the SDK's own callback
+context is set when an account's own policy on a connector — a claude.ai
+ClickUp, say — forces the prompt regardless of `bypassPermissions` or an
+`allowedTools` entry that matched, and without a `canUseTool` at all such a
+call was simply refused with nobody there to ask. `orgApproving` allows
+exactly the calls carrying that flag and refuses everything else the way an
+absent `canUseTool` used to, which is this app's own call rather than the
+account holder's: `plan` and `read` cannot see whether the connector's tool
+reads or writes, so a plan turn that reaches one is trusting that policy
+rather than this app's read-only guarantee. `ask` needs none of this — its
+`onAsk` already puts every unlisted call in front of somebody. The `+` at
 the end of the toolbar is `Attach file` (⌘U, the OS picker over `pickFiles`,
 written into the draft relative to the project — `relativeTo` in
 `lib/files/paths.ts`, tested in `test/attach-paths.ts`) and `Mention…`, which
 types the `@` the menu already answers. The workspace's
 MCP servers come with it: the config, the three
 `tabomni-*` servers pre-approved by name (plus `ToolSearch`),
-`--strict-mcp-config`, and two `delete_*` tools refused — a branch is
-not where a saved request lives, so isolation does not cover deleting one. A
-server from the user's own `claude` joins them only by being switched on in
-Settings › MCP, copied into that config rather than inherited from it (see
+and two `delete_*` tools refused — a branch is
+not where a saved request lives, so isolation does not cover deleting one. No
+`--strict-mcp-config` goes with it, so whatever the user's own `claude` is
+configured with — `~/.claude.json`, a repository's `.mcp.json`, enabled
+plugins, claude.ai connectors — joins them the same way it would running
+plain `claude` in that directory, with nothing to switch on in Settings (see
 **MCP: the workspace as tools** below). The
 config alone was not enough and looked like it was: `--mcp-config` says the
 tools exist, `--allowed-tools` says they may be called without a prompt nobody
@@ -626,29 +642,36 @@ that panel saves the whole collection at once — a window holding a stale list
 would write it back over the agent's request.
 `test/mcp.ts` drives it over a real socket.
 
-**The user's own `claude` servers can be added to that config**, one switch each
-under `Your own servers` in the same dialog. `--strict-mcp-config` still holds
-and is the reason this exists: a turn sees the file this app wrote and nothing
-else, so the ClickUp somebody set up in the terminal was unreachable from the
-chat editing the branch the ticket is about, with nothing on screen saying why.
-`main/user-mcp.ts` reads `~/.claude.json` — the top-level `mcpServers` and
-`projects.<dir>.mcpServers` both, since matching by directory would hide exactly
-the servers a chat wants as the left column was clicked around —
-and the ones switched on are **copied** into `~/.tabomni/mcp.json` beside the
-three, never inherited, with this app's own written last so a name it
-pre-approves cannot be taken. A repository's `.mcp.json` is deliberately not
-read. The setting is one key holding a JSON array of names
-(`MCP_USER_SERVERS_KEY`), and `mcpUserServerNames` in `@shared/api` is the one
-place that encoding lives, since the dialog and main both read it; anything that
-does not parse is none of them. What a server is to a turn is **per permission
-mode** and is `withUserServers` in `main/worktree-chat.ts`: pre-approved under
-`edits`, **refused outright** under `plan`/`read` (nothing says which of a
-server's tools read and which file a ticket, and unlisted is askable, which in
-those modes is a stall), on neither list under `ask` so the card comes up, and
-nothing under `full`. `ipc.ts` strips a server's own config — it holds the
-tokens — before the listing crosses to the renderer, the way a database's
-password is stripped. `test/user-mcp.ts` covers the pure halves. See the MCP
-section of `docs/design.md`.
+**The user's own `claude` servers are reachable too, with nothing to switch
+on.** There was a fence here — `--strict-mcp-config` meant a turn saw the file
+this app wrote and nothing else, so a server had to be copied into it by name
+from a `Your own servers` list in Settings › MCP, one switch each, before a
+chat could reach it, and a claude.ai connector could not be reached that way at
+all since it has no config file to copy. All of that — `main/user-mcp.ts`,
+the plugin-reading walk over `installed_plugins.json`, `MCP_USER_SERVERS_KEY`,
+`withUserServers`, the `Also use my claude's own configuration` switch and
+`MCP_INHERIT_KEY` — is deleted rather than kept behind a flag. A turn is
+started with `--mcp-config` naming this app's own three and **no**
+`--strict-mcp-config` beside it, which is what that flag was for: without it
+the CLI **merges** the given file with whatever it would already have found
+running plain `claude` in that directory — `~/.claude.json`, a repository's
+own `.mcp.json`, enabled plugins, a claude.ai connector, all of it. Install and
+inspect a server with `claude mcp add` / `claude mcp list` the way it always
+was; a chat here picks it up with nothing to do in this app at all.
+
+What that costs is the one thing the fence used to buy: `Plan` and `Read only`
+can no longer refuse an inherited server _by name_, since this app has no name
+for one it did not copy in. They still refuse everything they know about —
+`WRITE_REFUSED`, the shell, the workspace's own writers — and an unlisted tool
+from a server the CLI picked up on its own is refused too, by `orgApproving`
+in `main/claude-agent.ts` (see **Asking** above). The one exception even there
+is `matchedAskRule`: a connector an account has set to require approval —
+a claude.ai ClickUp, say — is allowed through in every mode, `Plan` and `Read
+only` included, because `orgApproving` cannot see whether that connector's
+tool reads or writes and chooses to honour the account's own policy over this
+app's read-only guarantee. `Ask` is unaffected either way — its `onAsk`
+already puts every unlisted call in front of somebody, `matchedAskRule` ones
+included.
 
 The four kinds are Explorer, Database, API and Notes — `SECTION_IDS` in
 `lib/sections.ts` is the list and `components/studio/section-marks.tsx` puts a

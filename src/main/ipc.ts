@@ -16,10 +16,10 @@ import {
   HTTP_ENVIRONMENT_KEY,
   IPC,
   MCP_SETTING_KEYS,
-  MCP_USER_SERVERS_KEY,
-  mcpUserServerNames,
   type ChatPlace,
   type DatabaseConnectionInput,
+  type DshCreateSessionInput,
+  type DshPromptInput,
   type FileIndexEntry,
   type UpdateDatabaseInput,
   type HttpCookie,
@@ -36,6 +36,7 @@ import {
 } from "../shared/api"
 import { descendantFolderIds } from "../shared/tree"
 import { agentModels } from "./agent-models"
+import { DEFAULT_DSH_BASE_URL, DshService } from "./dsh"
 import { WorktreeChats } from "./worktree-chat"
 import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
@@ -50,7 +51,6 @@ import { systemUsage } from "./system-usage"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
 import { TerminalManager } from "./terminal"
 import { TsServers } from "./tsserver"
-import { chosen, readUserMcpServers } from "./user-mcp"
 import { DirectoryWatchers } from "./watch"
 
 /**
@@ -137,6 +137,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   processes: ProcessManager
   /** Exposed so a turn in flight can be killed on quit. */
   worktreeChats: WorktreeChats
+  /** Exposed so the gateway's event stream is closed on quit. */
+  dsh: DshService
   sqlConnections: SqlConnections
   docker: DockerRuntime
   terminals: TerminalManager
@@ -347,31 +349,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    * or an import button — because a helper turn is a turn nobody asked for. This
    * is a conversation somebody is having.
    */
+  // The DeepSeek Harness gateway — see `dsh.ts`. The URL is a setting so a
+  // deployment on a non-default port can be pointed at without a rebuild.
+  const dsh = new DshService({
+    baseUrl: async () =>
+      (await store.getSetting("dshBaseUrl")) ?? DEFAULT_DSH_BASE_URL,
+  })
+
   const worktreeChats = new WorktreeChats(
     {
-      /*
-       * The file a turn is pointed at, and the user's own servers in it.
-       *
-       * Composed here rather than in either half, for the reason everything
-       * else in this file is: `mcp.ts` has no opinion about `~/.claude.json`
-       * and `worktree-chat.ts` has none about where a setting lives. What each
-       * is handed is the finished answer.
-       */
-      mcpConfig: async () => {
-        const entries = await readUserMcpServers()
-        const wanted = chosen(
-          entries,
-          mcpUserServerNames(await store.getSetting(MCP_USER_SERVERS_KEY))
-        )
-        const path = await mcp.configPath(
-          Object.fromEntries(wanted.map((entry) => [entry.name, entry.config]))
-        )
-        // Null when there was nothing to write, which is also the only case
-        // where the names would be pointing into a file that is not there.
-        return path
-          ? { path, userServers: wanted.map((one) => one.name) }
-          : null
-      },
+      // The file this app's own three servers are written to, or null when
+      // none of them are switched on. No `--strict-mcp-config` goes with it —
+      // see the class comment on `WorktreeChats` for why — so the CLI merges
+      // it with whatever it would already have found on its own.
+      mcpConfig: () => mcp.configPath(),
       // Null rather than a throw for a folder that has left the workspace: the
       // caller turns "nowhere to run" into a line in the chat, and one path
       // through that is easier to be sure of than two.
@@ -382,6 +373,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       readChat: (id) => store.readWorktreeChat(id),
       writeChat: (id, messages) => store.writeWorktreeChat(id, messages),
       deleteChat: (id) => store.deleteWorktreeChat(id),
+      dsh,
     },
     (event) => send(IPC.worktreeChatEvent, event)
   )
@@ -424,6 +416,31 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.stopWorktreeChat, (_event, id: string) => {
     worktreeChats.stop(id)
   })
+
+  ipcMain.handle(IPC.dshStatus, () => dsh.status())
+  ipcMain.handle(IPC.dshListSessions, () => dsh.listSessions())
+  ipcMain.handle(IPC.dshCreateSession, (_event, input: DshCreateSessionInput) =>
+    dsh.createSession(input)
+  )
+  ipcMain.handle(IPC.dshSendPrompt, (_event, input: DshPromptInput) =>
+    dsh.sendPrompt(input)
+  )
+  ipcMain.handle(
+    IPC.dshHistory,
+    (_event, sessionId: string, maxMessages?: number) =>
+      dsh.history(sessionId, maxMessages)
+  )
+  ipcMain.handle(IPC.dshCancel, (_event, sessionId: string) =>
+    dsh.cancel(sessionId)
+  )
+  ipcMain.handle(IPC.dshListModels, (_event, sessionId: string) =>
+    dsh.listModels(sessionId)
+  )
+  ipcMain.handle(IPC.dshModelCatalog, () => dsh.modelCatalog())
+  ipcMain.handle(IPC.dshEventsStart, () =>
+    dsh.eventsStart((event) => send(IPC.dshEvent, event))
+  )
+  ipcMain.handle(IPC.dshEventsStop, () => dsh.eventsStop())
 
   /** The account a Docker-managed database is created with. */
   const DB_USER = "tabomni"
@@ -652,6 +669,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     imageDataUrl(await inWorkspace(filePath))
   )
 
+  ipcMain.handle(
+    IPC.readImageRelative,
+    async (_event, dir: string, relative: string) =>
+      // The markdown preview's local pictures: `./logo.png` resolved against
+      // the document's own directory — the renderer never joins paths — and
+      // read under the same ceiling and the same folders' gate as any other
+      // file the studio shows.
+      imageDataUrl(await inWorkspace(path.resolve(dir, relative)))
+  )
+
   /*
    * One TypeScript server per workspace folder, started the first time a file
    * in that folder is opened — see `main/tsserver.ts`. It is handed a reader
@@ -747,18 +774,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.setSetting, (_event, key: string, value: string) =>
     store.setSetting(key, value)
-  )
-
-  // The listing only — a server's own config is stripped here rather than in
-  // `user-mcp.ts`, the way a database's password is: `env` holds the tokens
-  // somebody's `claude mcp add` was given, and the renderer has no use for them.
-  ipcMain.handle(IPC.listUserMcpServers, async () =>
-    (await readUserMcpServers()).map(({ name, scope, project, detail }) => ({
-      name,
-      scope,
-      project,
-      detail,
-    }))
   )
 
   ipcMain.handle(IPC.listDatabases, () => store.listDatabases())
@@ -1021,6 +1036,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   return {
     processes,
     worktreeChats,
+    dsh,
     sqlConnections,
     mcp,
     docker,

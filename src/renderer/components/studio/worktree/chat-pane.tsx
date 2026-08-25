@@ -2,11 +2,11 @@ import { useEffect, useRef } from "react"
 
 import {
   chatOptions,
+  DSH_PERMISSION_PRESETS,
   type ChatPermission,
   type ChatPlace,
   type WorktreeChatOptions,
 } from "@shared/api"
-import { Spinner } from "@/components/ui/spinner"
 import { useStudio } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import { blocksOf } from "@/lib/worktree-chat/activity"
@@ -16,6 +16,7 @@ import { ChatAsk } from "./chat-ask"
 import { ChatComposer } from "./chat-composer"
 import { ChatActivity } from "./chat-activity"
 import { ChatMessage } from "./chat-message"
+import { ChatSkeleton } from "./chat-skeleton"
 import { WorktreeWelcome } from "./worktree-welcome"
 
 /**
@@ -210,12 +211,7 @@ function Conversation({
             )}
             {/* Not while a question is up — the turn is held, not working, and
                 a spinner under the card would say otherwise. */}
-            {sending && !ask && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Spinner className="size-3" />
-                Working…
-              </div>
-            )}
+            {sending && !ask && <ChatSkeleton />}
           </div>
         )}
       </div>
@@ -266,7 +262,13 @@ function Conversation({
             >
               {ask
                 ? "The turn is waiting on your answer. Stop ends it instead."
-                : captionFor(options.permission)}
+                : options.provider === "deepseek"
+                  ? `DeepSeek · ${
+                      DSH_PERMISSION_PRESETS.find(
+                        (entry) => entry.value === options.permissionPreset
+                      )?.label ?? "Workspace Write"
+                    }`
+                  : captionFor(options.permission)}
             </p>
 
             {/* Beside the caption rather than at the end of the transcript: the

@@ -46,11 +46,18 @@ export function MarkdownView({
   source,
   className,
   rawHtml = false,
+  baseDir,
 }: {
   source: string
   className?: string
   /** Whether the markup in this document is part of it. True for a file. */
   rawHtml?: boolean
+  /**
+   * The directory of the file the document came from: a local picture —
+   * `./logo.png` — resolves against it and is read in as a `data:` URL.
+   * Absent for a chat message, which has no directory for one to sit next to.
+   */
+  baseDir?: string
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState(false)
@@ -64,6 +71,7 @@ export function MarkdownView({
       if (!node) return
       try {
         node.replaceChildren(sanitizeHtml(markdownToHTML(source)))
+        if (baseDir) resolveLocalImages(node, baseDir)
       } catch (error) {
         console.error("Could not render markdown", error)
         // The same fallback as `failed` below, put in place rather than flagged:
@@ -86,6 +94,7 @@ export function MarkdownView({
         const node = host.current
         if (!node) return
         node.replaceChildren(render(source))
+        if (baseDir) resolveLocalImages(node, baseDir)
       })
       .catch((error: unknown) => {
         if (!alive) return
@@ -96,7 +105,7 @@ export function MarkdownView({
     return () => {
       alive = false
     }
-  }, [source, rawHtml])
+  }, [source, rawHtml, baseDir])
 
   if (failed)
     return (
@@ -106,4 +115,63 @@ export function MarkdownView({
     )
 
   return <div ref={host} className={cn("markdown-prose text-sm", className)} />
+}
+
+/**
+ * A document's local pictures, read in and swapped for their paths.
+ *
+ * `./logo.png` in a README has no meaning to a browser here: the renderer is
+ * not on a `file://` origin, so the image is broken unless its bytes come over
+ * the bridge like every other file. Main resolves the relative path against
+ * the document's own directory — the renderer never joins paths — and reads
+ * it back as a `data:` URL, held to the workspace's folders like every other
+ * `files:*` call.
+ *
+ * A `src` with a scheme (`http:`, `data:`, …) is left alone, and so is one
+ * anchored at `/`, which in a README means the repository root this preview
+ * has no name for.
+ */
+function resolveLocalImages(host: HTMLElement, baseDir: string): void {
+  for (const img of Array.from(host.querySelectorAll("img"))) {
+    const src = img.getAttribute("src")
+    if (!src || /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("/")) {
+      continue
+    }
+    // The browser would prefer a relative `srcset` over the fixed `src` below,
+    // so a local image takes one without the other.
+    img.removeAttribute("srcset")
+    void readLocalImage(img, baseDir, src)
+  }
+}
+
+/**
+ * One `<img>` with a relative `src`, read and put in place.
+ *
+ * A name with a space or a `#` in it travels as `%20`/`%23`, which is not a
+ * filename, so the decoded form is tried after the path as written — decoding
+ * a `%` that was literal would break a name that is fine as it is. A failure
+ * either way leaves the broken image, which is the honest answer for a picture
+ * that is too large, not a picture at all, or outside the workspace's folders.
+ */
+async function readLocalImage(
+  img: HTMLImageElement,
+  baseDir: string,
+  src: string
+): Promise<void> {
+  const candidates = [src]
+  try {
+    const decoded = decodeURIComponent(src)
+    if (decoded !== src) candidates.push(decoded)
+  } catch {
+    // Not valid percent-encoding; the path as written is the only reading.
+  }
+
+  for (const target of candidates) {
+    try {
+      img.src = await window.desktop.readImageRelative(baseDir, target)
+      return
+    } catch {
+      // Try the next reading; nothing left to try is the broken image.
+    }
+  }
 }

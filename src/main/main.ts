@@ -89,6 +89,7 @@ const {
   preview,
   mcp,
   worktreeChats,
+  dsh,
   tsServers,
   watchers,
   noteFilePath,
@@ -261,6 +262,10 @@ app.on("before-quit", (event) => {
         // A turn in flight is a `claude` this app spawned; it goes with the app
         // rather than being left talking to a window that has gone.
         worktreeChats.dispose(),
+        // The gateway's event stream is a loopback SSE connection; it dies with
+        // this process anyway, but closing it cleanly keeps the gateway from
+        // logging a dropped client.
+        dsh.dispose(),
       ]),
       // A wedged daemon must not leave the app unquittable.
       new Promise((resolve) => setTimeout(resolve, CLEANUP_TIMEOUT_MS)),

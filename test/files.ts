@@ -201,17 +201,17 @@ async function main() {
   )
 
   check(
-    "a markdown file opens in the editor",
-    defaultViewer("/w/README.md") === "text",
-    "the Explorer is where files are changed; the preview is asked for"
+    "a markdown file opens as the document",
+    defaultViewer("/w/README.md") === "markdown",
+    "the Explorer is where files are read; the editor is asked for"
   )
   check(
-    "and has the preview and the block editor after it",
-    viewersFor("/w/README.md").join() === "text,markdown,blocks,diff"
+    "and has the text editor and the block editor after it",
+    viewersFor("/w/README.md").join() === "markdown,text,blocks,diff"
   )
   check(
     "`.markdown` is the same file",
-    viewersFor("/w/notes.MARKDOWN").join() === "text,markdown,blocks,diff"
+    viewersFor("/w/notes.MARKDOWN").join() === "markdown,text,blocks,diff"
   )
   check(
     "an MDX is not offered either",

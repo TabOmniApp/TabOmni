@@ -23,6 +23,7 @@ import {
   Sparkles,
   Square,
   Star,
+  ShieldCheck,
   Check as CheckIcon,
 } from "lucide-react"
 
@@ -30,9 +31,11 @@ import {
   CHAT_PERMISSIONS,
   chatEfforts,
   DEFAULT_CHAT_OPTIONS,
+  DSH_PERMISSION_PRESETS,
   type AgentModel,
   type ChatEffort,
   type ChatPermission,
+  type DshPermissionPreset,
   type WorktreeChatOptions,
 } from "@shared/api"
 import {
@@ -47,7 +50,12 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { relativeTo } from "@/lib/files/paths"
 import { cn } from "@/lib/utils"
-import { orderedModels, useAgentModels } from "@/lib/worktree-chat/models"
+import {
+  orderedModels,
+  useAgentModels,
+  useDeepseekModels,
+  type DeepseekModelOption,
+} from "@/lib/worktree-chat/models"
 import { chatMentions, primeMentions } from "@/lib/worktree-chat/mentions"
 import {
   insertMention,
@@ -169,6 +177,8 @@ export function ChatComposer({
   // The user's own `claude`'s list, for the two pickers that need it — the
   // model's rows and, per model, which effort levels exist at all.
   const models = useAgentModels()
+  // The gateway's list, for the DeepSeek group in the same picker.
+  const deepseekModels = useDeepseekModels()
 
   /* The draft as it stands, for the unmount below: the cleanup runs once and
    * would otherwise close over the empty string it was built with. */
@@ -436,24 +446,40 @@ export function ChatComposer({
             <>
               <ModelMenu
                 models={models}
+                deepseekModels={deepseekModels}
                 model={options.model}
                 effort={options.effort}
-                onPick={(model, effort) =>
+                provider={options.provider}
+                onPick={(model, effort, provider) =>
                   onOptions({
                     ...options,
                     model,
                     effort:
-                      model !== null &&
-                      chatEfforts(models, model).includes(effort as ChatEffort)
-                        ? effort
-                        : null,
+                      provider === "claude"
+                        ? model !== null &&
+                          chatEfforts(models, model).includes(
+                            effort as ChatEffort
+                          )
+                          ? effort
+                          : null
+                        : effort,
+                    provider,
                   })
                 }
               />
-              <PermissionMenu
-                permission={options.permission}
-                onPick={(permission) => onOptions({ ...options, permission })}
-              />
+              {options.provider === "deepseek" ? (
+                <DshPermissionMenu
+                  value={options.permissionPreset ?? "workspace-write"}
+                  onPick={(permissionPreset) =>
+                    onOptions({ ...options, permissionPreset })
+                  }
+                />
+              ) : (
+                <PermissionMenu
+                  permission={options.permission}
+                  onPick={(permission) => onOptions({ ...options, permission })}
+                />
+              )}
             </>
           )}
 
@@ -586,30 +612,48 @@ function ToolbarButton({
  */
 function ModelMenu({
   models,
+  deepseekModels,
   model,
   effort,
+  provider,
   onPick,
 }: {
   models: AgentModel[]
+  deepseekModels: DeepseekModelOption[]
   model: string | null
   effort: ChatEffort | null
-  onPick: (model: string | null, effort: ChatEffort | null) => void
+  provider: WorktreeChatOptions["provider"]
+  onPick: (
+    model: string | null,
+    effort: ChatEffort | null,
+    provider: WorktreeChatOptions["provider"]
+  ) => void
 }) {
   const rows = orderedModels(models)
   const chosen = rows.find((entry) => entry.value === model)
+  // The DeepSeek row the record names, when the chat is on the gateway; the
+  // model there has no effort levels, so its label alone is what the button
+  // says.
+  const deepseekChosen = deepseekModels.find((entry) => entry.value === model)
   // Held only so the digit shortcuts can close it: a click is Base UI's own
   // business, and a menu still open after the pick it was asked for reads as a
   // key that did nothing.
   const [open, setOpen] = useState(false)
 
   const buttonLabel =
-    model === null
-      ? "Inherit"
-      : chosen
-        ? effort && chatEfforts(models, model).includes(effort)
-          ? `${chosen.label} · ${EFFORT_LABELS[effort]}`
-          : chosen.label
-        : (model ?? "Model")
+    provider === "deepseek"
+      ? deepseekChosen?.label &&
+        effort !== null &&
+        (effort as string) in EFFORT_LABELS
+        ? `${deepseekChosen.label} · ${EFFORT_LABELS[effort as ChatEffort]}`
+        : (deepseekChosen?.label ?? model ?? "DeepSeek")
+      : model === null
+        ? "Inherit"
+        : chosen
+          ? effort && chatEfforts(models, model).includes(effort)
+            ? `${chosen.label} · ${EFFORT_LABELS[effort]}`
+            : chosen.label
+          : (model ?? "Model")
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -639,10 +683,13 @@ function ModelMenu({
           const targetEfforts = chatEfforts(models, target.value)
           const nextEffort =
             effort && targetEfforts.includes(effort) ? effort : null
-          onPick(target.value, nextEffort)
+          onPick(target.value, nextEffort, "claude")
           setOpen(false)
         }}
       >
+        <div className="px-2 py-1.5 text-[0.65rem] font-semibold tracking-wide text-muted-foreground">
+          Claude Code
+        </div>
         {rows.map((entry) => {
           const levels = chatEfforts(models, entry.value)
           const supportsEffort = levels.length > 0
@@ -655,7 +702,7 @@ function ModelMenu({
                   onClick={() => {
                     const nextEffort =
                       effort && levels.includes(effort) ? effort : null
-                    onPick(entry.value, nextEffort)
+                    onPick(entry.value, nextEffort, "claude")
                   }}
                   className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
                 >
@@ -685,7 +732,7 @@ function ModelMenu({
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="w-36">
                   <DropdownMenuItem
-                    onClick={() => onPick(entry.value, null)}
+                    onClick={() => onPick(entry.value, null, "claude")}
                     className="flex cursor-pointer items-center justify-between px-2 py-1.5 text-xs"
                   >
                     <span>Default</span>
@@ -697,7 +744,7 @@ function ModelMenu({
                   {levels.map((level) => (
                     <DropdownMenuItem
                       key={level}
-                      onClick={() => onPick(entry.value, level)}
+                      onClick={() => onPick(entry.value, level, "claude")}
                       className="flex cursor-pointer items-center justify-between px-2 py-1.5 text-xs"
                     >
                       <span className="flex items-center gap-1.5">
@@ -717,7 +764,7 @@ function ModelMenu({
           return (
             <DropdownMenuItem
               key={entry.value}
-              onClick={() => onPick(entry.value, null)}
+              onClick={() => onPick(entry.value, null, "claude")}
               className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
             >
               <div className="flex size-4 shrink-0 items-center justify-center">
@@ -741,9 +788,106 @@ function ModelMenu({
             </DropdownMenuItem>
           )
         })}
+        {deepseekModels.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <div className="px-2 py-1.5 text-[0.65rem] font-semibold tracking-wide text-muted-foreground">
+              Deepseek
+            </div>
+            {deepseekModels.map((entry) => {
+              const isSelected =
+                provider === "deepseek" && model === entry.value
+              // The gateway's own effort ids that this app has a label for —
+              // the overlap with the Claude effort vocabulary (low/high/max);
+              // `off` is the gateway's only other level and is left out.
+              const levels = (entry.efforts ?? [])
+                .map((level) => level.id)
+                .filter(
+                  (level): level is ChatEffort =>
+                    (level as string) in EFFORT_LABELS
+                )
+              if (levels.length > 0) {
+                return (
+                  <DropdownMenuSub key={entry.value}>
+                    <DropdownMenuSubTrigger
+                      onClick={() => {
+                        const nextEffort =
+                          effort !== null && levels.includes(effort)
+                            ? effort
+                            : null
+                        onPick(entry.value, nextEffort, "deepseek")
+                      }}
+                      className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
+                    >
+                      <div className="flex size-4 shrink-0 items-center justify-center">
+                        {isSelected && (
+                          <CheckIcon className="size-3.5 text-foreground" />
+                        )}
+                      </div>
+                      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <span className="truncate text-xs font-normal">
+                          {entry.label}
+                        </span>
+                      </div>
+                      {isSelected && effort && (
+                        <span className="text-[11px] font-normal text-muted-foreground/80">
+                          {EFFORT_LABELS[effort]}
+                        </span>
+                      )}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="w-36">
+                      <DropdownMenuItem
+                        onClick={() => onPick(entry.value, null, "deepseek")}
+                        className="flex cursor-pointer items-center justify-between px-2 py-1.5 text-xs"
+                      >
+                        <span>Default</span>
+                        {isSelected && effort === null && (
+                          <CheckIcon className="size-3.5 text-foreground" />
+                        )}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {levels.map((level) => (
+                        <DropdownMenuItem
+                          key={level}
+                          onClick={() => onPick(entry.value, level, "deepseek")}
+                          className="flex cursor-pointer items-center justify-between px-2 py-1.5 text-xs"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            {EFFORT_LABELS[level]}
+                          </span>
+                          {isSelected && effort === level && (
+                            <CheckIcon className="size-3.5 text-foreground" />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )
+              }
+              return (
+                <DropdownMenuItem
+                  key={entry.value}
+                  onClick={() => onPick(entry.value, null, "deepseek")}
+                  className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
+                >
+                  <div className="flex size-4 shrink-0 items-center justify-center">
+                    {isSelected && (
+                      <CheckIcon className="size-3.5 text-foreground" />
+                    )}
+                  </div>
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span className="truncate text-xs font-normal">
+                      {entry.label}
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              )
+            })}
+          </>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          onClick={() => onPick(null, null)}
+          onClick={() => onPick(null, null, "claude")}
           className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
         >
           <div className="flex size-4 shrink-0 items-center justify-center">
@@ -845,6 +989,56 @@ function PermissionMenu({
   )
 }
 
+/** The gateway's permission presets, for a DeepSeek chat's toolbar. */
+function DshPermissionMenu({
+  value,
+  onPick,
+}: {
+  value: DshPermissionPreset
+  onPick: (preset: DshPermissionPreset) => void
+}) {
+  const chosen =
+    DSH_PERMISSION_PRESETS.find((entry) => entry.value === value) ??
+    DSH_PERMISSION_PRESETS[1]
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <ToolbarButton
+            icon={<ShieldCheck />}
+            label={chosen.label}
+            title={`Permission preset: ${chosen.description}`}
+            on={value !== "workspace-write"}
+          />
+        }
+      />
+      <DropdownMenuContent align="start" className="w-60">
+        {DSH_PERMISSION_PRESETS.map((entry) => (
+          <DropdownMenuItem
+            key={entry.value}
+            onClick={() => onPick(entry.value)}
+            variant={
+              entry.value === "danger-full-access" ? "destructive" : undefined
+            }
+          >
+            <ShieldCheck />
+            <span className="flex min-w-0 flex-col">
+              {entry.label}
+              <span className="text-[0.7rem] text-muted-foreground">
+                {entry.description}
+              </span>
+            </span>
+            {value === entry.value && (
+              <CheckIcon className="size-3.5 text-foreground" />
+            )}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 /** What each mode is called on the button, in the menu, and on the hover line.
  * The detail says what it *does*, since none of these four names are self
  * evident to somebody who has not read `PERMISSIONS`. */
@@ -908,7 +1102,7 @@ export function MentionText({
   className?: string
 }) {
   return (
-    <span className={cn("whitespace-pre-wrap", className)}>
+    <span className={cn("break-words whitespace-pre-wrap", className)}>
       <Marks segments={markMentions(text, chatMentions())} visible />
     </span>
   )

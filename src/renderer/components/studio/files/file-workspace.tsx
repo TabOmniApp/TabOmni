@@ -426,7 +426,7 @@ function Body({
     return <Notice title="Could not open this file" detail={doc.message} />
   }
 
-  if (viewer === "markdown") return <FileMarkdown text={doc.text} />
+  if (viewer === "markdown") return <FileMarkdown text={doc.text} path={path} />
 
   if (viewer === "blocks") {
     return (
@@ -467,8 +467,8 @@ function Body({
  * A pair of buttons rather than a toggle: which of the two is showing has to be
  * readable, and "the one that is not pressed is what you would get" is a thing
  * to work out rather than read. `Edit` goes to `text` rather than to
- * `defaultViewer`, which for a `.md` is the same thing and for a `.note` is the
- * block editor — a control labelled `Edit` beside a diff of a file's text means
+ * `defaultViewer` — a `.md` arrives on its preview and a `.note` on the block
+ * editor, and a control labelled `Edit` beside a diff of a file's text means
  * that text.
  */
 function ViewerSwitch({ path, viewer }: { path: string; viewer: Viewer }) {

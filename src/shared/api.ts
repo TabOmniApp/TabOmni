@@ -626,75 +626,6 @@ export const MCP_SETTING_KEYS: Record<McpServerName, string> = {
   notes: "mcp.notes",
 }
 
-/**
- * One server the user's own `claude` is configured with, offered to a chat here.
- *
- * A chat in this app runs with `--strict-mcp-config`, so the CLI's own servers
- * are not picked up — that is deliberate and stays: a conversation this app
- * hosts should hold what this app handed it, not whatever config a directory
- * happened to be under. This is the other half of that decision. The servers
- * are *listed* rather than loaded, each is off until somebody says otherwise,
- * and the ones switched on are copied into the config this app writes. Naming
- * them one at a time is the same argument the three panels make: letting an
- * agent read your issue tracker is not agreeing to everything else you have
- * configured.
- *
- * Read from `~/.claude.json`, which is where `claude mcp add` writes — both the
- * user's own servers and the ones added under a project.
- */
-export type UserMcpServer = {
-  /** Its name in the CLI's config, which is also the tool prefix a turn sees:
-   * `mcp__clickup__create_task`. */
-  name: string
-  /** `user` for one configured for every directory, `project` for one added
-   * under a particular one. */
-  scope: "user" | "project"
-  /** The directory a `project` server was configured under, for the row to say
-   * where it came from. Null for a user one. */
-  project: string | null
-  /** One line for the row: the transport and where it goes. */
-  detail: string
-}
-
-/**
- * The names switched on, as a JSON array of strings.
- *
- * One key rather than a key per server, unlike `MCP_SETTING_KEYS`: those three
- * are a fixed list this app ships and these are whatever the user has
- * configured, so there is no set of keys to write down in advance. Absent, or
- * anything that does not parse, is none of them — the same default the three
- * have, for the same reason.
- *
- * By name, so a server the user later repoints goes on being the one that was
- * allowed. Renaming it in their config is what turns it back off, which is the
- * right way round: a name is what they approved.
- */
-export const MCP_USER_SERVERS_KEY = "mcp.userServers"
-
-/**
- * That setting, read.
- *
- * Here rather than in either process, and runtime rather than a type, for the
- * reason `chatOptions` is: both sides read the same key — the dialog to draw
- * the switches, main to decide what a turn is handed — and an encoding written
- * twice is two things that agree until one of them is changed.
- *
- * Anything that is not an array of strings is none of them: the absent key, a
- * half-written value and whatever a future shape turns out to be, all at once.
- * The failure it is written against is the one that matters here — a setting
- * this app cannot read must not come out as "everything".
- */
-export function mcpUserServerNames(raw: string | null): string[] {
-  if (!raw) return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((name): name is string => typeof name === "string")
-  } catch {
-    return []
-  }
-}
-
 export type TerminalOutput = {
   terminalId: string
   /** Raw bytes from the shell, ANSI escapes included. */
@@ -1075,6 +1006,17 @@ export type WorktreeChatOptions = {
   model: string | null
   /** `--effort`, or null for the CLI's own default. */
   effort: ChatEffort | null
+  /** Which backend answers this chat's turns: the user's own `claude`, or a
+   * DeepSeek Harness gateway (`dsh web`). Absent on a record written before
+   * this was a field, which `chatOptions` reads as `claude` — the backend a
+   * chat written then was running on. */
+  provider?: "claude" | "deepseek"
+  /**
+   * The gateway's permission preset for a DeepSeek chat — its sandbox mode
+   * and approval policy — switched through `session.setPermission`. Absent on
+   * a record written before this was a field, read as `workspace-write`.
+   */
+  permissionPreset?: DshPermissionPreset
   /**
    * How much this chat's turns may do without being asked.
    *
@@ -1094,6 +1036,30 @@ export type WorktreeChatOptions = {
   plan?: boolean
 }
 
+/** The gateway's switchable permission presets, in preset-table order. Each is
+ * a sandbox mode plus an approval policy, switched through
+ * `session.setPermission`. */
+export const DSH_PERMISSION_PRESETS = [
+  {
+    value: "read-only",
+    label: "Read only",
+    description: "Reads freely; writes and commands are refused",
+  },
+  {
+    value: "workspace-write",
+    label: "Workspace Write",
+    description: "Writes inside the workspace; wider access is asked",
+  },
+  {
+    value: "danger-full-access",
+    label: "Full access",
+    description: "Full file access, no approval prompts",
+  },
+] as const
+
+export type DshPermissionPreset =
+  (typeof DSH_PERMISSION_PRESETS)[number]["value"]
+
 /**
  * What a new chat opens on.
  *
@@ -1112,6 +1078,8 @@ export type WorktreeChatOptions = {
 export const DEFAULT_CHAT_OPTIONS: WorktreeChatOptions = {
   model: "default",
   effort: null,
+  provider: "claude",
+  permissionPreset: "workspace-write",
   permission: "edits",
 }
 
@@ -1131,6 +1099,8 @@ export function chatOptions(
   return {
     model: options.model ?? null,
     effort: options.effort ?? null,
+    provider: options.provider === "deepseek" ? "deepseek" : "claude",
+    permissionPreset: normalizePreset(options.permissionPreset),
     permission: readPermission(options),
   }
 }
@@ -1151,6 +1121,14 @@ function readPermission(options: WorktreeChatOptions): ChatPermission {
   // The toggle this replaced, on a record older than the picker.
   if (options.plan) return "plan"
   return DEFAULT_CHAT_OPTIONS.permission
+}
+
+/** A preset the deployment actually carries, or the default when the record
+ * names one that is no longer offered. */
+function normalizePreset(preset: unknown): DshPermissionPreset {
+  return DSH_PERMISSION_PRESETS.some((entry) => entry.value === preset)
+    ? (preset as DshPermissionPreset)
+    : "workspace-write"
 }
 
 /**
@@ -1222,6 +1200,102 @@ export type WorktreeChat = {
 /** One of those events, tagged with the chat it belongs to: several chats can
  * be answering at once, so a listener has to know which one this is. */
 export type WorktreeChatEvent = AssistantEvent & { chatId: string }
+
+/**
+ * The DeepSeek Harness gateway (`dsh web`) this studio can talk to.
+ *
+ * The host runs a JSON-RPC-style HTTP API under `/api` (the same one its own
+ * browser client uses), and everything here is a projection of that wire onto
+ * the parts a chat needs. No DeepSeek types cross this contract: the harness
+ * packages belong to the main process, and the renderer only ever sees these
+ * plain shapes.
+ */
+
+/** Whether a running `dsh web` answered, and what it said about itself. */
+export type DshStatus = {
+  reachable: boolean
+  /** The base URL that was probed, so the renderer can show where it looked. */
+  baseUrl: string
+  /** `host.describe` when the gateway answered. */
+  describe?: {
+    version: string
+    cwd: string
+    attachedSessions: number
+  }
+  /** Why the probe failed, when it did. */
+  error?: string
+}
+
+/** One session in the gateway's list. */
+export type DshSessionSummary = {
+  sessionId: string
+  updatedAt: number
+  running: boolean
+  blank: boolean
+  parentSessionId?: string
+  cwd?: string
+  agentPreset?: string
+}
+
+/** One session event, as JSON — `data` keeps the harness's own shape because
+ * the renderer should not have to know what the host calls message content. */
+export type DshHistoryEntry = {
+  seq: number
+  type: string
+  time: number
+  data: unknown
+}
+
+/** What a `dsh:event` push carries: one session event from the live mux
+ * stream, or the stream's own lifecycle. */
+export type DshEvent =
+  | {
+      kind: "event"
+      sessionId: string
+      event: DshHistoryEntry
+    }
+  | { kind: "error"; message: string }
+  | { kind: "end" }
+
+/** Create-session input: the project directory to run in and the agent preset
+ * to compose, both optional. */
+export type DshCreateSessionInput = {
+  cwd?: string
+  agentPreset?: string
+}
+
+/** Send-prompt input. `steer` redirects a turn already running instead of
+ * queueing a new one. */
+export type DshPromptInput = {
+  sessionId: string
+  text: string
+  mode?: "queue" | "steer"
+}
+
+/** The model picker's catalog for one session, trimmed to what a picker
+ * shows. */
+export type DshModelsCatalog = {
+  current: { provider: string; model: string; reasoningEffort?: string }
+  groups: {
+    id: string
+    name: string
+    models: { id: string; name: string }[]
+  }[]
+}
+
+/** The DeepSeek Harness gateway's model catalog, as a chat's model picker
+ * shows it — provider groups with the models each serves. */
+export type DshModelGroup = {
+  id: string
+  name: string
+  models: {
+    id: string
+    name: string
+    /** The reasoning levels the model accepts, weakest first, when it has
+     * any — the gateway's own ids and words. */
+    efforts?: { id: string; name: string }[]
+  }[]
+}
 
 /**
  * A group of notes, nested arbitrarily deep.
@@ -1479,17 +1553,6 @@ export type DesktopApi = {
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
 
-  /**
-   * The MCP servers the user's own `claude` is configured with, for Settings ›
-   * MCP to list beside this app's three.
-   *
-   * Read fresh on every call rather than cached at launch: `claude mcp add` is
-   * a command somebody runs in the dock's Terminal while this window is open,
-   * and a list that needed a relaunch to notice would be the wrong answer at
-   * exactly the moment it is being looked at.
-   */
-  listUserMcpServers: () => Promise<UserMcpServer[]>
-
   /** Every database or connection in the workspace. */
   listDatabases: () => Promise<DatabaseRecord[]>
   /**
@@ -1585,6 +1648,15 @@ export type DesktopApi = {
    * workspace's folders like every other `files:*` call.
    */
   readImageFile: (filePath: string) => Promise<string>
+  /**
+   * A picture next to a document, as a `data:` URL.
+   *
+   * The markdown preview's `./logo.png` — a relative URL a browser has no base
+   * to resolve against. `dir` is the directory of the document that named it;
+   * main joins the two, since the renderer never builds a path, and the join
+   * is held to the workspace's folders like the path in `readImageFile`.
+   */
+  readImageRelative: (dir: string, relative: string) => Promise<string>
   /**
    * The TypeScript server's answers, for the editor's tooltips and its
    * go-to-definition.
@@ -1712,6 +1784,36 @@ export type DesktopApi = {
   onWorktreeChatEvent: (
     listener: (event: WorktreeChatEvent) => void
   ) => () => void
+
+  /** The DeepSeek Harness gateway (`dsh web`) — see `main/dsh.ts`. */
+  dshStatus: () => Promise<DshStatus>
+  /** Every session the gateway is holding. */
+  dshListSessions: () => Promise<DshSessionSummary[]>
+  /** A new session; resolves to its id. */
+  dshCreateSession: (input: DshCreateSessionInput) => Promise<string>
+  /** Sends one prompt. Resolves when the gateway accepted it — the completion
+   * itself arrives as `dsh:event` pushes. */
+  dshSendPrompt: (input: DshPromptInput) => Promise<void>
+  /** The session's events, oldest first — a poll for what the stream already
+   * pushed, used to seed a tab or to catch up after one was closed. */
+  dshHistory: (
+    sessionId: string,
+    maxMessages?: number
+  ) => Promise<DshHistoryEntry[]>
+  /** Stops the session's active turn. */
+  dshCancel: (sessionId: string) => Promise<void>
+  /** The model picker's catalog for one session. */
+  dshListModels: (sessionId: string) => Promise<DshModelsCatalog>
+  /** The gateway's whole model catalog, for the chat picker's DeepSeek group —
+   * host-scoped, so no session is needed to read it. */
+  dshModelCatalog: () => Promise<DshModelGroup[]>
+  /** Opens the one live event stream every session shares; pushes begin once
+   * it is up. Idempotent: a second call restarts it. */
+  dshEventsStart: () => Promise<void>
+  /** Closes the stream opened by `dshEventsStart`. */
+  dshEventsStop: () => Promise<void>
+  /** The gateway's live events. Returns an unsubscribe. */
+  onDshEvent: (listener: (event: DshEvent) => void) => () => void
 
   /** Every note in the workspace, and the folders they are filed under —
    * their listings only; a body is read one at a time. */
@@ -1890,7 +1992,6 @@ export const IPC = {
   fileAtHead: "git:file-at-head",
   getSetting: "settings:get",
   setSetting: "settings:set",
-  listUserMcpServers: "mcp:user-servers",
   dbQuery: "db:query",
   dbExec: "db:exec",
   dbReset: "db:reset",
@@ -1903,6 +2004,7 @@ export const IPC = {
   trashPath: "files:trash",
   revealPath: "files:reveal",
   readImageFile: "files:read-image",
+  readImageRelative: "files:read-image-relative",
   listWorkspaceFiles: "files:index",
   watchDirectories: "files:watch",
   directoryChanged: "files:changed",
@@ -1930,6 +2032,17 @@ export const IPC = {
   sendWorktreeChat: "worktree-chats:send",
   stopWorktreeChat: "worktree-chats:stop",
   worktreeChatEvent: "worktree-chats:event",
+  dshStatus: "dsh:status",
+  dshListSessions: "dsh:list-sessions",
+  dshCreateSession: "dsh:create-session",
+  dshSendPrompt: "dsh:send-prompt",
+  dshHistory: "dsh:history",
+  dshCancel: "dsh:cancel",
+  dshListModels: "dsh:list-models",
+  dshModelCatalog: "dsh:model-catalog",
+  dshEventsStart: "dsh:events-start",
+  dshEventsStop: "dsh:events-stop",
+  dshEvent: "dsh:event",
   listNotes: "notes:list",
   saveNotes: "notes:save",
   listNoteFolders: "notes:list-folders",

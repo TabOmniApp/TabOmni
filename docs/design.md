@@ -1375,68 +1375,53 @@ silently declines to use.
 
 ### The user's own servers
 
-`--strict-mcp-config` means a turn here sees the file this app wrote and nothing
-else — not the servers in `~/.claude.json`, not a `.mcp.json` in the repository.
-That is deliberate and it stays: a conversation the app is hosting should hold
-what the app was told to hand it, rather than whatever config the directory it
-started in happened to be under.
+There was a fence here: `--strict-mcp-config` meant a turn saw the file this
+app wrote and nothing else — not the servers in `~/.claude.json`, not a
+`.mcp.json` in the repository — and a server had to be copied into that file by
+name, one switch each under **Your own servers** in Settings › MCP, before a
+chat could reach it. `main/user-mcp.ts` did the reading, `mcp.userServers` held
+the names, and `withUserServers` in `main/worktree-chat.ts` decided what a
+switched-on server was to each permission mode.
 
-What that cost was the obvious next thing somebody wants. The issue tracker they
-already set up in the terminal is not reachable from the chat editing the branch
-the issue is about, and the flag that makes it so is invisible from the outside —
-the chat simply does not have the tools, with nothing saying why.
+**All of that is gone.** A turn is started with `--mcp-config` naming this
+app's own three servers and no `--strict-mcp-config` beside it, which is what
+that flag was for in the first place: without it, the CLI **merges** the given
+file with whatever it would already have found running plain `claude` in that
+directory — `~/.claude.json`, a repository's own `.mcp.json`, enabled plugins,
+a claude.ai connector, all of it. A server that works from the dock's Terminal
+now works from a chat here, with nothing to switch on for it and nothing to
+find in Settings — install and inspect it with `claude mcp add` / `claude mcp
+list` the way it always was.
 
-So the servers are **listed and offered**, one switch each, under **Your own
-servers** in Settings › MCP. `main/user-mcp.ts` reads `~/.claude.json` — the
-top-level `mcpServers` for the user scope, and `projects.<dir>.mcpServers` for
-the ones added under a directory — and the ones switched on are **copied** into
-`~/.tabomni/mcp.json` beside this app's three. Copied, not inherited: every
-server in that file is one this app put there, which is what keeps the strict
-flag meaning something. This app's own three are written last, so a user server
-called `tabomni-notes` cannot take a name the tool list pre-approves.
+The cost is symmetric with the benefit it used to buy: the read-only modes
+(`Plan`, `Read only`) can no longer refuse an inherited server _by name_, since
+this app no longer copies one in and so has no name for it. They still refuse
+every tool they know about — `WRITE_REFUSED`, the shell, the workspace's own
+writers — and an unlisted tool from a server the CLI picked up on its own is
+refused too, now with an explicit message rather than a silent stall (see
+`orgApproving` below). That is a deliberate trade for parity with the plain
+CLI over the earlier, narrower guarantee.
 
-A **project-scoped** server is offered here too, rather than matched against the
-directory a chat is in: matching would mean the list changed as the left column
-was clicked around, for a switch that belongs to the workspace — which holds
-several projects at once. A `.mcp.json` in a repository is not read at all: that
-file is the project's own, checked in and shared, and copying a server out of it
-because that project happened to be selected is the inheriting this refuses.
-`claude mcp add` is what says yes to it.
+**One exception cuts across all five modes: `matchedAskRule`.** A connector an
+account has set to require approval — a claude.ai ClickUp, say — forces
+`canUseTool` for its tools no matter what: ahead of `bypassPermissions`, and
+even past an `allowedTools` entry that matched. Before this, a turn under
+`plan`, `read`, `edits` or `full` had no `canUseTool` at all, so such a call
+was simply denied with nobody there to ask — `Full access` bypassing every
+permission check this app knows about was never the same promise as bypassing
+one an account holder set on a connector, and there was no way to keep it.
 
-The setting is one key holding a **JSON array of names** (`mcp.userServers`),
-not a key per server, because these are whatever the user configured rather than
-a fixed list this app ships. `mcpUserServerNames` in `@shared/api` is the one
-place that encoding lives, for the reason `chatOptions` is there: the dialog
-draws the switches from it and main decides a turn from it. Anything that does
-not parse is none of them — a setting this app cannot read must not come out as
-"everything". By name, so a server the user repoints goes on being the one that
-was allowed, and one they `claude mcp remove` stops being handed over while the
-name stays stored, so putting it back does not mean approving it again.
-
-**What one is to a turn is per permission mode**, and that is `withUserServers`
-in `main/worktree-chat.ts` rather than a fourth thing to remember:
-
-- `Edits` pre-approves them by server name, the way the `tabomni-*` three are.
-- `Plan` and `Read only` **refuse** them outright — the whole server, not some of
-  it. Nothing in a config file says which of a server's tools read and which
-  file a ticket, and a read-only turn that finds out by calling one was never
-  read-only. Named rather than left off the allow list, for the reason every
-  refusal there is named: unlisted is _askable_, and in a mode with nobody to ask
-  that is a turn that stalls.
-- `Ask` leaves them on neither list, which is exactly how the card reaches the
-  screen.
-- `Full access` has no allow list at all and nothing is asked.
-
-The config carries whatever the CLI's own does, `env` included — which is the
-sharper version of the argument the file was already written for. It is the one
-place someone's server credentials are copied to, and it is mode `0600` in
-`~/.tabomni`. Only the listing crosses to the renderer: `ipc.ts` strips the
-config field by field on the way out, the way a database's password is stripped.
-
-`test/user-mcp.ts` covers the three pure halves — a config with both scopes and
-the same server in two projects, the malformed shapes that must not throw in a
-dialog, the line a row shows, the setting read back, and each of the four things
-a mode does with a server.
+`orgApproving` in `main/claude-agent.ts` is now wired into every mode that
+does not already have `onAsk` — `ask` needs none of this, since its own
+`onAsk` already puts every unlisted call, `matchedAskRule` included, in front
+of somebody. It allows exactly the calls the SDK marks with `matchedAskRule`
+on the `canUseTool` context, and denies everything else the same way an
+absent `canUseTool` used to. Approving without a person reading the request
+is exactly what the account's own `ask` rule was against — this substitutes
+the app's own judgment for the human prompt the rule asked for, in every mode
+including `plan` and `read`, because a connector's tool carries no read/write
+shape this app can see: a `plan` turn that reaches one is trusting the
+account's own policy rather than this app's read-only guarantee.
 
 ## The assistant, removed
 
@@ -2104,15 +2089,17 @@ there is a genuine choice to make. The two halves are read and kept separately,
 so switching back and forth re-reads neither.
 
 **A `.md` is the other one**, and the menu is the same menu three times over:
-**Text editor**, which is what it opens as, **Markdown preview**, which draws it
-as the document it was written to be, and **Markdown editor**, which is the
-block editor below — the document, written without typing the syntax. The
-default is the editor rather than the
-preview, unlike SVG's: the Explorer is a tree of a project's source, and a
-README reached from there is more often on the way to being changed than being
-read. There is no second copy of the text — the preview draws the same buffer
+**Markdown preview**, which is what it opens as, **Text editor**, which draws
+the source, and **Markdown editor**, which is the block editor below — the
+document, written without typing the syntax. The default is the preview rather
+than the editor, the way SVG's is the picture: the Explorer is a tree of a
+project's source, and a README reached from there is more often being read than
+changed. There is no second copy of the text — the preview draws the same buffer
 the editor writes into, so an edit is in it the moment the view is switched,
-saved or not. The renderer is the transcript's,
+saved or not. A picture the document names relatively — `./docs/img.png` — is
+read in against the file's own directory as a `data:` URL (see `MarkdownView`'s
+`baseDir`), which is the one way a browser on this app's origin can see a local
+file at all. The renderer is the transcript's,
 `components/studio/markdown-view.tsx`, which is why it sits at the studio's root
 rather than in either panel; what the Explorer adds is a document's type scale
 over a chat message's, in `files/file-markdown.css`, in the same theme tokens as

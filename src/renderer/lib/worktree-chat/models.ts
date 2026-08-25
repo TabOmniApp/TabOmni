@@ -98,3 +98,57 @@ export function orderedModels(models: AgentModel[]): AgentModel[] {
     return left.label.localeCompare(right.label)
   })
 }
+
+/** One row of the DeepSeek group in a chat's model picker. */
+export type DeepseekModelOption = {
+  value: string
+  label: string
+  /** The reasoning levels the model accepts, when it has any — the gateway's
+   * own ids and words, which a picker's effort submenu shows. */
+  efforts?: { id: string; name: string }[]
+}
+
+let deepseekAsked: Promise<DeepseekModelOption[]> | null = null
+let deepseekHeld: DeepseekModelOption[] | null = null
+
+/**
+ * The models the gateway serves, for the model picker's DeepSeek group.
+ *
+ * Cached for the run like `useAgentModels` — the catalog does not change while
+ * the app is running, and a picker opening is not a reason to ask again. Empty
+ * when the gateway could not be reached, which is when the group is not worth
+ * showing.
+ */
+export function useDeepseekModels(): DeepseekModelOption[] {
+  const [models, setModels] = useState<DeepseekModelOption[]>(
+    deepseekHeld ?? []
+  )
+
+  useEffect(() => {
+    if (deepseekHeld) return
+    let mounted = true
+    deepseekAsked ??= window.desktop.dshModelCatalog().then((groups) =>
+      groups.flatMap((group) =>
+        group.models.map((model) => ({
+          value: model.id,
+          label: model.name,
+          ...(model.efforts === undefined ? {} : { efforts: model.efforts }),
+        }))
+      )
+    )
+    void deepseekAsked
+      .then((answer) => {
+        deepseekHeld = answer
+        if (mounted) setModels(answer)
+      })
+      .catch((error: unknown) => {
+        deepseekAsked = null
+        console.error("Could not read the DeepSeek model list", error)
+      })
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  return models
+}
