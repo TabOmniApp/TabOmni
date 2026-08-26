@@ -600,11 +600,11 @@ export function page(title: string, version: string, body: string): string {
   --hl-pink-text: #ad1a72; --hl-pink-bg: #f4dfeb;
 }
 @media (prefers-color-scheme: dark) {
-  /* The paper is the studio's own dark \`--background\`, #1e1e1e, so a note read
+  /* The paper is the studio's own dark \`--background\`, #111218, so a note read
      in a browser beside the studio is on the same dark rather than a deeper
      one; \`--sunk\` and \`--line\` step up from it instead of down, since a code
      block darker than the page would be a hole in it. */
-  :root { --ink: #e4e4e7; --dim: #a1a1aa; --line: #3a3a3a; --sunk: #292929; --paper: #1e1e1e; --link: #a5b4fc; }
+  :root { --ink: #f3f3f6; --dim: #9a9db0; --line: #2c2d36; --sunk: #1b1c24; --paper: #111218; --link: #a5a8f0; }
   :root {
     --hl-gray-text: #bebdb8; --hl-gray-bg: #9b9a97;
     --hl-brown-text: #8e6552; --hl-brown-bg: #64473a;

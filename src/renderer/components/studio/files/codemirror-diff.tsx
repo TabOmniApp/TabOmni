@@ -21,7 +21,7 @@ import {
 } from "@/lib/files/diff-chrome"
 import { languageExtension, languageForFile } from "@/lib/editor-languages"
 import { reviewGutter, setReviewMarks } from "@/lib/files/review-marks"
-import { useReview } from "@/lib/files/review"
+import { useReview, type ReviewSide } from "@/lib/files/review"
 import {
   acquireDoc,
   docSharing,
@@ -128,10 +128,6 @@ export default function CodeMirrorFileDiff({
     whitespaceRef.current = whitespace
   })
 
-  /** The side comments are left on — the working file. `views[1]` split,
-   * `views[0]` inline, and nothing at all when this diff is not a review. */
-  const markedRef = useRef<EditorView | null>(null)
-
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
@@ -153,19 +149,40 @@ export default function CodeMirrorFileDiff({
       languageConf.of([]),
     ]
 
-    /** The review column, on the working side only: a comment is about the file
-     * as it is now, and the commit has no lines to fix. Empty for a diff that is
-     * not a review, which is what keeps the `+` out of a file tab's `Diff`. */
+    /**
+     * The review column, for one editor of this diff.
+     *
+     * `side` is what a document line of *that* editor is a line of, and
+     * `removals` whether its deleted lines are block widgets in it — which is
+     * the whole difference between the two layouts: the unified diff draws the
+     * removed rows inside the working editor, and the split one puts them on the
+     * commit's own, where they are ordinary lines. `overlay` follows from that:
+     * only the unified diff has a `+`/`-` column for the marks to sit over, and
+     * the split view's editors would have them over CodeMirror's fold arrows.
+     * Empty for a diff that is not a review, which is what keeps the `+` out of
+     * a file tab's `Diff`.
+     */
     const rootId = reviewRef.current
-    const review = (): Extension[] =>
+    const review = (
+      side: ReviewSide,
+      removals: boolean,
+      overlay: boolean
+    ): Extension[] =>
       rootId === null
         ? []
         : [
             reviewGutter({
-              pick: (line, extend) =>
-                useReview.getState().pick({ rootId, path }, line, extend),
-              drag: (anchor, line) =>
-                useReview.getState().stretch({ rootId, path }, anchor, line),
+              side,
+              removals,
+              overlay,
+              pick: (line, extend, at) =>
+                useReview
+                  .getState()
+                  .pick({ rootId, path, side: at }, line, extend),
+              drag: (anchor, line, at) =>
+                useReview
+                  .getState()
+                  .stretch({ rootId, path, side: at }, anchor, line),
               settle: () => useReview.getState().settle(),
             }),
           ]
@@ -202,7 +219,15 @@ export default function CodeMirrorFileDiff({
         // and the word-level highlighting are Primer's here.
         a: {
           doc: committed,
-          extensions: [...panelChrome(), ...common(), githubDiffTheme(dark)],
+          extensions: [
+            ...panelChrome(),
+            ...common(),
+            githubDiffTheme(dark),
+            // The commit's own editor, so every line in it is a line of the
+            // commit — which is where a deleted line lives in this layout, and
+            // therefore where a comment on one is left.
+            ...review("old", false, false),
+          ],
         },
         b: {
           doc: docTextOf(path) ?? initialText,
@@ -212,7 +237,7 @@ export default function CodeMirrorFileDiff({
             githubDiffTheme(dark),
             // After the number column, so it sits against the code the way a
             // forge draws it — a gutter's place is where it appears.
-            ...review(),
+            ...review("new", false, false),
             docSharing(path, { editable: false }),
           ],
         },
@@ -232,7 +257,9 @@ export default function CodeMirrorFileDiff({
             // number column beside the old and new ones.
             githubDiffGutters(),
             githubDiffTheme(dark),
-            ...review(),
+            // One editor holding both sides: its own lines are the working
+            // file's, and the removed rows drawn between them are the commit's.
+            ...review("new", true, true),
             docSharing(path, { editable: false }),
             unifiedMergeView({
               original: committed,
@@ -260,7 +287,6 @@ export default function CodeMirrorFileDiff({
     }
 
     viewsRef.current = views
-    markedRef.current = views[views.length - 1] ?? null
 
     let alive = true
     void languageExtension(languageForFile(path)).then((language) => {
@@ -273,7 +299,6 @@ export default function CodeMirrorFileDiff({
     return () => {
       alive = false
       viewsRef.current = []
-      markedRef.current = null
       destroy()
       // Let go rather than drop: the text editor may be holding the same buffer.
       releaseDoc(path)
@@ -298,21 +323,32 @@ export default function CodeMirrorFileDiff({
   const threads = useReview((state) => state.threads)
   const pending = useReview((state) => state.pending)
   useEffect(() => {
-    const view = markedRef.current
-    if (!view || !reviewRootId) return
+    if (!reviewRootId) return
 
-    view.dispatch({
-      effects: setReviewMarks.of({
-        threads: threads.filter(
-          (thread) => thread.rootId === reviewRootId && thread.path === path
-        ),
-        // Only while it is about *this* file: one range is picked at a time
-        // across the whole review, and a range picked in the file before this
-        // one is not a range to tint in this one.
-        pending: pending && pending.path === path ? pending : null,
-      }),
+    const marks = setReviewMarks.of({
+      threads: threads.filter(
+        (thread) => thread.rootId === reviewRootId && thread.path === path
+      ),
+      // Only while it is about *this* file: one range is picked at a time
+      // across the whole review, and a range picked in the file before this
+      // one is not a range to tint in this one.
+      pending: pending && pending.path === path ? pending : null,
     })
+
+    // Every view rather than the working one: in the split layout the commit's
+    // editor is the one drawing the deleted lines. Both are handed the same
+    // threads and each filters by its own side, so neither has to be told twice
+    // which it is.
+    for (const view of viewsRef.current) view.dispatch({ effects: marks })
   }, [threads, pending, path, reviewRootId, original, sideBySide, isDark])
+
+  /* The committed text, for the one thing a review cannot read off the buffer:
+   * a comment on a deleted line quotes lines that are only in the commit. See
+   * `committed` on the review store. */
+  useEffect(() => {
+    if (!reviewRootId) return
+    useReview.getState().showing(path, original ?? "")
+  }, [path, original, reviewRootId])
 
   useEffect(() => {
     for (const view of viewsRef.current) {

@@ -89,7 +89,6 @@ const {
   preview,
   mcp,
   worktreeChats,
-  dsh,
   tsServers,
   watchers,
   noteFilePath,
@@ -102,9 +101,9 @@ function createWindow(): void {
     minWidth: 860,
     minHeight: 600,
     // The studio defaults to its dark theme; matching it here keeps the first
-    // paint from flashing white. `#1e1e1e` is the dark `--background` in
+    // paint from flashing white. `#111218` is the dark `--background` in
     // `styles/globals.css` — the one number in this file that has to follow it.
-    backgroundColor: "#1e1e1e",
+    backgroundColor: "#111218",
     show: false,
     // Windows and Linux draw the window/taskbar icon from here. macOS ignores
     // it — the dock is handled below — and a packaged build has the icon in
@@ -262,10 +261,6 @@ app.on("before-quit", (event) => {
         // A turn in flight is a `claude` this app spawned; it goes with the app
         // rather than being left talking to a window that has gone.
         worktreeChats.dispose(),
-        // The gateway's event stream is a loopback SSE connection; it dies with
-        // this process anyway, but closing it cleanly keeps the gateway from
-        // logging a dropped client.
-        dsh.dispose(),
       ]),
       // A wedged daemon must not leave the app unquittable.
       new Promise((resolve) => setTimeout(resolve, CLEANUP_TIMEOUT_MS)),

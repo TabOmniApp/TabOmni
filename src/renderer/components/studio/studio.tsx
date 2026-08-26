@@ -21,12 +21,10 @@ import { useStudio, type Pane } from "@/lib/store"
 import { useRun } from "@/lib/run/store"
 import { useProjects } from "@/lib/projects"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
-import { useDeepseekChats } from "@/lib/deepseek/store"
 import { Dock } from "./dock"
 import { ProjectCrumbs } from "./project/project-crumbs"
 import { WorkspaceSidebar } from "./workspace-sidebar"
 import { WorktreeChatPane } from "./worktree/chat-pane"
-import { DeepSeekPane } from "./deepseek/deepseek-pane"
 import { ApiWorkspace } from "./api/api-workspace"
 import { FileTree } from "./files/file-tree"
 import { ChangesPane } from "./files/changes-pane"
@@ -65,8 +63,6 @@ function paneView(pane: Pane) {
       return <NoteWorkspace />
     case "worktree":
       return <WorktreeChatPane />
-    case "deepseek":
-      return <DeepSeekPane />
   }
 }
 
@@ -96,7 +92,6 @@ export function Studio() {
     void useProjects.getState().restore()
     void useRun.getState().restore()
     void useWorktreeChats.getState().refresh()
-    void useDeepseekChats.getState().refreshStatus()
   }, [])
 
   // A run outlives the dock being closed and the tab being switched away from,
@@ -106,10 +101,6 @@ export function Studio() {
   // A chat's turn runs in the main process and outlives the
   // pane being switched away from, so its lines are subscribed to here.
   useEffect(() => useWorktreeChats.getState().listen(), [])
-
-  // Same for the DeepSeek gateway's event stream — it is the main process that
-  // holds the socket, and the pane's lines are this subscription's.
-  useEffect(() => useDeepseekChats.getState().listen(), [])
 
   /*
    * The manifest is a small file on a local disk and usually lands well inside

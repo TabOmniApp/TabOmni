@@ -94,6 +94,9 @@ type WorktreeChatState = {
    */
   create: (place: ChatPlace, draft?: string) => Promise<string | null>
   remove: (id: string) => Promise<void>
+  /** What a chat is called, in the column and on its tab. An empty name is
+   * ignored — that is the field being left blank, not a chat being unnamed. */
+  rename: (id: string, title: string) => void
 
   send: (id: string, prompt: string) => Promise<void>
   stop: (id: string) => void
@@ -241,6 +244,24 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     set({ drafts: without(get().drafts, chatId) })
   },
 
+  // Written here and then to the record, like `setOptions` and for the same
+  // reason: a row that only took its new name once a file had been written
+  // would lag behind the Enter that gave it one.
+  rename(id, title) {
+    const name = title.trim()
+    if (!name) return
+
+    set({
+      chats: get().chats.map((chat) =>
+        chat.id === id ? { ...chat, title: name } : chat
+      ),
+    })
+
+    void window.desktop.renameWorktreeChat(id, name).catch((error: unknown) => {
+      console.error("Could not rename that chat", error)
+    })
+  },
+
   async remove(id) {
     await window.desktop.deleteWorktreeChat(id).catch((error: unknown) => {
       console.error("Could not delete that chat", error)
@@ -378,7 +399,12 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
             ...get().messages,
             [chatId]: held.map((line) =>
               line.role === "tool" && line.toolId === event.toolId
-                ? { ...line, result: event.result, failed: event.failed }
+                ? {
+                    ...line,
+                    result: event.result,
+                    failed: event.failed,
+                    ...(event.output ? { output: event.output } : {}),
+                  }
                 : line
             ),
           },
@@ -408,6 +434,7 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
                   toolId: event.toolId,
                   title: event.title,
                   path: event.path,
+                  input: event.input,
                   stat: event.stat,
                   change: event.change,
                 }
@@ -446,6 +473,25 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
  * its folder — the same key its group and its scope use. */
 export function chatsOf(chats: WorktreeChat[], rootId: string): WorktreeChat[] {
   return chats.filter((chat) => chatRootId(chat) === rootId)
+}
+
+/**
+ * The chats belonging to no project — what the column lists as `Ungrouped`.
+ *
+ * These are the records `chatRootId` reads as null: a chat written while chats
+ * lived in a `git worktree` checkout holds that checkout's id, and there is
+ * nowhere left to run its next turn. They were hidden for exactly that reason,
+ * and hiding them was the wrong answer to it — the conversation is on disk and
+ * readable, and a chat that silently stopped existing is worse than one that is
+ * listed and says why when you send to it. `WorktreeChats.run` already finishes
+ * such a turn with a line saying the project has gone, so the failure is
+ * explained rather than mysterious.
+ *
+ * There is no `+` on that row and no `New chat here` on its menu: a chat needs
+ * a directory to run in, and `Ungrouped` names the absence of one.
+ */
+export function ungroupedChats(chats: WorktreeChat[]): WorktreeChat[] {
+  return chats.filter((chat) => chatRootId(chat) === null)
 }
 
 /**

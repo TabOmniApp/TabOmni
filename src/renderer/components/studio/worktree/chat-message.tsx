@@ -2,6 +2,7 @@ import { useState } from "react"
 import {
   Brain,
   Check,
+  ChevronRight,
   Coins,
   Copy,
   FileText,
@@ -16,11 +17,6 @@ import { useSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import { AGENT_TOOL } from "@/lib/worktree-chat/activity"
 import { usageDetail, usageLine } from "@/lib/worktree-chat/usage"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
 import { MarkdownView } from "../markdown-view"
 import { IconButton } from "../icon-button"
 import { MentionText } from "./chat-composer"
@@ -179,14 +175,31 @@ function CopyMessage({ text }: { text: string }) {
 }
 
 /**
- * One tool call.
+ * One tool call: a row, and what is under it.
  *
  * The lead is what the model said it was doing when it said anything — a
  * `Bash` and a `Task` carry a `description`, and "Check IPC wiring for
  * attachments" is a better row than "Bash". Everything else falls back to the
  * tool's own name, which is what the CLI called it.
+ *
+ * **Clicking opens it in place**, under the row, rather than over it. An edit's
+ * change was a popover first, which was the right answer to the question being
+ * asked then — the content is code, so it has to stay up, scroll and take a
+ * selection, none of which this app's tooltip does — and the wrong shape once
+ * every kind of call had something to open. Three things decided it. A popover
+ * is one at a time, so two calls cannot be compared, and comparing what ran
+ * with what it printed is most of why anybody opens one. It is positioned
+ * against its row, so a long output opens a floating box over the conversation
+ * it belongs to. And a chat is already a column that grows downward: a row that
+ * expands is the one gesture a reader of a log does not have to learn.
+ *
+ * What is **not** here is syntax highlighting, which the reference for this had.
+ * Every editor in this app is CodeMirror behind a `lazy`, and a turn with
+ * fifteen tool calls would be fifteen editor instances mounted to colour output
+ * nobody can edit. Monospace, the git colours on a change, and the text itself.
  */
 function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
+  const [open, setOpen] = useState(false)
   const agent = of.name === AGENT_TOOL
 
   /*
@@ -205,24 +218,70 @@ function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
   const stat = of.failed ? undefined : of.stat
   const said = stat ?? of.result
 
-  /* A button when there is something to open and a plain row otherwise: `type`,
-   * the focus ring and `aria-expanded` come with the element rather than being
-   * attributes remembered by hand, and the hover treatment is what makes the one
-   * row in a turn that opens look as though it does. */
-  const openable = Boolean(of.change && of.path)
-  const Element = openable ? "button" : "div"
+  /*
+   * Openable where there is something to open, and a plain row otherwise.
+   *
+   * Main decides what "something" means rather than this: `input` and `output`
+   * are written only where the row is not already showing the whole of it (see
+   * `describeCall` and `detailOf` in `main/claude-agent.ts`), so this is a test
+   * of their presence and not a second guess at their length. A row that opened
+   * onto the sentence it was already displaying is worse than one that does not
+   * open.
+   */
+  const openable = Boolean(of.input || of.output || of.change)
 
-  const row = (
-    <Element
-      {...(openable ? { type: "button" as const } : {})}
-      className={cn(
-        "flex w-full items-baseline gap-1.5 rounded px-1 text-left",
-        "text-[0.7rem] text-muted-foreground",
-        openable && "hover:bg-muted/60 hover:text-foreground"
+  return (
+    <div>
+      {openable ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className={cn(TOOL_ROW, "hover:bg-muted/60 hover:text-foreground")}
+        >
+          {/* In place of the tool's own mark rather than beside it: two glyphs
+              at the head of a 0.7rem row is a row that leads with punctuation.
+              Which tool it was is the label immediately after. */}
+          <ChevronRight
+            className={cn(
+              "size-3 shrink-0 translate-y-0.5 transition-transform",
+              open && "rotate-90"
+            )}
+          />
+          <ToolLine of={of} said={said} agent={agent} />
+        </button>
+      ) : (
+        <div className={TOOL_ROW}>
+          {toolMark(of.name, "size-3 shrink-0 translate-y-0.5")}
+          <ToolLine of={of} said={said} agent={agent} />
+        </div>
       )}
-    >
-      {toolMark(of.name, "size-3 shrink-0 translate-y-0.5")}
 
+      {openable && open && <ToolDetail of={of} />}
+    </div>
+  )
+}
+
+/** The row's shape, shared by the button and the plain `div` so the two align
+ * to the pixel whether or not a call had anything to open. */
+const TOOL_ROW = cn(
+  "flex w-full items-baseline gap-1.5 rounded px-1 text-left",
+  "text-[0.7rem] text-muted-foreground"
+)
+
+/** Everything on the row after its leading glyph, in one component so the
+ * openable and plain versions cannot drift apart. */
+function ToolLine({
+  of,
+  said,
+  agent,
+}: {
+  of: Extract<AssistantMessage, { role: "tool" }>
+  said?: string
+  agent: boolean
+}) {
+  return (
+    <>
       <span className="shrink-0 font-medium text-foreground/80">
         {agent ? "Agent" : (of.title ?? toolLabel(of.name))}
       </span>
@@ -257,16 +316,7 @@ function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
           </span>
         )
       )}
-    </Element>
-  )
-
-  if (!of.change || !of.path) return row
-
-  return (
-    <Popover>
-      <PopoverTrigger render={row} />
-      <ChangePopover path={of.path} stat={of.stat} change={of.change} />
-    </Popover>
+    </>
   )
 }
 
@@ -297,68 +347,118 @@ function FileChip({ path }: { path: string }) {
 }
 
 /**
- * What an edit did: the file, how much moved, and the lines.
+ * What a call was made with and what came back, opened under its row.
  *
- * A **popover** and not a tooltip, which is what this was first and what the
- * shape of the content rules out: a tooltip in this app is the inverted
- * `bg-primary` chip meant for a few words — a `-`/`+` block in one came out as a
- * pale box with code in it — and it is also unscrollable, unselectable, and gone
- * the moment the pointer leaves the row. This is code: it has to stay up, take a
- * selection, and scroll.
+ * Up to three blocks in the order the call happened: the argument, the change it
+ * made, and what it printed. A call has whichever of them it has — a `Read` that
+ * returned 600 lines has only the last, an `Edit` has the middle, a `Bash`
+ * usually has the first and the last — and the rules are *between* blocks rather
+ * than around them, so a panel holding one block is a plain box.
  *
- * **It is the change the call made, not the file's diff**, and the header says
- * which — those two answers drift apart the moment anything else touches the
- * file, and a popover captioned "diff" that showed the first while somebody read
- * it as the second would be worse than no popover. The file's diff against
- * `HEAD` is a click away in `Changes`, and it is the one that knows what has
- * happened since.
+ * Each block scrolls on its own rather than the panel scrolling around all of
+ * them: a wide command must not drag a narrow output sideways with it, and two
+ * blocks that each cap their height are two things to read where one tall box
+ * past both of them is a haystack.
  */
-function ChangePopover({
-  path,
-  stat,
-  change,
+function ToolDetail({
+  of,
 }: {
-  path: string
-  stat?: string
-  change: string
+  of: Extract<AssistantMessage, { role: "tool" }>
+}) {
+  /* Whole where main kept it, and the row's own where it did not — except for a
+     call showing a change, whose argument is the path the chip is already
+     drawing. */
+  const argument = of.input ?? (of.change ? undefined : of.summary)
+
+  return (
+    <div className="mt-1 mb-1.5 ml-1 divide-y overflow-hidden rounded-md border bg-muted/30">
+      {argument && (
+        <Block
+          text={argument}
+          // A shell command is the one argument read as something that ran
+          // rather than as a value, and a prompt glyph is what says so.
+          gutter={SHELL_TOOLS.has(of.name) ? "$" : undefined}
+        />
+      )}
+
+      {of.change && (
+        <>
+          {/* The editors' own git colours and the same two glyphs, so somebody
+              with the `Changes` pane in their eye reads this without learning
+              anything new. */}
+          <Block text={of.change} diff />
+          {/*
+            Which of the two diffs this is, said where it is being read.
+            Those answers drift apart the moment anything else touches the file,
+            and a block captioned nothing that showed the call's change while
+            somebody read it as the file's would be worse than no block.
+          */}
+          <p className="px-2 py-1 text-[0.65rem] opacity-60">
+            What this call changed. The file&apos;s own diff is in Changes.
+          </p>
+        </>
+      )}
+
+      {of.output && (
+        <Block
+          text={of.output}
+          className={cn(of.failed && "text-destructive/80")}
+        />
+      )}
+    </div>
+  )
+}
+
+/** The tools whose argument is a command rather than a value. A set rather than
+ * a comparison because the CLI has grown a second one before. */
+const SHELL_TOOLS = new Set(["Bash", "BashOutput"])
+
+/**
+ * One block of monospace text inside the panel.
+ *
+ * `pre` rather than a list of rows: the indentation is the content's own, and
+ * for a diff it is half of what a change looks like. `whitespace-pre` and not
+ * `pre-wrap`, because a command line that wrapped is one that can no longer be
+ * read back as the thing that ran — it scrolls instead.
+ */
+function Block({
+  text,
+  gutter,
+  diff = false,
+  className,
+}: {
+  text: string
+  gutter?: string
+  diff?: boolean
+  className?: string
 }) {
   return (
-    /* Its own box, and every one of these overrides earns its place: the popover
-       is a column with `gap-2.5` and `p-2.5` around a `w-72`, which for three
-       stacked full-bleed rows is a gap where each border should be and a width
-       for a menu rather than for code. */
-    <PopoverContent
-      align="start"
-      className="w-[min(40rem,80vw)] gap-0 p-0 text-left"
+    <pre
+      className={cn(
+        "max-h-64 overflow-auto px-2 py-1.5 font-mono text-[0.65rem] leading-relaxed whitespace-pre",
+        className
+      )}
     >
-      <div className="flex items-baseline gap-2 border-b px-2 py-1">
-        <span className="min-w-0 flex-1 truncate font-mono text-[0.65rem] opacity-70">
-          {path}
-        </span>
-        {stat && <span className="shrink-0 text-[0.65rem]">{stat}</span>}
-      </div>
-
-      {/* The editors' own git colours and the same two glyphs, so somebody with
-          the `Changes` pane in their eye reads this without learning anything
-          new. `pre` rather than a list of rows: the indentation is the code's,
-          and it is half of what a change looks like. */}
-      <pre className="max-h-72 overflow-auto px-2 py-1.5 font-mono text-[0.65rem] leading-relaxed">
-        {change.split("\n").map((line, at) => (
-          <div
-            key={at}
-            className={cn(
-              line.startsWith("+") && "text-[#007100] dark:text-[#73c991]",
-              line.startsWith("-") && "text-[#ad0707] dark:text-[#c74e39]"
-            )}
-          >
-            {line}
-          </div>
-        ))}
-      </pre>
-
-      <p className="border-t px-2 py-1 text-[0.65rem] opacity-60">
-        What this call changed. The file&apos;s own diff is in Changes.
-      </p>
-    </PopoverContent>
+      {text.split("\n").map((line, at) => (
+        <div
+          key={at}
+          className={cn(
+            diff &&
+              line.startsWith("+") &&
+              "text-[#007100] dark:text-[#73c991]",
+            diff && line.startsWith("-") && "text-[#ad0707] dark:text-[#c74e39]"
+          )}
+        >
+          {/* On the first line only: a prompt repeated down the left of a
+              heredoc would claim every line of it was a command. */}
+          {gutter && (
+            <span className="mr-1.5 opacity-40 select-none">
+              {at === 0 ? gutter : " "}
+            </span>
+          )}
+          {line}
+        </div>
+      ))}
+    </pre>
   )
 }

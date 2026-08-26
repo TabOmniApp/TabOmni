@@ -17,7 +17,6 @@ export const PANES: Pane[] = [
   "api",
   "worktree",
   "note",
-  "deepseek",
 ]
 
 /**
@@ -74,7 +73,7 @@ function isRememberedStrip(value: unknown): value is RememberedStrip {
  * (`lib/shell/store.ts`), and the agent half of what it was is a project's
  * chat.
  */
-export type Pane = Section | "worktree" | "changes" | "deepseek"
+export type Pane = Section | "worktree" | "changes"
 
 /**
  * Which of the Explorer's two lists is showing: the project's files, or the

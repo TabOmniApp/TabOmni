@@ -29,7 +29,6 @@ import {
   PREFIX,
 } from "./tabs"
 import { useWorktreeChats } from "./worktree-chat/store"
-import { DEEPSEEK_TAB_ID, useDeepseekChats } from "./deepseek/store"
 
 /**
  * The six panels' tabs, addressed alike.
@@ -205,12 +204,6 @@ const worktreeChatActive = (
     ? state.selectedId
     : null
 
-/** The DeepSeek tab the strip has selected — the singleton's id, or nothing. */
-const deepseekActive = (
-  state: ReturnType<typeof useDeepseekChats.getState>
-): string | null =>
-  state.selectedId === DEEPSEEK_TAB_ID ? DEEPSEEK_TAB_ID : null
-
 const changesActive = (
   state: ReturnType<typeof useChanges.getState>
 ): string | null =>
@@ -325,18 +318,6 @@ const PANELS: Record<Pane, PanelTabs> = {
     reorder: (ids) => useNotes.getState().reorder(ids),
     groupOf: noteGroupOf,
   },
-  /* The one DeepSeek conversation, never grouped: it is the workspace's, not a
-   * project's, so a group under a folder would be the tab vanishing whenever
-   * the workbench moved to another one. */
-  deepseek: {
-    open: () => useDeepseekChats.getState().openIds,
-    active: () => deepseekActive(useDeepseekChats.getState()),
-    select: (id) => useDeepseekChats.getState().select(id),
-    close: (id) => useDeepseekChats.getState().close(id),
-    closeOthers: (id) => useDeepseekChats.getState().closeOthers(id),
-    closeAll: () => useDeepseekChats.getState().closeAll(),
-    reorder: (ids) => useDeepseekChats.getState().reorder(ids),
-  },
 }
 
 /**
@@ -349,7 +330,6 @@ const STORES = {
   api: useApi,
   note: useNotes,
   worktree: useWorktreeChats,
-  deepseek: useDeepseekChats,
 } as const
 
 /**
@@ -812,7 +792,6 @@ function usePanelActive(pane: Pane): string | null {
     api: useApi(apiActive),
     worktree: useWorktreeChats(worktreeChatActive),
     note: useNotes(noteActive),
-    deepseek: useDeepseekChats(deepseekActive),
   }[pane]
 }
 

@@ -60,11 +60,26 @@ export type AgentTurn = {
   model?: string | null
   /** Reasoning effort. Unset for the CLI's own default, for the same reason. */
   effort?: string | null
-  /** Pre-approved tools. Only ever a permission — it does not refuse anything,
-   * which is why the next field exists. */
-  allowedTools?: string[]
-  /** What is actually refused. An allow list alone leaves everything else still
-   * askable, so this is the half that says no. */
+  /**
+   * Whether this mode allows a tool, answered here rather than by the CLI.
+   *
+   * It was `--allowed-tools`, and that list is what made changing mode
+   * expensive: tool definitions sit ahead of the system prompt in the request,
+   * so a list that differs between two turns of one chat invalidates the whole
+   * cached prefix. Measured in this repo, one mode switch cost 38,423 tokens
+   * re-written and nothing read, against 103 written for a turn that changed
+   * nothing — eighteen times the price for the same question.
+   *
+   * A bare name on that list also auto-approves the call *before* `canUseTool`
+   * is consulted (the SDK says so on stderr), which meant the callback below
+   * was never reached for anything a mode had listed. Both problems have the
+   * one answer: the tool configuration is identical on every turn and the
+   * policy lives in this function, which is how the interactive CLI has always
+   * worked.
+   */
+  permits: (toolName: string) => boolean
+  /** Refused outright, before the model is offered it. Constant across every
+   * mode, for the reason `permits` exists. */
   disallowedTools?: string[]
   /**
    * How much the turn may do without being asked.
@@ -85,9 +100,9 @@ export type AgentTurn = {
    * Who answers a permission prompt, for a turn that may stop and put one on
    * screen.
    *
-   * Left unset for every mode but `ask` — those must not stop — but a
-   * `canUseTool` is wired up regardless: see `orgApproving` for why a mode
-   * with no `onAsk` still needs one.
+   * Left unset for every mode but `ask` — those must not stop. What a mode
+   * without one does with a call `permits` refused is refuse it too, with a
+   * sentence the model can read: see `deciding`.
    */
   onAsk?: AskHandler
 }
@@ -153,7 +168,14 @@ export type AgentHandlers = {
    * row saying "and then it returned" is a transcript twice as long saying the
    * same thing. Matched by `toolId`, which is the CLI's own.
    */
-  onToolResult: (toolId: string, result: string, failed: boolean) => void
+  onToolResult: (
+    toolId: string,
+    result: string,
+    /** The whole of it, capped, and only where `result` is a count rather than
+     * the output itself — see `output` on the tool line. */
+    output: string | undefined,
+    failed: boolean
+  ) => void
   /**
    * What the turn spent, from the result line that ends it.
    *
@@ -233,7 +255,9 @@ export async function runAgentTurn(
         : { sessionId: turn.sessionId }),
       ...(turn.model ? { model: turn.model } : {}),
       ...(turn.effort ? { effort: turn.effort as Options["effort"] } : {}),
-      ...(turn.allowedTools?.length ? { allowedTools: turn.allowedTools } : {}),
+      // No `allowedTools`. Every call falls through to `canUseTool`, which is
+      // both what lets one cached prefix serve all five modes and what makes
+      // the callback reachable at all — see `permits`.
       ...(turn.disallowedTools?.length
         ? { disallowedTools: turn.disallowedTools }
         : {}),
@@ -252,7 +276,7 @@ export async function runAgentTurn(
             },
           }
         : {}),
-      canUseTool: turn.onAsk ? asking(turn.onAsk) : orgApproving(),
+      canUseTool: deciding(turn.permits, turn.onAsk),
       stderr: (data) => {
         // Kept rather than reported as it arrives: the CLI writes warnings here
         // on a turn that goes on to succeed, and only a failure makes them
@@ -305,21 +329,56 @@ export async function runAgentTurn(
 }
 
 /**
- * The SDK's `canUseTool`, over this module's own handler.
+ * The SDK's `canUseTool`: the one place a mode's policy is applied.
  *
- * Two things are worth knowing about what it is handed. `suggestions` is the
- * set of rules that would stop the same call being asked about again, and it is
- * echoed back **whole** as `updatedPermissions` — the SDK's own instruction, and
- * the reason `remember` is a flag here rather than a rule this app composes.
- * And `updatedInput` is not optional in spirit: an allow that omits it was
- * rejected outright by CLIs before 2.1.207, so the input comes back either way,
+ * There were two of these — an `asking` for the mode that stops and an
+ * `orgApproving` that refused everything for the four that do not — and the
+ * split only made sense while the CLI was also being handed an allow list per
+ * mode. Now that the tool configuration is the same on every turn (see
+ * `permits`), what a mode *is* is this function, and there is one of it.
+ *
+ * The order matters. `matchedAskRule` is checked first because it is set when
+ * an account's own policy on a connector — a claude.ai ClickUp, say — forces a
+ * prompt regardless of anything this app configured; allowing it is this app's
+ * own call rather than the account holder's, and it is made in every mode,
+ * `plan` and `read` included, because a connector's tool carries no read/write
+ * shape this app can see. A plan turn that reaches one is trusting that policy
+ * rather than this app's read-only guarantee.
+ *
+ * After that: what the mode permits runs, what it does not goes to whoever can
+ * be asked, and with nobody to ask it is refused with a message rather than
+ * left to stall. A denial carries a sentence because the model reads it and
+ * adjusts, which is the difference between "no" and a turn that spends itself
+ * retrying.
+ *
+ * Two things about what `onAsk` is handed. `suggestions` is the set of rules
+ * that would stop the same call being asked about again, echoed back **whole**
+ * as `updatedPermissions` — the SDK's own instruction, and the reason
+ * `remember` is a flag here rather than a rule this app composes. And
+ * `updatedInput` is not optional in spirit: an allow that omits it was rejected
+ * outright by CLIs before 2.1.207, so the input comes back either way,
  * unchanged unless the caller replaced it.
- *
- * A denial carries a message because the model reads it and adjusts, which is
- * the difference between "no" and a turn that spends itself retrying.
  */
-function asking(onAsk: AskHandler): Options["canUseTool"] {
+function deciding(
+  permits: (toolName: string) => boolean,
+  onAsk: AskHandler | undefined
+): Options["canUseTool"] {
   return async (toolName, input, context) => {
+    if (context.matchedAskRule) {
+      return { behavior: "allow", updatedInput: input }
+    }
+
+    if (permits(toolName)) {
+      return { behavior: "allow", updatedInput: input }
+    }
+
+    if (!onAsk) {
+      return {
+        behavior: "deny",
+        message: `${toolName} is not one of the tools this chat may use, and this mode has nobody to ask.`,
+      }
+    }
+
     const suggestions = context.suggestions ?? []
     const decision = await onAsk({
       toolName,
@@ -339,49 +398,6 @@ function asking(onAsk: AskHandler): Options["canUseTool"] {
       ...(decision.remember && suggestions.length > 0
         ? { updatedPermissions: suggestions }
         : {}),
-    }
-  }
-}
-
-/**
- * The `canUseTool` for every mode but `ask` — which until now had none at all.
- *
- * **Why a mode that decides everything up front needs one anyway.** A
- * connector an account has set to require approval — a claude.ai ClickUp, say
- * — forces `canUseTool` for its tools no matter what: ahead of
- * `bypassPermissions`, and even past an `allowedTools` entry that matched.
- * `matchedAskRule` on the context is how the SDK says so. Without a
- * `canUseTool` at all, a turn reaching for one of those tools had nobody to
- * ask and was simply denied — `Full access` bypassing every permission check
- * this app knows about was never the same promise as bypassing one an
- * account holder set on a connector, and there was no way to keep it. This
- * function is what keeps that promise now: it allows exactly the calls
- * `matchedAskRule` marks, and denies everything else the same way an absent
- * `canUseTool` used to.
- *
- * **What "allows" means here is a choice this app makes, not the org's.**
- * Approving without a person reading the request is exactly what setting an
- * `ask` rule on a connector was against — this substitutes the app's own
- * judgment for the human prompt the rule asked for, in every mode including
- * `plan` and `read`. A connector's tool carries no read/write shape this app
- * can see, so a `plan` turn that reaches one is trusting the account's own
- * policy rather than this app's read-only guarantee. `Ask` mode does not need
- * this at all — its `onAsk` already puts every unlisted call, `matchedAskRule`
- * included, in front of somebody.
- *
- * Anything else that reaches here is a tool named on none of this app's own
- * lists, which under the four modes without `onAsk` was always meant to be
- * refused rather than asked about — this only makes the refusal a message the
- * model reads instead of a silent one.
- */
-function orgApproving(): Options["canUseTool"] {
-  return async (toolName, input, context) => {
-    if (context.matchedAskRule) {
-      return { behavior: "allow", updatedInput: input }
-    }
-    return {
-      behavior: "deny",
-      message: `${toolName} is not one of the tools this chat may use without asking, and this mode has nobody to ask.`,
     }
   }
 }
@@ -495,9 +511,15 @@ function read(
     if (typeof content === "string") return
     for (const block of content) {
       if (block.type !== "tool_result") continue
+      const whole = resultText(block.content)
+      const line = resultLine(block.content)
       onToolResult(
         block.tool_use_id,
-        resultLine(block.content),
+        line,
+        // Only where the row is showing a count rather than the output: a
+        // one-line result is already on the row, and a second copy of it under
+        // a fold is a click that reveals what was read a second ago.
+        whole && whole !== line ? detailOf(whole) : undefined,
         block.is_error === true
       )
     }
@@ -584,6 +606,18 @@ export function usageOf(message: SDKMessage & { type: "result" }): TurnUsage {
  * rather than the whole input, which for a query is longer than the answer.
  */
 export function summarise(input: unknown): string {
+  return collapse(argumentOf(input))
+}
+
+/**
+ * The argument a row is about, **before** it is collapsed into one.
+ *
+ * Split out of `summarise` because the row and the panel under it want the same
+ * string at two lengths: 120 characters of one line to scan, and the whole of it
+ * to read. Picking the key twice — once for each — is how the two quietly come
+ * to disagree about which argument the row was even showing.
+ */
+export function argumentOf(input: unknown): string {
   if (typeof input !== "object" || input === null) return ""
   const record = input as Record<string, unknown>
 
@@ -599,10 +633,10 @@ export function summarise(input: unknown): string {
   ]) {
     const value = record[key]
     if (typeof value === "string" && value.trim()) {
-      return collapse(value)
+      return value
     }
   }
-  return collapse(JSON.stringify(record))
+  return JSON.stringify(record)
 }
 
 export function collapse(text: string): string {
@@ -629,6 +663,7 @@ export function describeCall(
   input: unknown
 ): {
   summary: string
+  input?: string
   title?: string
   path?: string
   stat?: string
@@ -655,12 +690,59 @@ export function describeCall(
         ? ""
         : summarise(record)
 
+  /*
+   * The whole argument, but only where the row is not already showing it.
+   *
+   * `collapse` folds the whitespace and cuts at 120, so a `summary` equal to the
+   * raw string is a row with nothing behind it — a `Read` of one path, a `Grep`
+   * of one pattern — and giving those an open panel would be a click that
+   * reveals the line already read. What survives the test is what somebody
+   * actually wants opened: the heredoc, the 300-character query, the `Bash` line
+   * with four pipes in it.
+   */
+  const whole = name === "Task" ? "" : argumentOf(record)
+  const more = whole && collapse(whole) !== whole ? detailOf(whole) : undefined
+
   return {
     summary,
+    ...(more ? { input: more } : {}),
     ...(title ? { title: collapse(title) } : {}),
     ...(path ? { path } : {}),
     ...changeOf(name, record),
   }
+}
+
+/**
+ * How much of a command or its output is kept for the row that opens.
+ *
+ * Capped, and not generously, because of where this ends up: a chat is
+ * **rewritten whole** on every appended line, so a single `Bash` that printed a
+ * build log is not paid for once — it is carried through every subsequent write
+ * for the life of the conversation, and read back on every launch. Two limits
+ * rather than one, since the two ways to be enormous are unrelated: a thousand
+ * short lines, and one line that is a base64 blob.
+ *
+ * What is dropped is said out loud rather than trailed off with an ellipsis: a
+ * panel that silently showed the first 200 lines of a 4,000-line result is one
+ * that will be read as the whole of it.
+ */
+const DETAIL_LINES = 200
+const DETAIL_CHARS = 12_000
+
+export function detailOf(text: string): string {
+  const trimmed = text.replace(/\s+$/, "")
+  if (!trimmed) return ""
+
+  const lines = trimmed.split("\n")
+  const cut = lines.length > DETAIL_LINES
+  const kept = cut ? lines.slice(0, DETAIL_LINES).join("\n") : trimmed
+
+  if (kept.length > DETAIL_CHARS) {
+    return `${kept.slice(0, DETAIL_CHARS)}\n… truncated at ${DETAIL_CHARS.toLocaleString()} characters`
+  }
+  return cut
+    ? `${kept}\n… ${(lines.length - DETAIL_LINES).toLocaleString()} more lines`
+    : kept
 }
 
 const CHANGE_LINES = 16
@@ -745,6 +827,23 @@ function splitLines(text: string): string[] {
  * the next call will be phrased in.
  */
 export function resultLine(content: unknown): string {
+  const trimmed = resultText(content)
+  if (!trimmed) return ""
+
+  const lines = trimmed.split("\n")
+  return lines.length === 1
+    ? collapse(lines[0]!)
+    : `${lines.length.toLocaleString()} lines`
+}
+
+/**
+ * The text of a result, before it is reduced to a line.
+ *
+ * The reading half of `resultLine`, split out for the reason `argumentOf` was:
+ * the row wants `631 lines` and the panel under it wants the 631, and two
+ * readers of the SDK's block shape are two places to fix when it moves.
+ */
+export function resultText(content: unknown): string {
   const text =
     typeof content === "string"
       ? content
@@ -756,12 +855,5 @@ export function resultLine(content: unknown): string {
             })
             .join("\n")
         : ""
-
-  const trimmed = text.trim()
-  if (!trimmed) return ""
-
-  const lines = trimmed.split("\n")
-  return lines.length === 1
-    ? collapse(lines[0]!)
-    : `${lines.length.toLocaleString()} lines`
+  return text.trim()
 }

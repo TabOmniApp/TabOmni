@@ -219,7 +219,7 @@ export function TabStrip({
     return (
       <div
         className={cn(
-          "flex shrink-0 bg-muted/40",
+          "flex shrink-0 bg-sidebar",
           vertical
             ? "h-full w-full flex-col items-stretch border-l p-1"
             : "h-9 items-stretch border-b"
@@ -283,7 +283,7 @@ export function TabStrip({
           // taking. A column is the other way round, and keeps the scrollbar the
           // platform draws: it is a list, and a list is expected to have one.
           className={cn(
-            "flex items-stretch bg-muted/40",
+            "flex items-stretch bg-sidebar",
             vertical
               ? "min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto border-l"
               : "h-9 scrollbar-none overflow-x-auto overflow-y-hidden border-b"
@@ -371,7 +371,7 @@ export function TabStrip({
                           // 2px back so the label does not shift on selection.
                           "border-l-2 border-l-primary bg-background pl-2 text-foreground"
                         : "border-t-2 border-t-primary bg-background pb-0.5 text-foreground"
-                      : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+                      : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
                     dragId === item.id && "opacity-60"
                   )}
                 >

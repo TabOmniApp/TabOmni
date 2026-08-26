@@ -18,8 +18,6 @@ import {
   MCP_SETTING_KEYS,
   type ChatPlace,
   type DatabaseConnectionInput,
-  type DshCreateSessionInput,
-  type DshPromptInput,
   type FileIndexEntry,
   type UpdateDatabaseInput,
   type HttpCookie,
@@ -36,7 +34,6 @@ import {
 } from "../shared/api"
 import { descendantFolderIds } from "../shared/tree"
 import { agentModels } from "./agent-models"
-import { DEFAULT_DSH_BASE_URL, DshService } from "./dsh"
 import { WorktreeChats } from "./worktree-chat"
 import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
@@ -137,8 +134,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   processes: ProcessManager
   /** Exposed so a turn in flight can be killed on quit. */
   worktreeChats: WorktreeChats
-  /** Exposed so the gateway's event stream is closed on quit. */
-  dsh: DshService
   sqlConnections: SqlConnections
   docker: DockerRuntime
   terminals: TerminalManager
@@ -349,13 +344,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    * or an import button — because a helper turn is a turn nobody asked for. This
    * is a conversation somebody is having.
    */
-  // The DeepSeek Harness gateway — see `dsh.ts`. The URL is a setting so a
-  // deployment on a non-default port can be pointed at without a rebuild.
-  const dsh = new DshService({
-    baseUrl: async () =>
-      (await store.getSetting("dshBaseUrl")) ?? DEFAULT_DSH_BASE_URL,
-  })
-
   const worktreeChats = new WorktreeChats(
     {
       // The file this app's own three servers are written to, or null when
@@ -373,7 +361,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       readChat: (id) => store.readWorktreeChat(id),
       writeChat: (id, messages) => store.writeWorktreeChat(id, messages),
       deleteChat: (id) => store.deleteWorktreeChat(id),
-      dsh,
     },
     (event) => send(IPC.worktreeChatEvent, event)
   )
@@ -396,6 +383,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     worktreeChats.delete(id)
   )
 
+  ipcMain.handle(IPC.renameWorktreeChat, (_event, id: string, title: string) =>
+    worktreeChats.rename(id, title)
+  )
+
   ipcMain.handle(
     IPC.setWorktreeChatOptions,
     (_event, id: string, options: WorktreeChatOptions) =>
@@ -416,31 +407,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.stopWorktreeChat, (_event, id: string) => {
     worktreeChats.stop(id)
   })
-
-  ipcMain.handle(IPC.dshStatus, () => dsh.status())
-  ipcMain.handle(IPC.dshListSessions, () => dsh.listSessions())
-  ipcMain.handle(IPC.dshCreateSession, (_event, input: DshCreateSessionInput) =>
-    dsh.createSession(input)
-  )
-  ipcMain.handle(IPC.dshSendPrompt, (_event, input: DshPromptInput) =>
-    dsh.sendPrompt(input)
-  )
-  ipcMain.handle(
-    IPC.dshHistory,
-    (_event, sessionId: string, maxMessages?: number) =>
-      dsh.history(sessionId, maxMessages)
-  )
-  ipcMain.handle(IPC.dshCancel, (_event, sessionId: string) =>
-    dsh.cancel(sessionId)
-  )
-  ipcMain.handle(IPC.dshListModels, (_event, sessionId: string) =>
-    dsh.listModels(sessionId)
-  )
-  ipcMain.handle(IPC.dshModelCatalog, () => dsh.modelCatalog())
-  ipcMain.handle(IPC.dshEventsStart, () =>
-    dsh.eventsStart((event) => send(IPC.dshEvent, event))
-  )
-  ipcMain.handle(IPC.dshEventsStop, () => dsh.eventsStop())
 
   /** The account a Docker-managed database is created with. */
   const DB_USER = "tabomni"
@@ -1036,7 +1002,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   return {
     processes,
     worktreeChats,
-    dsh,
     sqlConnections,
     mcp,
     docker,

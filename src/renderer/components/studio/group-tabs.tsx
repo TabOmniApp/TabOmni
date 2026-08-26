@@ -28,8 +28,6 @@ const LABELS: Record<Pane, string> = {
   api: "Requests in this folder",
   note: "Notes in this folder",
   worktree: "Chats in this project",
-  // Never drawn: the DeepSeek tab has no `groupOf` either.
-  deepseek: "DeepSeek",
 }
 
 /** The Database panel's one group that is not a schema: the console's own

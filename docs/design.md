@@ -172,8 +172,48 @@ A workspace that used the feature still has its checkouts on disk under
 for the reason `mail.json` survives its own panel; `git worktree list` in the
 project is what still knows about them, and `git worktree remove` is how they
 go. A chat written in one has a `worktreeId` naming nothing, which `chatRootId`
-reads as null — it keeps its lines and is not listed, because there is nowhere
-left to run its next turn.
+reads as null. It was **not listed** at first, on the ground that there is
+nowhere left to run its next turn — and that was the wrong answer to a true
+observation. The conversation is on disk and readable, and a chat which silently
+stopped existing is worse than one that is listed and explains itself when you
+send to it, which `WorktreeChats.run` already does: a turn whose folder has left
+the workspace finishes with a line saying so. So they are listed, last, under a
+folder called **`Ungrouped`** (`ungroupedChats` in `lib/worktree-chat/store.ts`,
+`UNGROUPED_ID` in `projects-section.tsx`, which is a sentinel among folder ids
+because those are uuids). It is drawn only when it holds something — an empty
+`Ungrouped` would be a row explaining a situation nobody is in — and it is the
+one row here with no `+` and no menu, since a chat needs a directory to run in
+and this row names the absence of one. Clicking a chat under it moves nothing
+else: there is no project to point the dock's shell and the Explorer tree at,
+and pointing them at whichever project was last active would be this app
+guessing.
+
+**How the rows are drawn.** A folder mark, open or shut, where a disclosure
+chevron used to be: what this column lists is projects on disk, and the chevron
+carried only "there is more below", which is the one thing the indent already
+says. The open one takes the primary hue, which is what separates the project
+being worked in from the ones merely listed. The chats under it carry **no mark
+at all** — a column of identical speech bubbles is a column of noise, since the
+only thing they distinguish is a chat from a chat — and what that space is spent
+on instead is the **age** of each conversation, right-aligned and `tabular-nums`
+so a `9h` and a `23h` end on the same pixel. That is the question actually asked
+of this list: not what a row is, but which of four similarly-named chats is the
+one from this afternoon. `since` in `lib/worktree-chat/since.ts` is the label
+(`test/chat-since.ts`), deliberately coarse — one unit, no decimal, `now` under
+a minute rather than a `0m` that reads as missing data. The long form in
+`lib/db/display.ts` stays where it is: a cell in the data browser has the width
+for "9 hours ago" and a row here does not.
+
+Rows in this section are **rounded blocks inset from the column**, which is not
+what `SideRow` is: the shared row is full-bleed with a bar down its left edge,
+right for the Explorer's dense tree and wrong for a column of a dozen items with
+the whole height to themselves. It is overridden at the call site rather than
+made a variant, since one section wanting a different shape is not yet a second
+kind of row. The inset is `px-1` on the scrolling list and **not** a margin on
+each row — a row given `w-auto` to make room for a margin stops being `w-full`,
+so it sizes to its content, so `truncate` on the title has no width to truncate
+against, and what that looks like is a column of clipped titles and a horizontal
+scrollbar under the list.
 
 ### The chat is hosted, not tailed
 
@@ -425,7 +465,7 @@ package.json is `dist-electron` and `dist-renderer`: a `require` of
 node_modules resolves in dev and is missing from a packaged app.
 
 **What a turn may do, and why.** Edits are pre-approved
-(`--permission-mode acceptEdits`) and `Bash` is on the allowed list — that is
+(the `edits` entry in `PERMISSIONS` permits them) and `Bash` with them — that is
 what a chat opens on, and the toolbar's permission picker below is how it is
 narrowed or widened per chat. Nothing here answers a prompt yet,
 so a turn that met one would not pause — it would fail —
@@ -497,8 +537,8 @@ read-only one, asked a particular way — and two controls over one question can
 put into a state neither of them means ("plan, with full access"). So the third
 control is `Plan` / `Read only` / `Ask` / `Edits` / `Full access`, held as `permission`
 on `WorktreeChatOptions`, and `PERMISSIONS` in `main/worktree-chat.ts` is the one
-table saying what each runs as — the tool list, the refusals, the
-`--permission-mode` and what the turn is told, out of one entry, so a turn cannot
+table saying what each runs as — what it permits, what the turn is told and
+whether it may stop to ask, out of one entry, so a turn cannot
 be assembled half in one mode and half in another. It is the only control here
 that never reads **Default**, because there is no such thing: a turn runs at
 whatever this says, and `Edits` is what it says until somebody changes it.
@@ -508,7 +548,37 @@ chat that never interrupts still wants. **Read only** is what `default` used to
 have to become, back when a turn that may not write without a prompt may as well
 have been told so up front; it is still the right mode for a question, and now
 it is a choice rather than a workaround.
-**Full access** is `bypassPermissions` with no allowed list at all, and it exists
+**Nothing a mode decides reaches the CLI's argument list**, and that is worth
+saying before the modes themselves, because it is why they are cheap to switch
+between. `allowedTools`, `disallowedTools` and a per-mode `appendSystemPrompt`
+are all part of the request's **cached prefix** — tool definitions sit ahead of
+the system prompt — so for as long as a mode was expressed in them, changing
+mode mid-chat threw that prefix away and paid to rebuild it. Measured in this
+repository against a 43k prompt: a switch cost **42,345 tokens written and none
+read**, where the turn before it wrote 103 and read the lot — eighteen times the
+price for the same question, and the user had done nothing but move a picker.
+
+So what the CLI is handed is byte-identical on every turn of every mode: one
+fixed `disallowedTools` (the workspace's two `delete_*`), one `permissionMode`
+(`manual`), one system prompt. The mode is applied in this process instead, by
+`permits` on the turn, which `deciding` in `main/claude-agent.ts` consults for
+every call. `permissionMode` was measured too and is free to vary — switching it
+between `acceptEdits`, `manual` and `bypassPermissions` cost ~85 tokens — but it
+no longer needs to, one value covering all five. What a mode is _told_ moved with
+it, from the system prompt to the head of the **message**, which is outside the
+prefix and therefore free. Switching mode now costs 100–170 tokens.
+
+Two things fell out of doing it this way, and both are improvements the cache
+work did not set out to make. A bare tool name on `allowedTools` **auto-approves
+the call before `canUseTool` is consulted** — the SDK warns about it on stderr —
+so for as long as each mode sent a list, the callback was never reached for
+anything that mode had listed, and the `matchedAskRule` handling below had never
+run. And **Full access** stopped being `bypassPermissions`, which auto-approves
+everything before the callback in the same way; the two `delete_*` refusals it
+names are now enforced here rather than left to the CLI, which turns them from a
+request into a guarantee.
+
+**Full access** permits every tool, and it exists
 for the failure the list itself causes: `ALLOWED_TOOLS` is broad but it is still
 a list, and a turn reaching for something not on it — `BashOutput` after a
 background command, a skill, a tool a newer CLI grew — meets a prompt nobody can
@@ -523,12 +593,12 @@ a prompt, and print mode has nobody to answer one. A turn started that way spend
 itself trying to get out — it writes the plan to a file it may not write, calls a
 tool that is disabled, and comes back `is_error` with an apology where the plan
 should be. So plan mode here is the thing somebody wanted from it, built out of
-the half print mode can enforce: `READ_TOOLS` is everything that reads and
-`WRITE_REFUSED` names every writer, the workspace's own included, since saving a
-request is the one kind of change no `git checkout` takes back. `Bash` is on
-neither list — a command can write, and no reading of an argument list decides
+the half this app can enforce: `READ_TOOLS` is everything that reads, and a
+writer is refused by being absent from it — the workspace's own included, since
+saving a request is the one kind of change no `git checkout` takes back. `Bash`
+is not on it — a command can write, and no reading of an argument list decides
 which ones do — and what that costs is `git log` and `rg`, which `Glob` and
-`Grep` are the same reconnaissance without a shell. Those two lists are what
+`Grep` are the same reconnaissance without a shell. That list is what
 **Read only** runs as as well: the two modes differ in what the turn is _told_,
 not in what it may do, since a model asked where a function is called should not
 get a numbered list of changes back. The caption under the composer and the
@@ -540,11 +610,12 @@ reverse.
 it, so reading never interrupts — the difference between a mode somebody can work
 in and one that asks four times before it has finished reading a file — and what
 reaches the screen is the writes, the shell, and anything this app never listed,
-which is the set worth being asked about. Its `--permission-mode` is **`manual`**
-and not `default`: this CLI's mode list no longer has a `default` (it is `manual`
-for "prompt about everything" and `auto` for the classifier), and the SDK passes
-whichever string it is handed straight through, so naming the one that is gone
-would fail the turn on its argument list. Nothing is refused except the
+which is the set worth being asked about. `manual` is the `--permission-mode`
+every mode now runs at, and it was `Ask`'s first: this CLI's mode list no longer
+has a `default` (it is `manual` for "prompt about everything" and `auto` for the
+classifier), and the SDK passes whichever string it is handed straight through,
+so naming the one that is gone would fail the turn on its argument list. Nothing
+is refused except the
 workspace's two `delete_*` — in every other mode a refusal is what a stall would
 otherwise be, and here there is somebody to say no, so refusing up front would be
 taking their answer for them.
@@ -573,9 +644,10 @@ button.
 
 **`AskUserQuestion` comes down the same callback**: the model's own
 multiple-choice question, the thing anyone who has used the interactive CLI will
-recognise. It reaches the app by _not_ being pre-approved, which is the whole
-mechanism, and it is why `REFUSED_ASKING` names it in the other four modes — there
-a question is a turn waiting on nobody. It is answered by **allowing the call**
+recognise. It reaches the app by being on no mode's permit list, which is the whole
+mechanism. In `Ask` that lands in `onAsk` and becomes a card; in the other four
+`deciding` refuses it with a sentence the model reads, since there a question is
+a turn waiting on nobody. It is answered by **allowing the call**
 with the picks merged into its input, the original questions included, which the
 SDK requires and which is why `AskDecision.input` merges rather than replaces.
 Picks are arrays in the contract and in the pane whether or not a question is
@@ -1396,27 +1468,25 @@ list` the way it always was.
 The cost is symmetric with the benefit it used to buy: the read-only modes
 (`Plan`, `Read only`) can no longer refuse an inherited server _by name_, since
 this app no longer copies one in and so has no name for it. They still refuse
-every tool they know about — `WRITE_REFUSED`, the shell, the workspace's own
-writers — and an unlisted tool from a server the CLI picked up on its own is
-refused too, now with an explicit message rather than a silent stall (see
-`orgApproving` below). That is a deliberate trade for parity with the plain
+every tool they know about — the writers, the shell — and an unlisted tool from
+a server the CLI picked up on its own is refused too, now with an explicit
+message rather than a silent stall (see `deciding` below). That is a deliberate trade for parity with the plain
 CLI over the earlier, narrower guarantee.
 
 **One exception cuts across all five modes: `matchedAskRule`.** A connector an
 account has set to require approval — a claude.ai ClickUp, say — forces
 `canUseTool` for its tools no matter what: ahead of `bypassPermissions`, and
 even past an `allowedTools` entry that matched. Before this, a turn under
-`plan`, `read`, `edits` or `full` had no `canUseTool` at all, so such a call
-was simply denied with nobody there to ask — `Full access` bypassing every
-permission check this app knows about was never the same promise as bypassing
-one an account holder set on a connector, and there was no way to keep it.
+`plan`, `read`, `edits` or `full` had no `canUseTool` the SDK would actually
+reach, so such a call was simply denied with nobody there to ask — `Full
+access` bypassing every permission check this app knows about was never the
+same promise as bypassing one an account holder set on a connector, and there
+was no way to keep it.
 
-`orgApproving` in `main/claude-agent.ts` is now wired into every mode that
-does not already have `onAsk` — `ask` needs none of this, since its own
-`onAsk` already puts every unlisted call, `matchedAskRule` included, in front
-of somebody. It allows exactly the calls the SDK marks with `matchedAskRule`
-on the `canUseTool` context, and denies everything else the same way an
-absent `canUseTool` used to. Approving without a person reading the request
+`deciding` in `main/claude-agent.ts` is the one callback every mode now goes
+through, and `matchedAskRule` is the first thing it checks — before what the
+mode permits, so it is allowed even under `plan` and `read`. Approving without
+a person reading the request
 is exactly what the account's own `ask` rule was against — this substitutes
 the app's own judgment for the human prompt the rule asked for, in every mode
 including `plan` and `read`, because a connector's tool carries no read/write

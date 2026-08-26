@@ -22,7 +22,6 @@ import {
   type AskDecision,
   type AskRequest,
 } from "./claude-agent"
-import type { DshQuestion, DshService } from "./dsh"
 
 /**
  * A project's chats: one agent turn at a time, in that project's directory.
@@ -107,8 +106,6 @@ export type WorktreeChatSource = {
   readChat: (id: string) => Promise<AssistantMessage[]>
   writeChat: (id: string, messages: AssistantMessage[]) => Promise<void>
   deleteChat: (id: string) => Promise<void>
-  /** The DeepSeek Harness gateway, for a chat whose toolbar picked it. */
-  dsh: DshService
 }
 
 /**
@@ -173,25 +170,14 @@ const DISALLOWED_TOOLS = [
 /**
  * The tool a turn asks a question with.
  *
- * Not a permission but a delivery mechanism: it reaches this app by *not*
- * being pre-approved, so the request comes through `canUseTool` and the
- * questions arrive with it. Every mode has a `canUseTool` now — see
- * `orgApproving` in `claude-agent.ts` — but that one only ever answers a call
- * an account's own policy forced, and `AskUserQuestion` is never that;
- * `REFUSED_ASKING` names it so the other four refuse it outright rather than
- * having it fall through to a handler that would just deny it anyway.
+ * Not a permission but a delivery mechanism: it reaches this app by being on no
+ * mode's `allowed`, so the request comes through `canUseTool` and the questions
+ * arrive with it. In `ask` that reaches `onAsk` and becomes a card; in the other
+ * four `deciding` refuses it with a sentence, which is what a mode with nobody
+ * to ask needs — an unanswered question is a turn that stalls, and a model told
+ * no writes something instead.
  */
 const ASK_TOOL = "AskUserQuestion"
-
-/**
- * `AskUserQuestion` refused, for every mode that cannot answer it.
- *
- * Named rather than merely left off an allow list, for the reason every refusal
- * here is: an unlisted tool is *askable*, and in a mode with nobody to ask that
- * is a turn that stalls rather than one that gets on with it. A model told no
- * writes something instead of a question.
- */
-const REFUSED_ASKING = [ASK_TOOL]
 
 /**
  * The read-only half: everything that reads, and nothing that writes.
@@ -235,35 +221,6 @@ const READ_TOOLS = [
   "WebFetch",
   "WebSearch",
   "Task",
-]
-
-/**
- * Refused by both read-only modes, named rather than merely left off
- * `READ_TOOLS`.
- *
- * Both halves are needed for the same reason they are on an ordinary turn:
- * `--allowed-tools` says what may be used without asking and leaves everything
- * else askable, and in print mode "askable" is a turn that stalls. Naming the
- * write tools is what turns a stall into a refusal the model can plan around.
- *
- * The workspace's own writers are on it too, not just the checkout's: a plan is
- * a plan whichever panel it would have changed, and saving a request or a note
- * is a change to the workspace rather than to this branch — the one kind of
- * change no `git checkout` takes back.
- */
-const WRITE_REFUSED = [
-  "Write",
-  "Edit",
-  "MultiEdit",
-  "NotebookEdit",
-  "Bash",
-  "mcp__tabomni-api__create_request",
-  "mcp__tabomni-api__update_request",
-  "mcp__tabomni-api__create_folder",
-  "mcp__tabomni-api__update_folder",
-  "mcp__tabomni-api__delete_request",
-  "mcp__tabomni-api__delete_folder",
-  "mcp__tabomni-notes__create_note",
 ]
 
 /**
@@ -312,89 +269,60 @@ const ASK_PROMPT =
 const PERMISSIONS: Record<
   ChatPermission,
   {
-    /** Pre-approved. Undefined means nothing is pre-approved because nothing is
-     * asked — only `full`, which is what its mode already says. */
+    /** What this mode runs without being asked, checked in this process by
+     * `permitting`. Undefined is "everything" — only `full`. */
     allowed?: string[]
-    refused: string[]
-    mode: string
-    /** Appended to `SYSTEM_PROMPT`, when the mode is worth saying out loud. */
+    /** Put at the head of the message rather than into the system prompt. The
+     * system prompt is part of the cached prefix, and a per-mode one cost a
+     * full re-write on every switch: 42,345 tokens written and none read,
+     * against 103 for a turn that changed nothing. */
     prompt?: string
     /** Whether a turn may stop and put an arbitrary question on screen — the
-     * one mode where `onAsk` is handed to `runAgentTurn` rather than left for
-     * `orgApproving` to answer on its own. See `claude-agent.ts`. */
+     * one mode where `onAsk` is handed to `runAgentTurn`. Without one, a call
+     * this mode does not permit is refused rather than asked about. */
     asks?: boolean
   }
 > = {
-  plan: {
-    allowed: READ_TOOLS,
-    refused: [...WRITE_REFUSED, ...REFUSED_ASKING],
-    mode: "acceptEdits",
-    prompt: PLAN_PROMPT,
-  },
-  read: {
-    allowed: READ_TOOLS,
-    refused: [...WRITE_REFUSED, ...REFUSED_ASKING],
-    mode: "acceptEdits",
-    prompt: READ_PROMPT,
-  },
+  plan: { allowed: READ_TOOLS, prompt: PLAN_PROMPT },
+  read: { allowed: READ_TOOLS, prompt: READ_PROMPT },
   /*
    * The one that stops and asks.
    *
-   * `manual` rather than `default`: the CLI's list of modes has no `default` any
-   * more — it is `manual` for "prompt about everything" and `auto` for the
-   * classifier — and the SDK passes whichever string it is given straight
-   * through, so naming the one that is gone would fail the turn on the argument
-   * list.
-   *
-   * `READ_TOOLS` is still pre-approved under it, which is the difference between
-   * a mode somebody can work in and one that asks four times before it has
+   * `READ_TOOLS` is still permitted under it, which is the difference between a
+   * mode somebody can work in and one that asks four times before it has
    * finished reading a file. So what actually reaches the screen is the writes,
    * the shell, and anything this app never listed — which is the set worth being
-   * asked about.
-   *
-   * Nothing is refused except the workspace's two `delete_*`: in every other
-   * mode a refusal is what a stall would otherwise be, and here there is
-   * somebody to say no, so saying it up front would be taking their answer for
-   * them. `AskUserQuestion` is left off both lists on purpose — being unlisted
-   * is how the question gets here. See `ASK_TOOL`.
+   * asked about. `AskUserQuestion` is not on the list on purpose: being
+   * unpermitted is how the question gets here. See `ASK_TOOL`.
    */
-  ask: {
-    allowed: READ_TOOLS,
-    refused: DISALLOWED_TOOLS,
-    mode: "manual",
-    prompt: ASK_PROMPT,
-    asks: true,
-  },
-  edits: {
-    allowed: ALLOWED_TOOLS,
-    refused: [...DISALLOWED_TOOLS, ...REFUSED_ASKING],
-    mode: "acceptEdits",
-  },
+  ask: { allowed: READ_TOOLS, prompt: ASK_PROMPT, asks: true },
+  edits: { allowed: ALLOWED_TOOLS },
   /*
-   * Nothing is asked of a person, including about tools this app never
-   * listed.
+   * Nothing is refused except `DISALLOWED_TOOLS`, and nothing is asked.
    *
-   * `ALLOWED_TOOLS` is broad but it is still a list, and a turn that reaches
-   * for something not on it — `BashOutput` after a background command, a
-   * skill, a tool a newer CLI grew — is refused by `orgApproving` rather than
-   * left to stall, unless it is a call an account's own policy forced
-   * (`matchedAskRule`), which is the one thing this mode still lets through
-   * without a person answering — see `orgApproving` in `claude-agent.ts`.
-   * This mode is the escape hatch for the rest of what is unlisted, and it is
-   * a choice somebody makes per chat rather than the default, because "no
-   * list at all" should not be what a chat opens on.
-   *
-   * The two `delete_*` are still named. Whether `bypassPermissions` honours a
-   * deny list is the CLI's business rather than this app's, so this is the one
-   * mode where that refusal is a request and not a guarantee — which is what
-   * picking `Full access` means and what its tooltip says.
+   * This was `bypassPermissions`, and dropping it is what turned the two
+   * `delete_*` refusals from a request into a guarantee: that mode
+   * auto-approves every call before `canUseTool` is reached, so what this app
+   * had named as refused was the CLI's business rather than this app's. With
+   * every mode on one `permissionMode` the refusal is enforced here, and
+   * `Full access` still means what its tooltip says — a turn reaching for a
+   * tool this app never listed runs rather than stalling.
    */
-  full: {
-    refused: [...DISALLOWED_TOOLS, ...REFUSED_ASKING],
-    mode: "bypassPermissions",
-    // Nothing to say: this is the mode with no allow list, and a refusal here
-    // would be the one thing `Full access` promises not to do.
-  },
+  full: {},
+}
+
+/**
+ * One `permits` for `claude-agent.ts`, out of a mode's list.
+ *
+ * A server prefix (`mcp__tabomni-api`) stands for every tool on that server,
+ * which is what `ALLOWED_TOOLS` has always meant by naming the three servers
+ * rather than their nine tools — that reading was the CLI's before this moved
+ * in-process, and it has to be kept or `edits` loses the workspace's writers.
+ */
+function permitting(allowed: string[] | undefined): (name: string) => boolean {
+  if (!allowed) return () => true
+  return (name) =>
+    allowed.some((entry) => name === entry || name.startsWith(`${entry}__`))
 }
 
 /**
@@ -447,29 +375,6 @@ export class WorktreeChats {
   private readonly messages = new Map<string, AssistantMessage[]>()
 
   /**
-   * Each chat's DeepSeek Harness session id, for the chats whose toolbar picked
-   * the gateway.
-   *
-   * Reused for the life of the run so a conversation continues in the gateway's
-   * own log — the gateway holds the session, and this is the only thing this
-   * app needs to talk to it again. Not written down: a DeepSeek session id is
-   * the gateway's, not a record the app owns, and a restarted app starts a
-   * fresh one.
-   */
-  private readonly dshSessions = new Map<string, string>()
-
-  /**
-   * The model and reasoning effort each chat's DeepSeek session is currently
-   * on, so a change is only sent to the gateway when it actually changed —
-   * and, just as importantly, so the session is told on EVERY later turn, not
-   * only the one that created it.
-   */
-  private readonly dshModelByChat = new Map<
-    string,
-    { model: string; effort: string | null }
-  >()
-
-  /**
    * Questions a turn has stopped on, keyed by ask id.
    *
    * By ask rather than by chat, even though a chat has one at a time: an answer
@@ -488,13 +393,6 @@ export class WorktreeChats {
        * what was decided *about*: an answer on its own is a bare "Allowed". */
       ask: WorktreeChatAsk
       answered: (decision: AskDecision) => void
-      /** Set for a DeepSeek turn: how to send the answer back to the gateway,
-       * which is what the resolver submits before it releases the turn. */
-      gateway?: {
-        rpcId: string
-        sessionId: string
-        questions: DshQuestion[]
-      }
     }
   >()
 
@@ -545,8 +443,6 @@ export class WorktreeChats {
     this.live.delete(id)
     this.messages.delete(id)
     this.started.delete(id)
-    this.dshSessions.delete(id)
-    this.dshModelByChat.delete(id)
 
     await this.source.saveChats(
       (await this.source.chats()).filter((chat) => chat.id !== id)
@@ -673,32 +569,29 @@ export class WorktreeChats {
       text: said(pending.ask, answer),
     })
 
-    // A DeepSeek turn's question is answered by sending the picked options
-    // back to the gateway; only then does the turn resume. The decision the
-    // `answered` resolver wants is not meaningful to the gateway, so it is
-    // released with a no-op allow once the answer is accepted.
-    const gateway = pending.gateway
-    if (gateway !== undefined) {
-      const answers =
-        answer.kind === "answers"
-          ? Object.entries(answer.answers).map(([questionText, selected]) => {
-              const question = gateway.questions.find(
-                (entry) => entry.question === questionText
-              )
-              return { id: question?.id ?? questionText, selected }
-            })
-          : []
-      void this.source.dsh
-        .answerQuestion(gateway.rpcId, gateway.sessionId, answers)
-        .then(() => pending.answered({ allow: true }))
-        .catch((error: unknown) => {
-          console.error("Could not answer the DeepSeek question", error)
-          pending.answered({ allow: true })
-        })
-      return
-    }
-
     pending.answered(decided(answer))
+  }
+
+  /**
+   * What a chat is called.
+   *
+   * A title is otherwise the first thing that was asked in it, which is a
+   * sentence rather than a name — and a chat found again in the column a week
+   * later is found by what it was *about*. `append` only titles a chat still
+   * called `Untitled`, so a renamed one keeps the name through its next turn.
+   *
+   * A read-modify-write of the listing like `setOptions`, for the same reason.
+   */
+  async rename(id: string, title: string): Promise<void> {
+    const name = title.trim()
+    if (!name) return
+
+    const chats = await this.source.chats()
+    if (!chats.some((chat) => chat.id === id)) return
+
+    await this.source.saveChats(
+      chats.map((chat) => (chat.id === id ? { ...chat, title: name } : chat))
+    )
   }
 
   /**
@@ -742,12 +635,6 @@ export class WorktreeChats {
     // would otherwise run with `undefined` for the whole argument list.
     const permission = PERMISSIONS[options.permission] ?? PERMISSIONS.edits
 
-    // A chat whose toolbar picked the gateway is the gateway's turn to run.
-    if (options.provider === "deepseek") {
-      await this.runDeepSeekTurn(id, cwd, prompt, options)
-      return
-    }
-
     // Asked per turn rather than held, because Settings can be changed between
     // two messages in the same chat.
     const mcpConfig = await this.source.mcpConfig()
@@ -755,24 +642,27 @@ export class WorktreeChats {
     const run = await runAgentTurn(
       {
         cwd,
-        prompt,
+        prompt: permission.prompt
+          ? `${permission.prompt}\n\n${prompt}`
+          : prompt,
         sessionId: id,
         resume,
         // Both null unless the toolbar says otherwise, which leaves the user's
         // own `claude` deciding — see `AgentTurn`.
         model: options.model,
         effort: options.effort,
-        // Every one of these three out of one entry, so a turn cannot be
-        // assembled half in one mode and half in another. See `PERMISSIONS`.
-        allowedTools: permission.allowed,
-        disallowedTools: permission.refused,
-        permissionMode: permission.mode,
+        // The mode's own policy, applied in this process. What goes to the
+        // CLI is identical on every turn of every mode, which is what keeps one
+        // cached prefix serving all five — see `permits` in `claude-agent.ts`.
+        permits: permitting(permission.allowed),
+        disallowedTools: DISALLOWED_TOOLS,
+        permissionMode: "manual",
         // No `--strict-mcp-config` — see the class comment above. The CLI
         // merges this with whatever it would already find on its own.
         mcpConfig,
-        appendSystemPrompt: permission.prompt
-          ? `${system} ${permission.prompt}`
-          : system,
+        // The same sentence on every turn. What the mode is goes at the head
+        // of the message instead: this one is part of the cached prefix.
+        appendSystemPrompt: system,
         // Only where the mode says so, and its absence is what stops the other
         // four ever pausing: handing this over is what makes the CLI ask.
         ...(permission.asks
@@ -781,8 +671,8 @@ export class WorktreeChats {
       },
       {
         onMessage: (message) => void this.append(id, message),
-        onToolResult: (toolId, result, failed) =>
-          this.recordResult(id, toolId, result, failed),
+        onToolResult: (toolId, result, output, failed) =>
+          this.recordResult(id, toolId, result, output, failed),
         // A line like any other, so it is written down and read back with the
         // rest of the conversation rather than held for the window that
         // happened to be open when the turn ended.
@@ -803,27 +693,17 @@ export class WorktreeChats {
            *
            * Once, and only for a turn that did not already resume, so a genuine
            * failure is still reported rather than run twice.
+           *
+           * This is the **only** error a turn is retried on, and the test for it
+           * is narrow for that reason. A model the CLI refused used to be
+           * retried too — silently, on the CLI's own default, with the toolbar
+           * rewritten underneath — which meant the error line said the model
+           * does not exist and an answer arrived anyway, from a model nobody
+           * picked, billed at whatever that one costs. A refused model is a
+           * failure the user has to see and decide about, so it stops here.
            */
           if (error !== null && !resume && isSessionTaken(error)) {
             void this.run(id, cwd, prompt, true, options, system)
-            return
-          }
-          // The CLI refused the model the toolbar named — it does not exist or
-          // this account has no access to it. Fall back to the CLI's own default
-          // so a chat carries on rather than failing on every message, and
-          // record it so the toolbar stops offering a model that cannot run.
-          if (
-            error !== null &&
-            options.model !== null &&
-            isModelRejected(error)
-          ) {
-            const fallback: WorktreeChatOptions = {
-              ...options,
-              model: null,
-              effort: null,
-            }
-            void this.run(id, cwd, prompt, false, fallback, system)
-            void this.setOptions(id, fallback)
             return
           }
           this.finish(id, error)
@@ -856,232 +736,6 @@ export class WorktreeChats {
      * same race a much narrower one.
      */
     if (run && this.live.has(id)) this.live.set(id, { run, starting: false })
-  }
-
-  /**
-   * One DeepSeek turn — a chat whose toolbar picked the gateway.
-   *
-   * Unlike a `claude` turn it has no permission modes, tool gates or asks: the
-   * gateway owns the session and its tools run under the gateway's own policy.
-   * What this app draws is the gateway's session-event stream as the same lines
-   * a `claude` turn writes — assistant text, tool calls and their results — so
-   * a chat reads the same whichever provider answered.
-   */
-  private async runDeepSeekTurn(
-    id: string,
-    cwd: string,
-    prompt: string,
-    options: WorktreeChatOptions
-  ): Promise<void> {
-    // The chat's gateway session is created on the first DeepSeek turn and
-    // reused after, so a conversation continues itself in the gateway's log.
-    let sessionId = this.dshSessions.get(id)
-    if (!sessionId) {
-      try {
-        sessionId = await this.source.dsh.createSession({ cwd })
-      } catch (error) {
-        this.finish(id, error instanceof Error ? error.message : String(error))
-        return
-      }
-      this.dshSessions.set(id, sessionId)
-    }
-
-    // A session starts on the gateway's default model and keeps the model it
-    // was given — so a chat that switches models between two messages has to
-    // say so again, or the next turn answers on the model the first one did.
-    // Applied only when the chosen model or effort differs from what this
-    // chat's session already runs, which is what keeps a same-model turn from
-    // paying for an extra round trip.
-    const applied = this.dshModelByChat.get(id)
-    const wantedEffort = options.effort ?? null
-    if (
-      options.model !== null &&
-      (applied === undefined ||
-        applied.model !== options.model ||
-        applied.effort !== wantedEffort)
-    ) {
-      try {
-        await this.source.dsh.applyModel(
-          sessionId,
-          options.model,
-          wantedEffort ?? undefined
-        )
-        this.dshModelByChat.set(id, {
-          model: options.model,
-          effort: wantedEffort,
-        })
-      } catch (error) {
-        // Non-fatal: the gateway keeps the current model, and the turn still runs.
-        console.error("Could not set the DeepSeek model", error)
-      }
-    }
-
-    // TODO(dsh): the permission preset picker still shows in the composer,
-    // but nothing applies it to the gateway session — `sessions.setPermission`
-    // isn't on the published @deepseek-ai/dsh-host-apiproxy yet (only on an
-    // in-progress harness checkout), so `dsh.ts`'s setPermissionPreset was
-    // removed rather than shipped calling an RPC that doesn't exist on the
-    // registry build. Restore both once that method ships and the dependency
-    // is bumped past 0.1.1-rc.2.
-
-    // The turn owns this socket: it is opened here and closed with the turn,
-    // so a stop (or the app quitting) ends it.
-    const controller = new AbortController()
-    this.live.set(id, {
-      run: { kill: () => controller.abort() },
-      starting: false,
-    })
-
-    let assistantText = ""
-    // The model the turn ran on, and the token figures per step. The gateway
-    // reports them per step, so they are keyed by step and summed at the end
-    // into one usage line, the way a `claude` turn writes one.
-    let lastModel: string | null = null
-    const stepUsage = new Map<
-      number,
-      { input: number; output: number; cacheRead: number; thinking: number }
-    >()
-    const completed = (async () => {
-      try {
-        for await (const entry of this.source.dsh.openSessionTurn(
-          sessionId,
-          controller.signal
-        )) {
-          // The gateway paused the turn on a question. Show it and wait — the
-          // turn does not end here; it resumes once the answer lands.
-          if ("kind" in entry) {
-            await this.askDeepSeek(
-              id,
-              entry.rpcId,
-              entry.sessionId,
-              entry.questions
-            )
-            continue
-          }
-          if (entry.type === "assistant/chunk") {
-            const text = chunkTextOf(entry.data)
-            if (text !== null) {
-              assistantText += text
-            } else {
-              const usage = usageOf(entry.data)
-              if (usage !== null) stepUsage.set(usage.step, usage.counts)
-            }
-          } else if (entry.type === "assistant/message") {
-            // The complete message replaces the chunks that streamed to it.
-            assistantText = messageTextOf(entry.data)
-            lastModel = messageModelOf(entry.data) ?? lastModel
-            const usage = usageOf(entry.data)
-            if (usage !== null) stepUsage.set(usage.step, usage.counts)
-          } else if (entry.type === "tool/call") {
-            const call = toolCallOf(entry.data)
-            if (call !== null) {
-              void this.append(id, {
-                id: lineId(),
-                role: "tool",
-                name: call.name,
-                summary: summaryOf(call.arguments),
-                toolId: call.toolId,
-              })
-            }
-          } else if (entry.type === "tool/result") {
-            const result = toolResultOf(entry.data)
-            if (result !== null) {
-              this.recordResult(id, result.toolId, result.text, result.failed)
-            }
-          } else if (entry.type === "turn/end") {
-            break
-          }
-        }
-      } catch (error) {
-        this.finish(id, error instanceof Error ? error.message : String(error))
-        return
-      }
-      // A turn that ended without a final assistant message still shows what it
-      // streamed.
-      if (assistantText !== "") {
-        await this.append(id, {
-          id: lineId(),
-          role: "assistant",
-          text: assistantText,
-        })
-      }
-      // One usage line per turn, summed across its steps, like a `claude`
-      // turn's. `costUsd` is unknown for the gateway — it does not report a
-      // price — so it stays null and the line shows the tokens, not a cost.
-      const totals = totalUsage(stepUsage)
-      if (totals !== null) {
-        await this.append(id, {
-          id: lineId(),
-          role: "usage",
-          usage: {
-            model: lastModel,
-            input: totals.input,
-            cacheWrite: 0,
-            cacheRead: totals.cacheRead,
-            output: totals.output,
-            thinking: totals.thinking,
-            costUsd: null,
-          },
-        })
-      }
-      this.finish(id, null)
-    })()
-
-    // The stream is already iterating, so a prompt sent now has a live socket
-    // for its events — the ordering that a silent turn used to get wrong.
-    try {
-      await this.source.dsh.sendPrompt({ sessionId, text: prompt })
-    } catch (error) {
-      controller.abort()
-      this.finish(id, error instanceof Error ? error.message : String(error))
-      return
-    }
-    await completed
-  }
-
-  /**
-   * A DeepSeek turn stopped on a question.
-   *
-   * Builds the same questions ask a `claude` turn raises, so the same card
-   * draws, and holds the turn until `answer` submits the answer to the
-   * gateway — the `gateway` the pending entry carries is how `answer` knows
-   * where to send it.
-   */
-  private async askDeepSeek(
-    chatId: string,
-    rpcId: string,
-    sessionId: string,
-    questions: DshQuestion[]
-  ): Promise<void> {
-    // A question with nothing answerable is no question: the card would have
-    // nothing to click and the turn would wait for ever.
-    const askQuestions = asked({
-      questions: questions as unknown as Record<string, unknown>[],
-    })
-    if (askQuestions === null) return
-
-    const id = randomUUID()
-    const ask: WorktreeChatAsk = {
-      id,
-      chatId,
-      kind: "questions",
-      questions: askQuestions,
-    }
-    return new Promise<void>((resolve) => {
-      const settle = (decision: AskDecision): void => {
-        // The turn resumes on the gateway's own timing once the answer lands;
-        // the decision this resolver is handed is not meaningful to it.
-        void decision
-        if (!this.asks.delete(id)) return
-        resolve()
-      }
-      this.asks.set(id, {
-        ask,
-        answered: settle,
-        gateway: { rpcId, sessionId, questions },
-      })
-      this.emit({ chatId, type: "ask", ask })
-    })
   }
 
   stop(id: string): void {
@@ -1186,6 +840,7 @@ export class WorktreeChats {
     id: string,
     toolId: string,
     result: string,
+    output: string | undefined,
     failed: boolean
   ): void {
     const messages = this.messages.get(id)
@@ -1195,12 +850,19 @@ export class WorktreeChats {
     const next = messages.map((line) => {
       if (found || line.role !== "tool" || line.toolId !== toolId) return line
       found = true
-      return { ...line, result, failed }
+      return { ...line, result, failed, ...(output ? { output } : {}) }
     })
     if (!found) return
     this.messages.set(id, next)
 
-    this.emit({ chatId: id, type: "tool-result", toolId, result, failed })
+    this.emit({
+      chatId: id,
+      type: "tool-result",
+      toolId,
+      result,
+      ...(output ? { output } : {}),
+      failed,
+    })
 
     // Written without awaiting, like the line itself: losing the record of what
     // a tool returned is not worth abandoning a turn over.
@@ -1224,6 +886,7 @@ export class WorktreeChats {
               toolId: message.toolId,
               title: message.title,
               path: message.path,
+              input: message.input,
               stat: message.stat,
               change: message.change,
             }
@@ -1439,191 +1102,10 @@ function isSessionTaken(error: string): boolean {
   return /session id .* is already in use/i.test(error)
 }
 
-/**
- * Whether the CLI refused the model a turn asked for.
- *
- * The CLI writes its own sentence and exits; matched on the two phrases it
- * uses rather than on the model name, because the name is what varies. Only
- * matched for a turn that actually named a model, so a bare CLI failure is
- * still reported.
- */
-function isModelRejected(error: string): boolean {
-  return /there's an issue with the selected model|you may not have access to it/i.test(
-    error
-  )
-}
-
 /** A chat's name: the first thing asked, on one line and short enough for a tab
  * in a strip. */
 function titleOf(text: string): string {
   const line = collapse(text)
   if (!line) return "Untitled"
   return line.length > 40 ? `${line.slice(0, 39)}…` : line
-}
-
-/*
- * The DeepSeek turn's session events, narrowed to the fields a line draws.
- * The gateway's own event `data` shapes are used here rather than imported:
- * they are the harness's, and this app only needs the four of these it can
- * draw.
- */
-
-/** The text carried by one `assistant/chunk`, or null for a non-text chunk.
- * The gateway streams text as `text-delta` chunks and closes a block with a
- * `block-end`; the usage and finish chunks carry no text. */
-function chunkTextOf(data: unknown): string | null {
-  const chunk = (data as { chunk?: { type?: unknown; text?: unknown } }).chunk
-  if (chunk?.type !== "text-delta") return null
-  return typeof chunk.text === "string" ? chunk.text : null
-}
-
-/** The full text of a final `assistant/message`, joined across its text blocks. */
-function messageTextOf(data: unknown): string {
-  const message = (data as { message?: { content?: unknown } }).message
-  if (!Array.isArray(message?.content)) return ""
-  return message.content
-    .filter(
-      (block) =>
-        typeof block === "object" &&
-        block !== null &&
-        (block as { type?: unknown }).type === "text"
-    )
-    .map((block) => (block as { text?: unknown }).text ?? "")
-    .join("")
-}
-
-/** The model a turn's final message names, or null when it was not `model`. */
-function messageModelOf(data: unknown): string | null {
-  const source = (data as { message?: { source?: { model?: unknown } } })
-    .message?.source
-  return typeof source?.model === "string" ? source.model : null
-}
-
-/** One `tool/call`, or null when the event does not carry the fields. */
-function toolCallOf(data: unknown): {
-  toolId: string
-  name: string
-  arguments: string
-} | null {
-  const call = data as {
-    callId?: unknown
-    name?: unknown
-    arguments?: unknown
-  }
-  if (typeof call.callId !== "string" || typeof call.name !== "string")
-    return null
-  return {
-    toolId: call.callId,
-    name: call.name,
-    arguments: typeof call.arguments === "string" ? call.arguments : "",
-  }
-}
-
-/** One `tool/result`, narrowed to the tool row's fill-in fields. The gateway
- * nests the returned text one more level than a call's: `content` is a list of
- * text blocks, joined here. */
-function toolResultOf(data: unknown): {
-  toolId: string
-  text: string
-  failed: boolean
-} | null {
-  const message = (
-    data as {
-      message?: { content?: unknown; source?: { callId?: unknown } }
-    }
-  ).message
-  const callId = message?.source?.callId
-  if (typeof callId !== "string") return null
-  const block = Array.isArray(message?.content)
-    ? (message.content[0] as
-        { content?: unknown; isError?: unknown } | undefined)
-    : undefined
-  const inner = Array.isArray(block?.content) ? block!.content : []
-  const text = inner
-    .filter(
-      (part): part is { text: string } =>
-        typeof part === "object" &&
-        part !== null &&
-        (part as { type?: unknown }).type === "text" &&
-        typeof (part as { text?: unknown }).text === "string"
-    )
-    .map((part) => part.text)
-    .join("")
-  return { toolId: callId, text, failed: block?.isError === true }
-}
-
-/** The step's token figures, read off a `usage` chunk or a final message's
- * `usage`, or null when the event carries none. */
-function usageOf(data: unknown): {
-  step: number
-  counts: { input: number; output: number; cacheRead: number; thinking: number }
-} | null {
-  const record = data as {
-    step?: unknown
-    usage?: {
-      inputTokens?: unknown
-      outputTokens?: unknown
-      cacheReadTokens?: unknown
-      reasoningTokens?: unknown
-    }
-    chunk?: {
-      type?: unknown
-      usage?: {
-        inputTokens?: unknown
-        outputTokens?: unknown
-        cacheReadTokens?: unknown
-        reasoningTokens?: unknown
-      }
-    }
-  }
-  const usage = record.usage ?? record.chunk?.usage
-  if (typeof record.step !== "number" || usage === undefined) return null
-  return {
-    step: record.step,
-    counts: {
-      input: typeof usage.inputTokens === "number" ? usage.inputTokens : 0,
-      output: typeof usage.outputTokens === "number" ? usage.outputTokens : 0,
-      cacheRead:
-        typeof usage.cacheReadTokens === "number" ? usage.cacheReadTokens : 0,
-      thinking:
-        typeof usage.reasoningTokens === "number" ? usage.reasoningTokens : 0,
-    },
-  }
-}
-
-/** The per-step usages summed into one turn total, or null for none. */
-function totalUsage(
-  steps: Map<
-    number,
-    { input: number; output: number; cacheRead: number; thinking: number }
-  >
-): {
-  input: number
-  output: number
-  cacheRead: number
-  thinking: number
-} | null {
-  if (steps.size === 0) return null
-  let input = 0
-  let output = 0
-  let cacheRead = 0
-  let thinking = 0
-  for (const step of steps.values()) {
-    input += step.input
-    output += step.output
-    cacheRead += step.cacheRead
-    thinking += step.thinking
-  }
-  return { input, output, cacheRead, thinking }
-}
-
-/** One line of what a tool call was about: its parsed arguments, or the raw
- * string when they were not JSON. */
-function summaryOf(argumentsJson: string): string {
-  if (argumentsJson === "") return ""
-  try {
-    return summarise(JSON.parse(argumentsJson) as unknown)
-  } catch {
-    return collapse(argumentsJson)
-  }
 }

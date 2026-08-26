@@ -359,6 +359,26 @@ export type AssistantMessage =
        * it was one line. Absent while the call is still running. */
       result?: string
       /**
+       * The whole argument the call was made with, for the row that opens.
+       *
+       * Present **only where `summary` is not already all of it** — a `Read` of
+       * one path has nothing more to show, and storing a second copy of a short
+       * string on every line would grow the chat's file for nothing. So this is
+       * the multi-line command and the 300-character query, and its absence is
+       * how a row knows it has no argument worth opening.
+       */
+      input?: string
+      /**
+       * The whole of what came back, capped, for the same row.
+       *
+       * Present only where `result` is a *count* rather than the output itself,
+       * which is the same rule `input` follows. It is capped in main
+       * (`detailOf`) because a chat is rewritten to disk on every appended line
+       * and one `Bash` that printed a build log would otherwise be carried
+       * through every write for the life of the conversation.
+       */
+      output?: string
+      /**
        * How much an edit moved — `+3 −1` — read off the call's own input rather
        * than its result.
        *
@@ -463,6 +483,11 @@ export type AssistantEvent =
       toolId?: string
       title?: string
       path?: string
+      /** The whole argument, where the row is not already showing it — see the
+       * same field on the line it becomes. Carried on the event and not only
+       * written to the record, or a row would not open until the chat was read
+       * back off disk. */
+      input?: string
       /** `+3 −1` for an edit — see the same field on the line it becomes. */
       stat?: string
       change?: string
@@ -475,7 +500,15 @@ export type AssistantEvent =
    * on is ignored, which is what happens to the result of a call whose line was
    * written by a build that had no ids.
    */
-  | { type: "tool-result"; toolId: string; result: string; failed: boolean }
+  | {
+      type: "tool-result"
+      toolId: string
+      result: string
+      /** The whole of it, where `result` is only a count — see `output` on the
+       * tool line. */
+      output?: string
+      failed: boolean
+    }
   /**
    * The turn has stopped and is waiting to be answered.
    *
@@ -874,73 +907,50 @@ export type AgentModel = {
 }
 
 /**
- * What the picker offers when the CLI could not be asked or as initial preset.
+ * What the picker draws when the CLI could not be asked, and until it answers.
+ *
+ * **Aliases the CLI resolves, and nothing else.** This list grew a set of
+ * invented rows once — `Sonnet 5 1M`, `Opus 4.8 1M` and four more, with
+ * hand-written labels, descriptions and effort levels — and every one of them
+ * was a turn that failed on its argument list, because `--model sonnet-5-1m`
+ * names no model on any account. What an install offers is a property of that
+ * account and that CLI version, so the only thing safe to write down here is
+ * the handful of aliases the CLI has always resolved for itself; anything
+ * richer is `agentModels` asking. See `AgentModel`.
+ *
+ * `efforts` is null on every row for the same reason: nobody asked, so nobody
+ * knows, and `chatEfforts` reads that as "offer them all" rather than as a
+ * claim about the model.
  */
 export const CHAT_MODEL_FALLBACK: AgentModel[] = [
   {
-    value: "fable",
-    label: "Fable 5",
-    description: "Creative writing and expressive generation",
-    efforts: ["low", "medium", "high", "xhigh", "max"],
+    value: "default",
+    label: "Default (recommended)",
+    description: "Whatever your claude is configured to use",
+    efforts: null,
+    isFavorite: true,
     order: 1,
   },
   {
     value: "opus",
-    label: "Opus 5",
+    label: "Opus",
     description: "Frontier intelligence and deep reasoning",
-    efforts: ["low", "medium", "high", "xhigh", "max"],
-    isNew: true,
+    efforts: null,
     order: 2,
   },
   {
-    value: "opus-4.8-1m",
-    label: "Opus 4.8 1M",
-    description: "Extended 1M context window with high reasoning",
-    efforts: ["low", "medium", "high", "xhigh", "max"],
-    isFavorite: true,
+    value: "sonnet",
+    label: "Sonnet",
+    description: "Balanced speed and intelligence for daily tasks",
+    efforts: null,
     order: 3,
   },
   {
-    value: "opus-4.7-1m",
-    label: "Opus 4.7 1M",
-    description: "Large 1M context with strong capabilities",
-    efforts: ["low", "medium", "high", "xhigh", "max"],
-    order: 4,
-  },
-  {
-    value: "opus-4.6-1m",
-    label: "Opus 4.6 1M",
-    description: "1M context window for large codebases",
-    efforts: ["low", "medium", "high", "max"],
-    order: 5,
-  },
-  {
-    value: "sonnet-5-1m",
-    label: "Sonnet 5 1M",
-    description: "High speed, deep reasoning with 1M context",
-    efforts: ["low", "medium", "high", "max"],
-    order: 6,
-  },
-  {
-    value: "sonnet-4.6-1m",
-    label: "Sonnet 4.6 1M",
-    description: "Fast code intelligence with 1M context",
-    efforts: ["low", "medium", "high"],
-    order: 7,
-  },
-  {
-    value: "sonnet",
-    label: "Sonnet 4.6",
-    description: "Balanced speed and intelligence for daily tasks",
-    efforts: ["low", "medium", "high"],
-    order: 8,
-  },
-  {
     value: "haiku",
-    label: "Haiku 4.5",
+    label: "Haiku",
     description: "Fastest response time for lightweight tasks",
-    efforts: [],
-    order: 9,
+    efforts: null,
+    order: 4,
   },
 ]
 
@@ -1006,17 +1016,6 @@ export type WorktreeChatOptions = {
   model: string | null
   /** `--effort`, or null for the CLI's own default. */
   effort: ChatEffort | null
-  /** Which backend answers this chat's turns: the user's own `claude`, or a
-   * DeepSeek Harness gateway (`dsh web`). Absent on a record written before
-   * this was a field, which `chatOptions` reads as `claude` — the backend a
-   * chat written then was running on. */
-  provider?: "claude" | "deepseek"
-  /**
-   * The gateway's permission preset for a DeepSeek chat — its sandbox mode
-   * and approval policy — switched through `session.setPermission`. Absent on
-   * a record written before this was a field, read as `workspace-write`.
-   */
-  permissionPreset?: DshPermissionPreset
   /**
    * How much this chat's turns may do without being asked.
    *
@@ -1036,30 +1035,6 @@ export type WorktreeChatOptions = {
   plan?: boolean
 }
 
-/** The gateway's switchable permission presets, in preset-table order. Each is
- * a sandbox mode plus an approval policy, switched through
- * `session.setPermission`. */
-export const DSH_PERMISSION_PRESETS = [
-  {
-    value: "read-only",
-    label: "Read only",
-    description: "Reads freely; writes and commands are refused",
-  },
-  {
-    value: "workspace-write",
-    label: "Workspace Write",
-    description: "Writes inside the workspace; wider access is asked",
-  },
-  {
-    value: "danger-full-access",
-    label: "Full access",
-    description: "Full file access, no approval prompts",
-  },
-] as const
-
-export type DshPermissionPreset =
-  (typeof DSH_PERMISSION_PRESETS)[number]["value"]
-
 /**
  * What a new chat opens on.
  *
@@ -1078,8 +1053,6 @@ export type DshPermissionPreset =
 export const DEFAULT_CHAT_OPTIONS: WorktreeChatOptions = {
   model: "default",
   effort: null,
-  provider: "claude",
-  permissionPreset: "workspace-write",
   permission: "edits",
 }
 
@@ -1099,8 +1072,6 @@ export function chatOptions(
   return {
     model: options.model ?? null,
     effort: options.effort ?? null,
-    provider: options.provider === "deepseek" ? "deepseek" : "claude",
-    permissionPreset: normalizePreset(options.permissionPreset),
     permission: readPermission(options),
   }
 }
@@ -1121,14 +1092,6 @@ function readPermission(options: WorktreeChatOptions): ChatPermission {
   // The toggle this replaced, on a record older than the picker.
   if (options.plan) return "plan"
   return DEFAULT_CHAT_OPTIONS.permission
-}
-
-/** A preset the deployment actually carries, or the default when the record
- * names one that is no longer offered. */
-function normalizePreset(preset: unknown): DshPermissionPreset {
-  return DSH_PERMISSION_PRESETS.some((entry) => entry.value === preset)
-    ? (preset as DshPermissionPreset)
-    : "workspace-write"
 }
 
 /**
@@ -1200,102 +1163,6 @@ export type WorktreeChat = {
 /** One of those events, tagged with the chat it belongs to: several chats can
  * be answering at once, so a listener has to know which one this is. */
 export type WorktreeChatEvent = AssistantEvent & { chatId: string }
-
-/**
- * The DeepSeek Harness gateway (`dsh web`) this studio can talk to.
- *
- * The host runs a JSON-RPC-style HTTP API under `/api` (the same one its own
- * browser client uses), and everything here is a projection of that wire onto
- * the parts a chat needs. No DeepSeek types cross this contract: the harness
- * packages belong to the main process, and the renderer only ever sees these
- * plain shapes.
- */
-
-/** Whether a running `dsh web` answered, and what it said about itself. */
-export type DshStatus = {
-  reachable: boolean
-  /** The base URL that was probed, so the renderer can show where it looked. */
-  baseUrl: string
-  /** `host.describe` when the gateway answered. */
-  describe?: {
-    version: string
-    cwd: string
-    attachedSessions: number
-  }
-  /** Why the probe failed, when it did. */
-  error?: string
-}
-
-/** One session in the gateway's list. */
-export type DshSessionSummary = {
-  sessionId: string
-  updatedAt: number
-  running: boolean
-  blank: boolean
-  parentSessionId?: string
-  cwd?: string
-  agentPreset?: string
-}
-
-/** One session event, as JSON — `data` keeps the harness's own shape because
- * the renderer should not have to know what the host calls message content. */
-export type DshHistoryEntry = {
-  seq: number
-  type: string
-  time: number
-  data: unknown
-}
-
-/** What a `dsh:event` push carries: one session event from the live mux
- * stream, or the stream's own lifecycle. */
-export type DshEvent =
-  | {
-      kind: "event"
-      sessionId: string
-      event: DshHistoryEntry
-    }
-  | { kind: "error"; message: string }
-  | { kind: "end" }
-
-/** Create-session input: the project directory to run in and the agent preset
- * to compose, both optional. */
-export type DshCreateSessionInput = {
-  cwd?: string
-  agentPreset?: string
-}
-
-/** Send-prompt input. `steer` redirects a turn already running instead of
- * queueing a new one. */
-export type DshPromptInput = {
-  sessionId: string
-  text: string
-  mode?: "queue" | "steer"
-}
-
-/** The model picker's catalog for one session, trimmed to what a picker
- * shows. */
-export type DshModelsCatalog = {
-  current: { provider: string; model: string; reasoningEffort?: string }
-  groups: {
-    id: string
-    name: string
-    models: { id: string; name: string }[]
-  }[]
-}
-
-/** The DeepSeek Harness gateway's model catalog, as a chat's model picker
- * shows it — provider groups with the models each serves. */
-export type DshModelGroup = {
-  id: string
-  name: string
-  models: {
-    id: string
-    name: string
-    /** The reasoning levels the model accepts, weakest first, when it has
-     * any — the gateway's own ids and words. */
-    efforts?: { id: string; name: string }[]
-  }[]
-}
 
 /**
  * A group of notes, nested arbitrarily deep.
@@ -1751,6 +1618,10 @@ export type DesktopApi = {
   createWorktreeChat: (place: ChatPlace) => Promise<WorktreeChat>
   readWorktreeChat: (id: string) => Promise<AssistantMessage[]>
   deleteWorktreeChat: (id: string) => Promise<void>
+  /** What a chat is called. Its title is the first thing asked in it until
+   * somebody names it, and a name is what it is found by later. An empty one is
+   * ignored rather than blanking the row. */
+  renameWorktreeChat: (id: string, title: string) => Promise<void>
   /**
    * The model, effort and permission for one chat.
    *
@@ -1784,36 +1655,6 @@ export type DesktopApi = {
   onWorktreeChatEvent: (
     listener: (event: WorktreeChatEvent) => void
   ) => () => void
-
-  /** The DeepSeek Harness gateway (`dsh web`) — see `main/dsh.ts`. */
-  dshStatus: () => Promise<DshStatus>
-  /** Every session the gateway is holding. */
-  dshListSessions: () => Promise<DshSessionSummary[]>
-  /** A new session; resolves to its id. */
-  dshCreateSession: (input: DshCreateSessionInput) => Promise<string>
-  /** Sends one prompt. Resolves when the gateway accepted it — the completion
-   * itself arrives as `dsh:event` pushes. */
-  dshSendPrompt: (input: DshPromptInput) => Promise<void>
-  /** The session's events, oldest first — a poll for what the stream already
-   * pushed, used to seed a tab or to catch up after one was closed. */
-  dshHistory: (
-    sessionId: string,
-    maxMessages?: number
-  ) => Promise<DshHistoryEntry[]>
-  /** Stops the session's active turn. */
-  dshCancel: (sessionId: string) => Promise<void>
-  /** The model picker's catalog for one session. */
-  dshListModels: (sessionId: string) => Promise<DshModelsCatalog>
-  /** The gateway's whole model catalog, for the chat picker's DeepSeek group —
-   * host-scoped, so no session is needed to read it. */
-  dshModelCatalog: () => Promise<DshModelGroup[]>
-  /** Opens the one live event stream every session shares; pushes begin once
-   * it is up. Idempotent: a second call restarts it. */
-  dshEventsStart: () => Promise<void>
-  /** Closes the stream opened by `dshEventsStart`. */
-  dshEventsStop: () => Promise<void>
-  /** The gateway's live events. Returns an unsubscribe. */
-  onDshEvent: (listener: (event: DshEvent) => void) => () => void
 
   /** Every note in the workspace, and the folders they are filed under —
    * their listings only; a body is read one at a time. */
@@ -2027,22 +1868,12 @@ export const IPC = {
   createWorktreeChat: "worktree-chats:create",
   readWorktreeChat: "worktree-chats:read",
   deleteWorktreeChat: "worktree-chats:delete",
+  renameWorktreeChat: "worktree-chats:rename",
   setWorktreeChatOptions: "worktree-chats:options",
   answerWorktreeChatAsk: "worktree-chats:answer",
   sendWorktreeChat: "worktree-chats:send",
   stopWorktreeChat: "worktree-chats:stop",
   worktreeChatEvent: "worktree-chats:event",
-  dshStatus: "dsh:status",
-  dshListSessions: "dsh:list-sessions",
-  dshCreateSession: "dsh:create-session",
-  dshSendPrompt: "dsh:send-prompt",
-  dshHistory: "dsh:history",
-  dshCancel: "dsh:cancel",
-  dshListModels: "dsh:list-models",
-  dshModelCatalog: "dsh:model-catalog",
-  dshEventsStart: "dsh:events-start",
-  dshEventsStop: "dsh:events-stop",
-  dshEvent: "dsh:event",
   listNotes: "notes:list",
   saveNotes: "notes:save",
   listNoteFolders: "notes:list-folders",

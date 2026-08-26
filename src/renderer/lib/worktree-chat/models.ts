@@ -26,27 +26,36 @@ let asked: Promise<AgentModel[]> | null = null
 let held: AgentModel[] | null = null
 
 /**
- * Merge discovered models from the CLI with the preset full model list.
+ * What the CLI answered, with the preset's own trimmings where a row matches.
  *
- * Keeps all preset models intact while updating their supported effort levels
- * based on what the local CLI actually answers.
+ * **The CLI's list is the list**, and the preset is only what stands in when
+ * there is no answer at all. It was the other way round — every preset row kept,
+ * the answer used only to correct their effort levels — and what that did was
+ * put models on the picker that the account does not have: `Sonnet 5 1M` and
+ * five other invented aliases were offered on every machine, and picking one
+ * failed the turn on its argument list, because `--model sonnet-5-1m` names
+ * nothing. Which models exist is a property of the account and the CLI version
+ * behind it (see `AgentModel`), so it is not something this file can hold a copy
+ * of.
+ *
+ * A preset row is still read for the two things the CLI does not send — the
+ * picker's `order` and its badges — and only where the `value` matches, so it
+ * decorates rather than adds.
  */
 export function mergeModels(
   preset: AgentModel[],
   discovered: AgentModel[]
 ): AgentModel[] {
-  if (!discovered || discovered.length === 0) return preset
-  const map = new Map<string, AgentModel>()
-  for (const model of preset) {
-    map.set(model.value, { ...model })
-  }
-  for (const model of discovered) {
-    const existing = map.get(model.value)
-    if (existing) {
-      if (model.efforts !== null) existing.efforts = model.efforts
+  if (discovered.length === 0) return preset
+  const presets = new Map(preset.map((model) => [model.value, model]))
+  return discovered.map((model) => {
+    const known = presets.get(model.value)
+    if (!known) return model
+    return {
+      ...model,
+      ...(known.order !== undefined ? { order: known.order } : {}),
     }
-  }
-  return Array.from(map.values())
+  })
 }
 
 export function useAgentModels(): AgentModel[] {
@@ -97,58 +106,4 @@ export function orderedModels(models: AgentModel[]): AgentModel[] {
     if (right.order !== undefined) return 1
     return left.label.localeCompare(right.label)
   })
-}
-
-/** One row of the DeepSeek group in a chat's model picker. */
-export type DeepseekModelOption = {
-  value: string
-  label: string
-  /** The reasoning levels the model accepts, when it has any — the gateway's
-   * own ids and words, which a picker's effort submenu shows. */
-  efforts?: { id: string; name: string }[]
-}
-
-let deepseekAsked: Promise<DeepseekModelOption[]> | null = null
-let deepseekHeld: DeepseekModelOption[] | null = null
-
-/**
- * The models the gateway serves, for the model picker's DeepSeek group.
- *
- * Cached for the run like `useAgentModels` — the catalog does not change while
- * the app is running, and a picker opening is not a reason to ask again. Empty
- * when the gateway could not be reached, which is when the group is not worth
- * showing.
- */
-export function useDeepseekModels(): DeepseekModelOption[] {
-  const [models, setModels] = useState<DeepseekModelOption[]>(
-    deepseekHeld ?? []
-  )
-
-  useEffect(() => {
-    if (deepseekHeld) return
-    let mounted = true
-    deepseekAsked ??= window.desktop.dshModelCatalog().then((groups) =>
-      groups.flatMap((group) =>
-        group.models.map((model) => ({
-          value: model.id,
-          label: model.name,
-          ...(model.efforts === undefined ? {} : { efforts: model.efforts }),
-        }))
-      )
-    )
-    void deepseekAsked
-      .then((answer) => {
-        deepseekHeld = answer
-        if (mounted) setModels(answer)
-      })
-      .catch((error: unknown) => {
-        deepseekAsked = null
-        console.error("Could not read the DeepSeek model list", error)
-      })
-    return () => {
-      mounted = false
-    }
-  }, [])
-
-  return models
 }

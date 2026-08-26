@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react"
 
 import {
   chatOptions,
-  DSH_PERMISSION_PRESETS,
   type ChatPermission,
   type ChatPlace,
   type WorktreeChatOptions,
@@ -262,13 +261,7 @@ function Conversation({
             >
               {ask
                 ? "The turn is waiting on your answer. Stop ends it instead."
-                : options.provider === "deepseek"
-                  ? `DeepSeek · ${
-                      DSH_PERMISSION_PRESETS.find(
-                        (entry) => entry.value === options.permissionPreset
-                      )?.label ?? "Workspace Write"
-                    }`
-                  : captionFor(options.permission)}
+                : captionFor(options.permission)}
             </p>
 
             {/* Beside the caption rather than at the end of the transcript: the

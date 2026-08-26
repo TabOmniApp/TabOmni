@@ -232,59 +232,77 @@ function chromeTheme(dark: boolean): Extension {
 /*
  * Syntax colours.
  *
- * Deliberately the two palettes the studio already looked like: these are VS
- * Code's own Light+ and Dark+ token colours, which is what Monaco's `vs` and
- * `vs-dark` were, so migrating the stack did not silently restyle every file in
- * the app. Written out rather than taken from `@codemirror/theme-one-dark` for
- * exactly that reason — One Dark is a good theme and a different one.
+ * These were VS Code's own Light+ and Dark+ token colours, which is what
+ * Monaco's `vs` and `vs-dark` were, so that migrating the stack did not
+ * silently restyle every file in the app. They are a hand-built pair now, for
+ * the reason the migration itself removed: Dark+ is drawn for a flat `#1e1e1e`
+ * ground with pure-hue tokens (`#0000ff` keywords, `#008000` comments), and the
+ * studio's ground is a tinted near-black at a *chroma* of its own — a pure blue
+ * keyword over it reads as a different material rather than as text.
+ *
+ * So each half is one ramp: a fixed lightness per theme, a chroma low enough
+ * that a screen of code reads as prose rather than as a highlighter, and hues
+ * spaced far enough apart to tell a string from a number at a glance. Nothing
+ * here is the brand hue — a keyword that matched `--primary` would read as a
+ * link. Comments are the one deliberate break with both ancestors: grey rather
+ * than green, because a comment is the thing you skip and green is the loudest
+ * colour on a dark ground.
+ *
+ * Written out literally rather than as `var(--…)` because a token colour is not
+ * a UI colour: there is no `--keyword` in a design system and inventing one
+ * would make every language in the app the same three hues.
  */
 const lightHighlighting = HighlightStyle.define(
   [
-    { tag: [t.comment, t.lineComment, t.blockComment], color: "#008000" },
-    { tag: [t.keyword, t.modifier, t.controlKeyword], color: "#0000ff" },
-    { tag: [t.operatorKeyword, t.definitionKeyword], color: "#0000ff" },
-    { tag: [t.string, t.special(t.string), t.regexp], color: "#a31515" },
-    { tag: [t.number, t.bool, t.null, t.atom], color: "#098658" },
-    { tag: [t.typeName, t.className, t.namespace], color: "#267f99" },
-    { tag: [t.function(t.variableName), t.labelName], color: "#795e26" },
-    { tag: [t.propertyName], color: "#001080" },
-    { tag: [t.variableName, t.attributeName], color: "#001080" },
-    { tag: [t.tagName], color: "#800000" },
-    { tag: [t.meta, t.processingInstruction], color: "#800000" },
-    { tag: [t.operator, t.punctuation, t.bracket], color: "#000000" },
-    { tag: [t.escape], color: "#ee0000" },
-    { tag: [t.heading], color: "#800000", fontWeight: "bold" },
-    { tag: [t.link, t.url], color: "#0000ee", textDecoration: "underline" },
+    { tag: [t.comment, t.lineComment, t.blockComment], color: "#767a8a" },
+    { tag: [t.keyword, t.modifier, t.controlKeyword], color: "#8a3fb8" },
+    { tag: [t.operatorKeyword, t.definitionKeyword], color: "#8a3fb8" },
+    { tag: [t.string, t.special(t.string)], color: "#2e7d43" },
+    { tag: [t.regexp], color: "#0f7183" },
+    { tag: [t.number, t.bool, t.null, t.atom], color: "#b0561a" },
+    { tag: [t.typeName, t.className, t.namespace], color: "#0f7183" },
+    { tag: [t.function(t.variableName), t.labelName], color: "#2f5fd0" },
+    { tag: [t.propertyName], color: "#1a6a8c" },
+    { tag: [t.variableName, t.attributeName], color: "#2b3245" },
+    { tag: [t.tagName], color: "#b03a5b" },
+    { tag: [t.meta, t.processingInstruction], color: "#b03a5b" },
+    // Punctuation is structure rather than content and is dimmed to the
+    // comment's own grey: it is on every line, so at full contrast it is the
+    // densest colour on screen and none of it is worth reading.
+    { tag: [t.operator, t.punctuation, t.bracket], color: "#767a8a" },
+    { tag: [t.escape], color: "#b0561a" },
+    { tag: [t.heading], color: "#2f5fd0", fontWeight: "bold" },
+    { tag: [t.link, t.url], color: "#2f5fd0", textDecoration: "underline" },
     { tag: [t.emphasis], fontStyle: "italic" },
     { tag: [t.strong], fontWeight: "bold" },
     { tag: [t.strikethrough], textDecoration: "line-through" },
-    { tag: [t.invalid], color: "#cd3131" },
+    { tag: [t.invalid], color: "#c33d3d" },
   ],
   { themeType: "light" }
 )
 
 const darkHighlighting = HighlightStyle.define(
   [
-    { tag: [t.comment, t.lineComment, t.blockComment], color: "#6a9955" },
-    { tag: [t.keyword, t.modifier, t.controlKeyword], color: "#569cd6" },
-    { tag: [t.operatorKeyword, t.definitionKeyword], color: "#569cd6" },
-    { tag: [t.string, t.special(t.string)], color: "#ce9178" },
-    { tag: [t.regexp], color: "#d16969" },
-    { tag: [t.number, t.bool, t.null, t.atom], color: "#b5cea8" },
-    { tag: [t.typeName, t.className, t.namespace], color: "#4ec9b0" },
-    { tag: [t.function(t.variableName), t.labelName], color: "#dcdcaa" },
-    { tag: [t.propertyName], color: "#9cdcfe" },
-    { tag: [t.variableName, t.attributeName], color: "#9cdcfe" },
-    { tag: [t.tagName], color: "#569cd6" },
-    { tag: [t.meta, t.processingInstruction], color: "#569cd6" },
-    { tag: [t.operator, t.punctuation, t.bracket], color: "#d4d4d4" },
-    { tag: [t.escape], color: "#d7ba7d" },
-    { tag: [t.heading], color: "#569cd6", fontWeight: "bold" },
-    { tag: [t.link, t.url], color: "#3794ff", textDecoration: "underline" },
+    { tag: [t.comment, t.lineComment, t.blockComment], color: "#6c7086" },
+    { tag: [t.keyword, t.modifier, t.controlKeyword], color: "#c79bf0" },
+    { tag: [t.operatorKeyword, t.definitionKeyword], color: "#c79bf0" },
+    { tag: [t.string, t.special(t.string)], color: "#9ed7a8" },
+    { tag: [t.regexp], color: "#7fcfdb" },
+    { tag: [t.number, t.bool, t.null, t.atom], color: "#e8b17a" },
+    { tag: [t.typeName, t.className, t.namespace], color: "#7fcfdb" },
+    { tag: [t.function(t.variableName), t.labelName], color: "#8ba6f5" },
+    { tag: [t.propertyName], color: "#a9d3ee" },
+    { tag: [t.variableName, t.attributeName], color: "#d7d9e4" },
+    { tag: [t.tagName], color: "#f2909f" },
+    { tag: [t.meta, t.processingInstruction], color: "#f2909f" },
+    { tag: [t.operator, t.punctuation, t.bracket], color: "#878b9e" },
+    { tag: [t.escape], color: "#e8b17a" },
+    { tag: [t.heading], color: "#8ba6f5", fontWeight: "bold" },
+    { tag: [t.link, t.url], color: "#8ba6f5", textDecoration: "underline" },
     { tag: [t.emphasis], fontStyle: "italic" },
     { tag: [t.strong], fontWeight: "bold" },
     { tag: [t.strikethrough], textDecoration: "line-through" },
-    { tag: [t.invalid], color: "#f14c4c" },
+    { tag: [t.invalid], color: "#f78a8a" },
   ],
   { themeType: "dark" }
 )

@@ -9,7 +9,6 @@ import {
   IPC,
   type DesktopApi,
   type DirectoryChange,
-  type DshEvent,
   type MenuCommand,
   type ProcessExit,
   type ProcessOutput,
@@ -126,6 +125,8 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.createWorktreeChat, place),
   readWorktreeChat: (id) => ipcRenderer.invoke(IPC.readWorktreeChat, id),
   deleteWorktreeChat: (id) => ipcRenderer.invoke(IPC.deleteWorktreeChat, id),
+  renameWorktreeChat: (id, title) =>
+    ipcRenderer.invoke(IPC.renameWorktreeChat, id, title),
   setWorktreeChatOptions: (id, options) =>
     ipcRenderer.invoke(IPC.setWorktreeChatOptions, id, options),
   answerWorktreeChatAsk: (askId, answer) =>
@@ -135,19 +136,6 @@ const api: DesktopApi = {
   stopWorktreeChat: (id) => ipcRenderer.invoke(IPC.stopWorktreeChat, id),
   onWorktreeChatEvent: (listener) =>
     subscribe<WorktreeChatEvent>(IPC.worktreeChatEvent, listener),
-  dshStatus: () => ipcRenderer.invoke(IPC.dshStatus),
-  dshListSessions: () => ipcRenderer.invoke(IPC.dshListSessions),
-  dshCreateSession: (input) => ipcRenderer.invoke(IPC.dshCreateSession, input),
-  dshSendPrompt: (input) => ipcRenderer.invoke(IPC.dshSendPrompt, input),
-  dshHistory: (sessionId, maxMessages) =>
-    ipcRenderer.invoke(IPC.dshHistory, sessionId, maxMessages),
-  dshCancel: (sessionId) => ipcRenderer.invoke(IPC.dshCancel, sessionId),
-  dshListModels: (sessionId) =>
-    ipcRenderer.invoke(IPC.dshListModels, sessionId),
-  dshModelCatalog: () => ipcRenderer.invoke(IPC.dshModelCatalog),
-  dshEventsStart: () => ipcRenderer.invoke(IPC.dshEventsStart),
-  dshEventsStop: () => ipcRenderer.invoke(IPC.dshEventsStop),
-  onDshEvent: (listener) => subscribe<DshEvent>(IPC.dshEvent, listener),
   listNotes: () => ipcRenderer.invoke(IPC.listNotes),
   saveNotes: (notes) => ipcRenderer.invoke(IPC.saveNotes, notes),
   listNoteFolders: () => ipcRenderer.invoke(IPC.listNoteFolders),

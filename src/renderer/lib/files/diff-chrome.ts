@@ -54,6 +54,18 @@ import {
 export const DIFF_CONTEXT = 3
 export const DIFF_MIN_COLLAPSE = 4
 
+/**
+ * The height of one row of the diff, in pixels.
+ *
+ * Pinned rather than left to the font, and stated here rather than written into
+ * the theme, because three different pieces of code lay out rows that have to
+ * line up: the editor's own lines, the merge extension's removed rows inside a
+ * block widget, and the gutter columns beside them. It is also what turns a
+ * pointer's Y inside a removed chunk back into which removed line it is over —
+ * see `reviewGutter`, which has no other way to ask.
+ */
+export const DIFF_ROW_HEIGHT = 20
+
 /** One hunk, in the form a unified diff header states it. */
 type Hunk = {
   oldStart: number
@@ -316,6 +328,23 @@ function removedColumns(model: DiffModel, block: BlockInfo) {
   return model.removed.get(block.from) ?? null
 }
 
+/**
+ * The removed chunk whose widget sits at `pos`: which line of the commit its
+ * first row is, and how many rows it draws. Null for anything else.
+ *
+ * Exported for the review column, which asks the same two questions the number
+ * gutters do — a comment on a deleted line is a comment on a row this file
+ * numbered. Keyed by the widget's position, which is also the start of the line
+ * *after* the deletion, so a caller must ask only about block widgets: a text
+ * block at the same position is a different row.
+ */
+export function removedChunkAt(
+  state: EditorState,
+  pos: number
+): { firstOld: number; lines: number } | null {
+  return modelOf(state).removed.get(pos) ?? null
+}
+
 function rangeOf(first: number, count: number) {
   return Array.from({ length: count }, (_, at) => first + at)
 }
@@ -546,7 +575,7 @@ const hunkHeaders = ViewPlugin.fromClass(
  *
  * Light is Primer's own hex; dark is `rgba` over whatever the pane's ground is,
  * which is how Primer specifies it and is what keeps the tint honest over this
- * app's `#1e1e1e` rather than over GitHub's `#0d1117`.
+ * app's `#111218` rather than over GitHub's `#0d1117`.
  *
  * **The two number columns are not tinted and the sign column is**, which is
  * GitHub's own reading of where the row starts: the numbers are a margin, and
@@ -560,12 +589,13 @@ export function githubDiffTheme(isDark: boolean): Extension {
    * and the row came out two shades: the `+`/`-` column is painted by a gutter
    * marker and the code by a line decoration, so an alpha tint composites over
    * whatever each of those happens to sit on. Flattened against the studio's
-   * dark ground (`--background` is `#1e1e1e`; see `styles/globals.css` for why
-   * dark's surfaces are true greys), so the two halves of a row are the same
-   * colour because they are literally the same colour.
+   * dark ground — `--background`, `#111218` (`styles/globals.css`) — so the two
+   * halves of a row are the same colour because they are literally the same
+   * colour. That also means these two follow the ground: they were flattened
+   * against `#1e1e1e` and had to be recomputed when it moved.
    */
   const line = isDark
-    ? { add: "#203224", del: "#3f2624" }
+    ? { add: "#15271e", del: "#281819" }
     : { add: "#e6ffec", del: "#ffebe9" }
   const sign = isDark
     ? { add: "#3fb950", del: "#f85149" }
@@ -591,8 +621,11 @@ export function githubDiffTheme(isDark: boolean): Extension {
       // A diff's own metrics, not the editor's. Pinned rather than inherited
       // because the removed rows and the gutter column beside them are laid out
       // by two different pieces of code and line up only if both use this.
-      ".cm-scroller": { fontSize: "12px", lineHeight: "20px" },
-      ".cm-content, .cm-line": { fontSize: "12px", lineHeight: "20px" },
+      ".cm-scroller": { fontSize: "12px", lineHeight: `${DIFF_ROW_HEIGHT}px` },
+      ".cm-content, .cm-line": {
+        fontSize: "12px",
+        lineHeight: `${DIFF_ROW_HEIGHT}px`,
+      },
       ".cm-content": { padding: "0" },
 
       ".cm-diffGutter": {
@@ -613,14 +646,14 @@ export function githubDiffTheme(isDark: boolean): Extension {
         display: "block",
         textAlign: "right",
         fontSize: "12px",
-        lineHeight: "20px",
+        lineHeight: `${DIFF_ROW_HEIGHT}px`,
       },
       ".cm-diffSign": {
         display: "block",
         width: "1ch",
         textAlign: "center",
         fontSize: "12px",
-        lineHeight: "20px",
+        lineHeight: `${DIFF_ROW_HEIGHT}px`,
       },
       ".cm-diffSign-added": { color: sign.add },
       ".cm-diffSign-removed": { color: sign.del },
@@ -654,8 +687,8 @@ export function githubDiffTheme(isDark: boolean): Extension {
       },
       ".cm-deletedChunk .cm-deletedLine": {
         display: "block",
-        lineHeight: "20px",
-        padding: "0",
+        lineHeight: `${DIFF_ROW_HEIGHT}px`,
+        padding: "0 2px 0 6px",
       },
       ".cm-deletedChunk .cm-deletedLine del": { textDecoration: "none" },
       ".cm-gutterElement.cm-diffCell-removed": { backgroundColor: line.del },
@@ -683,7 +716,7 @@ export function githubDiffTheme(isDark: boolean): Extension {
         borderTop: `1px solid ${hunk.edge}`,
         borderBottom: `1px solid ${hunk.edge}`,
         cursor: "pointer",
-        lineHeight: "20px",
+        lineHeight: `${DIFF_ROW_HEIGHT}px`,
         padding: "0",
         fontSize: "12px",
       },
@@ -727,7 +760,7 @@ export function githubDiffTheme(isDark: boolean): Extension {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        height: "20px",
+        height: `${DIFF_ROW_HEIGHT}px`,
         color: hunk.icon,
         cursor: "pointer",
         verticalAlign: "middle",

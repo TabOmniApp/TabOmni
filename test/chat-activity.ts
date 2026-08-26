@@ -4,7 +4,13 @@ import {
   countsOf,
   summaryOf,
 } from "../src/renderer/lib/worktree-chat/activity"
-import { changeOf, describeCall, resultLine } from "../src/main/claude-agent"
+import {
+  changeOf,
+  describeCall,
+  detailOf,
+  resultLine,
+  resultText,
+} from "../src/main/claude-agent"
 import { check, finish, section } from "./harness"
 
 /**
@@ -362,5 +368,80 @@ check(
   })(),
   "this is a tooltip, not a pane"
 )
+
+section("what a row opens onto")
+
+/*
+ * The rule both `input` and `output` follow: a field is written only where the
+ * row is not already showing the whole of it. A second copy of a short string on
+ * every line grows the chat's file for nothing, and — worse — makes every row
+ * openable, so the chevron stops meaning "there is more here".
+ */
+
+check(
+  "a one-line command has nothing behind it",
+  describeCall("Bash", { command: "bun test" }).input === undefined
+)
+
+check(
+  "a multi-line command does",
+  describeCall("Bash", { command: "cat <<EOF\nhello\nEOF" }).input ===
+    "cat <<EOF\nhello\nEOF"
+)
+
+check(
+  "and so does one past the row's 120",
+  describeCall("Bash", { command: `echo ${"x".repeat(200)}` }).input?.length ===
+    205
+)
+
+check(
+  "a single path is all of itself",
+  describeCall("Read", { file_path: "/a/b.ts" }).input === undefined
+)
+
+/* `Task`'s input is a whole prompt, and its row deliberately shows the agent's
+ * name instead — opening onto the prompt would put back the 120 characters of
+ * JSON that `describeCall` exists to have removed. */
+check(
+  "a subagent opens onto nothing",
+  describeCall("Task", {
+    subagent_type: "Explore",
+    prompt: "long ".repeat(100),
+  }).input === undefined
+)
+
+section("the whole of what came back")
+
+check("the text is the text", resultText("one line") === "one line")
+
+check(
+  "blocks are joined",
+  resultText([{ text: "a" }, { text: "b" }]) === "a\nb"
+)
+
+check("nothing is nothing", resultText(null) === "")
+
+section("what is kept of it")
+
+check("short output is untouched", detailOf("a\nb\nc") === "a\nb\nc")
+
+/* Both caps say what they dropped rather than trailing off: a panel that
+ * silently showed the first 200 lines of a 4,000-line result is one that will be
+ * read as the whole of it. */
+const long = detailOf(
+  Array.from({ length: 500 }, (_, at) => `line ${at}`).join("\n")
+)
+check("a long result is cut", long.split("\n").length === 201, long.slice(-40))
+check("and says how much it dropped", long.endsWith("… 300 more lines"))
+
+const wide = detailOf("x".repeat(20_000))
+check(
+  "one enormous line is cut too",
+  wide.startsWith("x".repeat(12_000)) &&
+    wide.endsWith("… truncated at 12,000 characters")
+)
+
+check("empty stays empty", detailOf("") === "" && detailOf("   ") === "")
 
 finish()

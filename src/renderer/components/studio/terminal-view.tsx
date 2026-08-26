@@ -8,24 +8,66 @@ import { useTheme } from "next-themes"
 import "@xterm/xterm/css/xterm.css"
 
 /*
- * xterm takes hex, not the theme's CSS variables, so these are the dark
- * palette's own greys written out — `#1e1e1e` is `--background` and `#414141`
- * is `--accent`. A terminal filling a pane must be the pane's own colour: at
+ * xterm takes hex, not the theme's CSS variables, so these are the palette's
+ * own values written out — `#111218` is the dark `--background`, `#2c2d36` its
+ * `--accent`. A terminal filling a pane must be the pane's own colour: at
  * anything else it reads as a window floating in the studio rather than part
  * of it. Kept in step by hand, which is the price of a canvas renderer.
+ *
+ * The sixteen ANSI slots are here for the same reason and are new: xterm's
+ * defaults are the VGA palette, so a `git status` in a studio tinted indigo
+ * came back in a pure `#00ff00` belonging to no theme in the app. These are one
+ * ramp at a consistent lightness and chroma per half — bright enough to read
+ * over `--background`, muted enough to sit beside chrome rather than shout over
+ * it — and `brightBlack` is deliberately well clear of the background, because
+ * it is what most CLIs dim their secondary text to.
  */
 const darkTheme = {
-  background: "#1e1e1e",
-  foreground: "#e4e4e7",
-  cursor: "#e4e4e7",
-  selectionBackground: "#414141",
+  background: "#111218",
+  foreground: "#f3f3f6",
+  cursor: "#a5a8f0",
+  cursorAccent: "#111218",
+  selectionBackground: "#2c2d36",
+  black: "#2c2d36",
+  red: "#f78a8a",
+  green: "#86d99b",
+  yellow: "#e8c17a",
+  blue: "#8ba6f5",
+  magenta: "#c79bf0",
+  cyan: "#7fcfdb",
+  white: "#c9cbd6",
+  brightBlack: "#6c6f80",
+  brightRed: "#ffa5a5",
+  brightGreen: "#a1efb4",
+  brightYellow: "#f5d795",
+  brightBlue: "#a8bdff",
+  brightMagenta: "#dcb4ff",
+  brightCyan: "#9ee6f2",
+  brightWhite: "#f3f3f6",
 }
 
 const lightTheme = {
-  background: "#ffffff",
-  foreground: "#27272a",
-  cursor: "#27272a",
-  selectionBackground: "#e4e4e7",
+  background: "#fdfdff",
+  foreground: "#14151d",
+  cursor: "#4c4fd6",
+  cursorAccent: "#fdfdff",
+  selectionBackground: "#eaecf6",
+  black: "#2b2d3a",
+  red: "#c33d3d",
+  green: "#2e7d43",
+  yellow: "#96650d",
+  blue: "#2f5fd0",
+  magenta: "#8a3fb8",
+  cyan: "#0f7183",
+  white: "#c9cbd6",
+  brightBlack: "#767a8a",
+  brightRed: "#e05252",
+  brightGreen: "#3d9a56",
+  brightYellow: "#b07d15",
+  brightBlue: "#4776e6",
+  brightMagenta: "#a355d1",
+  brightCyan: "#188a9e",
+  brightWhite: "#14151d",
 }
 
 /**

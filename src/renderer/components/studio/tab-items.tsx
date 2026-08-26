@@ -1,17 +1,16 @@
 import { cn } from "@/lib/utils"
 import {
-  Bot,
   File,
   FileText,
   Folder,
   GitCompare,
   Image,
+  Loader2,
   MessageSquare,
   Settings2,
   Terminal,
 } from "lucide-react"
 
-import { useDeepseekChats } from "@/lib/deepseek/store"
 import { useExplorer, type OpenTab } from "@/lib/db/explorer-store"
 import { useChanges } from "@/lib/files/changes"
 import { isDeleted, isDirty, useFiles } from "@/lib/files/store"
@@ -57,8 +56,7 @@ export function useTabItems(): Map<string, TabStripItem> {
 
   const chats = useWorktreeChats((state) => state.chats)
   const chatOpenIds = useWorktreeChats((state) => state.openIds)
-
-  const deepseekOpenIds = useDeepseekChats((state) => state.openIds)
+  const chatSending = useWorktreeChats((state) => state.sending)
 
   const changesOpenIds = useChanges((state) => state.openIds)
   const changesByRoot = useChanges((state) => state.byRoot)
@@ -205,7 +203,11 @@ export function useTabItems(): Map<string, TabStripItem> {
     add({
       id: PREFIX.worktree + id,
       label: chat.title,
-      icon: <MessageSquare className="size-3.5 shrink-0" />,
+      icon: chatSending.includes(id) ? (
+        <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+      ) : (
+        <MessageSquare className="size-3.5 shrink-0" />
+      ),
       title: where ? `${chat.title} — ${where}` : chat.title,
     })
   }
@@ -218,17 +220,6 @@ export function useTabItems(): Map<string, TabStripItem> {
       label: note.name,
       icon: <FileText className="size-3.5 shrink-0" />,
       title: note.name,
-    })
-  }
-
-  // The one DeepSeek conversation: a tab of its own, named for the harness it
-  // talks to. There is only ever this one, so the id is a constant.
-  for (const id of deepseekOpenIds) {
-    add({
-      id: PREFIX.deepseek + id,
-      label: "DeepSeek",
-      icon: <Bot className="size-3.5 shrink-0" />,
-      title: "DeepSeek Harness chat",
     })
   }
 
@@ -309,8 +300,6 @@ function groupName(
     // Every chat is in a project, so the name above is always the answer and
     // this is never reached for one.
     worktree: [],
-    // The DeepSeek tab is never grouped, so this is never reached either.
-    deepseek: [],
   }[pane].find((folder) => folder.id === group)
 
   if (found) return found.name
@@ -326,7 +315,6 @@ function groupName(
     worktree: "Chats",
     changes: "",
     database: "",
-    deepseek: "DeepSeek",
   }[pane]
 }
 

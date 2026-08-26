@@ -86,8 +86,11 @@ export function SideRow({
         SIDE_ROW_SHAPE,
         "justify-start rounded-none font-normal",
         active
-          ? "bg-accent text-accent-foreground"
-          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+          ? // The bar is an *inset shadow* rather than a border: a full-bleed
+            // row has no spare 2px to give a border, so one would shift every
+            // label in the list sideways the moment its row was selected.
+            "bg-accent text-accent-foreground shadow-[inset_2px_0_0_0_var(--primary)]"
+          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
         className
       )}
     >

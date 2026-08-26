@@ -17,7 +17,6 @@ export const PREFIX: Record<Pane, string> = {
   api: "api:",
   worktree: "chat:",
   note: "note:",
-  deepseek: "ds:",
 }
 
 /**

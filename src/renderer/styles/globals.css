@@ -45,6 +45,22 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+
+  /*
+   * Elevation as tokens rather than Tailwind's own shadow scale, which is one
+   * set of numbers for both themes — a stack tuned to read on white is
+   * invisible over a near-black surface, and every dialog in the app was
+   * therefore floating on nothing in the dark. `@theme inline` emits the
+   * reference rather than resolving it, so `.dark` below hands `shadow-md` a
+   * deeper stack without a single call site spelling out a dark twin.
+   */
+  --shadow-2xs: var(--elevation-2xs);
+  --shadow-xs: var(--elevation-xs);
+  --shadow-sm: var(--elevation-sm);
+  --shadow-md: var(--elevation-md);
+  --shadow-lg: var(--elevation-lg);
+  --shadow-xl: var(--elevation-xl);
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -56,44 +72,52 @@
 }
 
 /*
- * The palette is built around one hue — 285, violet — and every neutral in the
- * light half of it carries a little of that hue rather than being a true grey.
- * shadcn's default ships every token at chroma 0, which is what made the studio
- * read as uniformly grey no matter how the layout was arranged; a surface at
- * chroma 0.006 still reads as "white" but stops reading as *nothing*. The dark
- * half is the exception, and `.dark` below says why.
+ * The palette is built around one hue — 277, indigo — and every neutral carries
+ * a little of it rather than being a true grey. shadcn's default ships every
+ * token at chroma 0, which is what made the studio read as uniformly grey no
+ * matter how the layout was arranged; a surface at chroma 0.012 still reads as
+ * "grey" but stops reading as *nothing*.
  *
- * `--brand-hue` is not consumed by the tokens below (oklch takes a literal),
- * it records the number so a future re-hue has one place to start from.
+ * It was 285 (violet) with a **true-grey** dark half, and both moved together.
+ * The tint is back in the dark surfaces because the constraint that took it out
+ * is gone: that half matched Monaco's flat `#1e1e1e` because `vs-dark` could not
+ * be re-tinted without a hand-written theme per grammar, and CodeMirror paints
+ * no ground of its own (`lib/editor.ts`) — an open file is transparent over
+ * whatever pane holds it, so the chrome no longer has to match an editor's idea
+ * of black. What the tint buys is what a flat grey could not give: seven
+ * surfaces a step apart that still read as one material.
+ *
+ * `--brand-hue` is not consumed by the tokens below (oklch takes a literal), it
+ * records the number so a future re-hue has one place to start from.
  */
 :root {
-  --brand-hue: 285;
+  --brand-hue: 277;
 
-  --background: oklch(0.994 0.003 285);
-  --foreground: oklch(0.17 0.015 285);
-  --card: oklch(1 0.002 285);
-  --card-foreground: oklch(0.17 0.015 285);
-  --popover: oklch(1 0.002 285);
-  --popover-foreground: oklch(0.17 0.015 285);
-  --primary: oklch(0.55 0.22 285);
-  --primary-foreground: oklch(0.99 0.005 285);
-  --secondary: oklch(0.965 0.008 285);
-  --secondary-foreground: oklch(0.28 0.03 285);
-  --muted: oklch(0.97 0.007 285);
-  --muted-foreground: oklch(0.53 0.025 285);
-  --accent: oklch(0.955 0.018 285);
-  --accent-foreground: oklch(0.38 0.12 285);
+  --background: oklch(0.995 0.002 277);
+  --foreground: oklch(0.2 0.015 277);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.015 277);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.015 277);
+  --primary: oklch(0.54 0.2 277);
+  --primary-foreground: oklch(0.99 0.005 277);
+  --secondary: oklch(0.965 0.006 277);
+  --secondary-foreground: oklch(0.3 0.03 277);
+  --muted: oklch(0.965 0.006 277);
+  --muted-foreground: oklch(0.52 0.02 277);
+  --accent: oklch(0.945 0.014 277);
+  --accent-foreground: oklch(0.34 0.11 277);
   --destructive: oklch(0.58 0.22 25);
-  --border: oklch(0.915 0.008 285);
-  --input: oklch(0.915 0.01 285);
-  --ring: oklch(0.62 0.18 285);
+  --border: oklch(0.9 0.006 277);
+  --input: oklch(0.9 0.008 277);
+  --ring: oklch(0.6 0.19 277);
 
   /*
-     * Status colours as tokens rather than as `text-emerald-600` at each call
-     * site. The raw utilities forced every one of them to spell out its own
-     * dark-mode twin (`text-emerald-600 dark:text-emerald-400`), which is why
-     * they had already drifted between panels.
-     */
+   * Status colours as tokens rather than as `text-emerald-600` at each call
+   * site. The raw utilities forced every one of them to spell out its own
+   * dark-mode twin (`text-emerald-600 dark:text-emerald-400`), which is why
+   * they had already drifted between panels.
+   */
   --success: oklch(0.56 0.14 158);
   --success-foreground: oklch(0.99 0.01 158);
   --warning: oklch(0.65 0.15 70);
@@ -102,28 +126,52 @@
   --info-foreground: oklch(0.99 0.01 245);
 
   /*
-     * One hue per section of the rail, far enough apart in hue that the active
-     * item says which panel you are in before the icon does. None of them sit
-     * on 285 — the brand hue stays reserved for primary actions, so a coloured
-     * rail item never looks like a button.
-     */
-  /* Explorer sits first on the rail and takes the cyan between Terminal's
-       green and Database's blue: 50 from the Database row under it, and 40
-       from Terminal, which is four rows away. */
-  --section-files: oklch(0.56 0.13 200);
-  --section-database: oklch(0.55 0.17 250);
-  --section-api: oklch(0.58 0.21 320);
-  --section-terminal: oklch(0.56 0.14 160);
+   * One hue per section, far enough apart that the active item says which panel
+   * you are in before the icon does. None of them sits on 277 — the brand hue
+   * stays reserved for primary actions, so a coloured section mark never looks
+   * like a button.
+   */
+  --section-files: oklch(0.55 0.13 205);
+  --section-database: oklch(0.54 0.16 250);
+  --section-api: oklch(0.57 0.21 325);
+  --section-terminal: oklch(0.55 0.14 162);
   /* Notes takes the amber nobody else had: its nearest neighbour is Terminal's
-       green at 160, 95 away, and Terminal has no rail row to sit beside. */
+     green at 162, 92 away. */
   --section-note: oklch(0.58 0.15 65);
 
-  --chart-1: oklch(0.55 0.22 285);
-  --chart-2: oklch(0.58 0.21 320);
-  --chart-3: oklch(0.55 0.17 250);
-  --chart-4: oklch(0.56 0.14 160);
+  --chart-1: oklch(0.54 0.2 277);
+  --chart-2: oklch(0.57 0.21 325);
+  --chart-3: oklch(0.54 0.16 250);
+  --chart-4: oklch(0.55 0.14 162);
   --chart-5: oklch(0.62 0.15 70);
-  --radius: 0.625rem;
+
+  /*
+   * 8px rather than 10px. The studio is a dense workbench — a tab is 28px tall
+   * and a sidebar row 24px — and a radius that reads as soft on a 200px card
+   * reads as a lozenge on a 24px row. Every step above and below is derived
+   * from this one (see `@theme inline`), so this is the only number to move.
+   */
+  --radius: 0.5rem;
+
+  /*
+   * Two shadows per step, never one: a tight contact shadow at 1–2px that draws
+   * the edge, and a wide soft one that puts the surface above the page. One
+   * blurry shadow at 20px is a grey smudge — the edge is what actually reads as
+   * lift. The hairline in `--elevation-2xs` is a *border* drawn as a shadow, so
+   * it costs no layout on a control that already has one.
+   */
+  --elevation-2xs: 0 1px 2px oklch(0.2 0.02 277 / 0.05);
+  --elevation-xs:
+    0 1px 2px oklch(0.2 0.02 277 / 0.06), 0 1px 3px oklch(0.2 0.02 277 / 0.06);
+  --elevation-sm:
+    0 1px 2px oklch(0.2 0.02 277 / 0.06), 0 2px 6px oklch(0.2 0.02 277 / 0.07);
+  --elevation-md:
+    0 1px 2px oklch(0.2 0.02 277 / 0.06), 0 4px 12px oklch(0.2 0.02 277 / 0.09);
+  --elevation-lg:
+    0 1px 3px oklch(0.2 0.02 277 / 0.07), 0 8px 24px oklch(0.2 0.02 277 / 0.11);
+  --elevation-xl:
+    0 2px 4px oklch(0.2 0.02 277 / 0.08), 0 16px 48px oklch(0.2 0.02 277 / 0.14);
+
   /*
    * The measure a document is set to — the note editor's column, and the
    * markdown preview's, which are two views of the same file and must not be
@@ -133,95 +181,184 @@
    * moves both, and neither is the one that decides.
    */
   --prose-measure: 60rem;
-  --sidebar: oklch(0.978 0.006 285);
-  --sidebar-foreground: oklch(0.17 0.015 285);
-  --sidebar-primary: oklch(0.55 0.22 285);
-  --sidebar-primary-foreground: oklch(0.99 0.005 285);
-  --sidebar-accent: oklch(0.95 0.016 285);
-  --sidebar-accent-foreground: oklch(0.35 0.12 285);
-  --sidebar-border: oklch(0.912 0.009 285);
-  --sidebar-ring: oklch(0.62 0.18 285);
+
+  /*
+   * The sidebar is a step *darker* than the content in both halves, which is
+   * the one structural change the repaint makes: it was a step lighter, so the
+   * navigation was the brightest thing on screen and the file being worked on
+   * the dimmest. Every studio that does this well — an editor, a terminal, a
+   * design tool — sinks its chrome and lifts its content.
+   */
+  --sidebar: oklch(0.972 0.005 277);
+  --sidebar-foreground: oklch(0.2 0.015 277);
+  --sidebar-primary: oklch(0.54 0.2 277);
+  --sidebar-primary-foreground: oklch(0.99 0.005 277);
+  --sidebar-accent: oklch(0.94 0.016 277);
+  --sidebar-accent-foreground: oklch(0.32 0.11 277);
+  --sidebar-border: oklch(0.9 0.006 277);
+  --sidebar-ring: oklch(0.6 0.19 277);
 }
 
 /*
- * Dark is not the light palette inverted: chroma has to rise as lightness
- * falls or the hue disappears into the black, and the accents move lighter so
- * they clear the surface they sit on.
+ * Dark is not the light palette inverted: chroma has to rise as lightness falls
+ * or the hue disappears into the black, and the accents move lighter so they
+ * clear the surface they sit on.
  *
- * **Its surfaces are true greys.** The studio's largest dark surface is a code
- * editor, and this was written when that editor was Monaco: its `vs-dark` paints
- * a flat `#1e1e1e` that could not be re-tinted without a hand-written theme for
- * every grammar, so the chrome matched the editor rather than the other way
- * round. The editor is CodeMirror now and paints no ground of its own — it is
- * transparent over whatever pane holds it (`lib/editor.ts`) — so this is a
- * choice rather than a constraint, and it is kept: a neutral ladder is what the
- * whole dark studio has been drawn against. `--background` *is* `#1e1e1e`
- * (`oklch(0.235 0 0)`), and
- * every surface stacked on it is neutral at the same steps the tinted ladder
- * used, so an open file stops reading as a hole cut in the panel around it. A
- * terminal pane and the window's own first-paint colour are the same value for
- * the same reason (`terminal-view.tsx`, `main/main.ts`).
+ * Six neutral steps carry the whole studio — sidebar `0.165`, background
+ * `0.185`, card `0.215`, muted `0.26`, accent `0.30`, and the hairline borders,
+ * which are a **white at low alpha** rather than a lighter grey. That is the
+ * distinction worth keeping: an alpha border is the same line over every one of
+ * those six surfaces, where a fixed grey is a line that disappears on two of
+ * them and glows on a third.
  *
- * What keeps its hue is everything that is *not* a surface — the foregrounds,
- * `--primary`, `--ring`, the rail's section colours and the status colours. The
- * brand is in what sits on the grey, which is where it was doing the work.
+ * `--background` is no longer `#1e1e1e`, so the two places that hold it as a
+ * literal have to follow: the terminal's xterm palette (`terminal-view.tsx`,
+ * which takes hex and not variables) and the window's own first-paint colour
+ * (`main/main.ts`). Both say so where they are.
  */
 .dark {
-  --background: oklch(0.235 0 0);
-  --foreground: oklch(0.97 0.006 285);
-  --card: oklch(0.28 0 0);
-  --card-foreground: oklch(0.97 0.006 285);
-  --popover: oklch(0.285 0 0);
-  --popover-foreground: oklch(0.97 0.006 285);
-  --primary: oklch(0.7 0.19 285);
-  --primary-foreground: oklch(0.17 0.05 285);
-  --secondary: oklch(0.345 0 0);
-  --secondary-foreground: oklch(0.97 0.006 285);
-  --muted: oklch(0.345 0 0);
-  --muted-foreground: oklch(0.71 0.022 285);
-  --accent: oklch(0.375 0 0);
-  --accent-foreground: oklch(0.93 0.03 285);
-  --destructive: oklch(0.7 0.19 22);
-  /* A hair more opaque than the tinted borders these replace: the same alpha
-     over a lighter background is a fainter line, and these are the only thing
-     separating two greys a step apart. */
-  --border: oklch(0.85 0 0 / 16%);
-  --input: oklch(0.85 0 0 / 20%);
-  --ring: oklch(0.6 0.17 285);
+  --background: oklch(0.185 0.012 277);
+  --foreground: oklch(0.965 0.004 277);
+  --card: oklch(0.215 0.013 277);
+  --card-foreground: oklch(0.965 0.004 277);
+  --popover: oklch(0.225 0.014 277);
+  --popover-foreground: oklch(0.965 0.004 277);
+  --primary: oklch(0.66 0.17 277);
+  --primary-foreground: oklch(0.99 0.01 277);
+  --secondary: oklch(0.26 0.012 277);
+  --secondary-foreground: oklch(0.965 0.004 277);
+  --muted: oklch(0.26 0.012 277);
+  --muted-foreground: oklch(0.7 0.018 277);
+  --accent: oklch(0.3 0.016 277);
+  --accent-foreground: oklch(0.95 0.02 277);
+  --destructive: oklch(0.68 0.19 25);
+  /* Alpha rather than a lighter grey, for the reason in the block above; a
+     hair more opaque on inputs, which have to read as a field rather than as a
+     seam between two panels. */
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.66 0.17 277);
 
-  --success: oklch(0.75 0.16 160);
+  --success: oklch(0.74 0.15 160);
   --success-foreground: oklch(0.18 0.04 160);
-  --warning: oklch(0.8 0.15 75);
-  --warning-foreground: oklch(0.2 0.05 75);
-  --info: oklch(0.7 0.15 245);
-  --info-foreground: oklch(0.18 0.04 245);
+  --warning: oklch(0.8 0.14 78);
+  --warning-foreground: oklch(0.2 0.05 78);
+  --info: oklch(0.72 0.14 242);
+  --info-foreground: oklch(0.18 0.04 242);
 
-  --section-files: oklch(0.72 0.12 200);
-  --section-database: oklch(0.7 0.15 250);
-  --section-api: oklch(0.72 0.18 320);
-  --section-terminal: oklch(0.74 0.14 160);
-  --section-note: oklch(0.76 0.14 65);
+  --section-files: oklch(0.74 0.12 205);
+  --section-database: oklch(0.72 0.14 250);
+  --section-api: oklch(0.73 0.17 325);
+  --section-terminal: oklch(0.76 0.13 162);
+  --section-note: oklch(0.79 0.13 68);
 
-  --chart-1: oklch(0.7 0.19 285);
-  --chart-2: oklch(0.72 0.18 320);
-  --chart-3: oklch(0.7 0.15 250);
-  --chart-4: oklch(0.74 0.14 160);
-  --chart-5: oklch(0.78 0.14 70);
-  --sidebar: oklch(0.26 0 0);
-  --sidebar-foreground: oklch(0.97 0.006 285);
-  --sidebar-primary: oklch(0.7 0.19 285);
-  --sidebar-primary-foreground: oklch(0.17 0.05 285);
-  --sidebar-accent: oklch(0.355 0 0);
-  --sidebar-accent-foreground: oklch(0.97 0.006 285);
-  --sidebar-border: oklch(0.85 0 0 / 14%);
-  --sidebar-ring: oklch(0.6 0.17 285);
+  --chart-1: oklch(0.66 0.17 277);
+  --chart-2: oklch(0.73 0.17 325);
+  --chart-3: oklch(0.72 0.14 250);
+  --chart-4: oklch(0.76 0.13 162);
+  --chart-5: oklch(0.79 0.13 70);
+
+  /* Near-black rather than tinted-transparent: over a dark ground a shadow is
+     the only thing separating two surfaces a step apart, and the alpha has to
+     roughly double to do the same work it does on white. */
+  --elevation-2xs: 0 1px 2px oklch(0 0 0 / 0.3);
+  --elevation-xs: 0 1px 2px oklch(0 0 0 / 0.35), 0 1px 3px oklch(0 0 0 / 0.3);
+  --elevation-sm: 0 1px 2px oklch(0 0 0 / 0.4), 0 2px 6px oklch(0 0 0 / 0.35);
+  --elevation-md: 0 1px 2px oklch(0 0 0 / 0.4), 0 4px 12px oklch(0 0 0 / 0.45);
+  --elevation-lg: 0 1px 3px oklch(0 0 0 / 0.45), 0 8px 24px oklch(0 0 0 / 0.5);
+  --elevation-xl: 0 2px 4px oklch(0 0 0 / 0.5), 0 16px 48px oklch(0 0 0 / 0.6);
+
+  --sidebar: oklch(0.165 0.012 277);
+  --sidebar-foreground: oklch(0.965 0.004 277);
+  --sidebar-primary: oklch(0.66 0.17 277);
+  --sidebar-primary-foreground: oklch(0.99 0.01 277);
+  --sidebar-accent: oklch(0.29 0.016 277);
+  --sidebar-accent-foreground: oklch(0.965 0.004 277);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.66 0.17 277);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
+    /*
+     * The two type settings the whole studio inherits.
+     *
+     * `antialiased` because the default on macOS is subpixel rendering tuned
+     * for dark-on-light, and the studio's own default is the other way round —
+     * light text on a near-black surface comes out visibly heavier and slightly
+     * fringed without it.
+     *
+     * The negative tracking is what the interface fonts this app actually runs
+     * on are drawn for: SF and Inter are set tight at UI sizes, and the browser
+     * default is not. It is small enough to be invisible on any one label and
+     * is the difference between a dense panel reading as a panel and reading as
+     * a wall.
+     */
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.011em;
+    /* Contextual alternates and kerning on; ligatures stay where they are, so
+       nothing in a monospaced pane is affected. */
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /*
+   * Numbers that change in place — a byte count, a token total, a row count —
+   * are set on a fixed advance so the digits do not shuffle sideways under
+   * their own label. Opt-in rather than global: proportional figures are
+   * better in running prose, which the note editor and the chat are full of.
+   */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /*
+   * A selection in the studio's own accent rather than the OS blue, which is
+   * the one colour on screen belonging to no theme. Excluded from anything
+   * `contenteditable` or in an editor, where a selection is over content and
+   * the tint has to stay light enough to read the characters through — those
+   * paint their own (`lib/editor.ts`, `note-editor.css`).
+   */
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary) 28%, transparent);
+  }
+
+  /*
+   * Scrollbars, which are the last piece of platform chrome in a window that
+   * draws everything else itself — a 15px light-grey track down the side of a
+   * dark panel is the single loudest thing left. Overlay-thin, no track, no
+   * arrows, and only visible against what it is scrolling.
+   *
+   * WebKit's pseudo-elements rather than `scrollbar-width`/`scrollbar-color`:
+   * this app is Chromium alone, and the standard pair cannot do a transparent
+   * track. The `scrollbar-none` utility elsewhere still wins, being more
+   * specific than these element selectors.
+   */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklch, var(--foreground) 18%, transparent);
+    /* The border is the inset: a 10px box with a 3px transparent border is a
+       4px thumb that still takes a 10px pointer target. `padding-box` is what
+       keeps the background out from under it. */
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklch, var(--foreground) 34%, transparent);
   }
 }

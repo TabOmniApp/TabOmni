@@ -61,6 +61,9 @@ export function ReviewPanel({
    * pointer choosing them. See `PendingRange.settled`. */
   const mine = pending?.rootId === rootId && pending.settled ? pending : null
   const replyTo = useReview((state) => state.replyTo)
+  /* What the diff on screen is comparing against, for a comment on a deleted
+   * line: those lines are in the commit and nowhere else. */
+  const committed = useReview((state) => state.committed)
 
   const folders = useStudio((state) => state.folders)
 
@@ -150,6 +153,7 @@ export function ReviewPanel({
           <div className="border-b bg-background px-3 py-2">
             <p className="mb-1.5 font-mono text-[0.7rem] text-muted-foreground">
               {label(mine.path)}:{rangeLabel(mine)}
+              {mine.side === "old" && <DeletedMark />}
               {/* Said out loud, because neither way of growing a range is
                   guessable from a column of plus signs. */}
               <span className="ml-2 font-sans">
@@ -163,8 +167,16 @@ export function ReviewPanel({
                 // The quoted lines come from the buffer the diff is showing,
                 // which is the file including whatever the `Edit` view has typed
                 // into it and not yet saved — the text the reader was looking at.
+                // A deleted line is not in that buffer at all: it is quoted from
+                // the commit, which is the other half of what is on screen.
                 const doc = useFiles.getState().docs[mine.path]
-                const text = doc?.kind === "text" ? doc.text : ""
+                const working = doc?.kind === "text" ? doc.text : ""
+                const text =
+                  mine.side === "old"
+                    ? committed?.path === mine.path
+                      ? committed.text
+                      : ""
+                    : working
                 useReview
                   .getState()
                   .add(body, snippetOf(text, mine.fromLine, mine.toLine))
@@ -185,6 +197,24 @@ export function ReviewPanel({
         </ul>
       </div>
     </div>
+  )
+}
+
+/**
+ * The one word that says a range is not in the file any more.
+ *
+ * Said in the list rather than left to the reader's memory of which row they
+ * clicked: `a.ts:772` means two different lines depending on the side, and the
+ * one thing that separates them is this.
+ */
+function DeletedMark() {
+  return (
+    <span
+      className="ml-1.5 rounded-sm bg-destructive/15 px-1 py-px font-sans text-[0.6rem] text-destructive"
+      title="These lines were deleted — the numbers are the committed file's"
+    >
+      deleted
+    </span>
   )
 }
 
@@ -233,6 +263,7 @@ function Thread({
           className="min-w-0 flex-1 truncate text-left font-mono text-[0.7rem] text-muted-foreground hover:text-foreground"
         >
           {label}:{rangeLabel(thread)}
+          {thread.side === "old" && <DeletedMark />}
         </button>
         <Button
           variant="ghost"

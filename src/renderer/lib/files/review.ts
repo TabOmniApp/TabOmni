@@ -34,11 +34,19 @@ import { create } from "zustand"
  * reviewed and what the chat is started in. Comments on several files are one
  * review, which is the whole point of the button.
  *
- * The line numbers are the **working file's**, not the diff's own: they are what
- * an agent can open the file at, and the new-side column is what the reader was
- * looking at when they clicked. A removed line cannot be commented on for that
- * reason — it has no line in the file to point at — and the kept line beside it
- * is where such a remark goes.
+ * **A comment has a side**, the way one on a pull request does. Most are on the
+ * *new* side, and their line numbers are the working file's — what an agent can
+ * open the file at. A comment on a line that was **deleted** has nowhere in the
+ * working file to point at, so it is numbered in the commit instead
+ * (`side: "old"`), and the prompt says so where it quotes it: the lines
+ * themselves are what the remark is about, and they are captured when it is
+ * written. Deleted code is half of what a review is about — "this was load
+ * bearing", "why did this go" — and before this it had to be retyped into the
+ * chat by hand, which is the thing this feature exists to stop.
+ *
+ * A range is on one side or the other and never both: the two are numbered in
+ * different files, so a range spanning them is not something either could be
+ * opened at.
  */
 
 /**
@@ -49,6 +57,24 @@ import { create } from "zustand"
  * a thread that reads as the reviewer's own once there are two of them in a pane.
  */
 export type ReviewAuthor = "you" | "agent"
+
+/**
+ * Which file a thread's line numbers are in.
+ *
+ * `new` is the working file — the diff's right-hand side, and every kept or
+ * added line. `old` is the commit, which is where a deleted line still exists:
+ * in the unified diff those rows are the merge extension's block widgets, and in
+ * the split one they are the left-hand editor.
+ */
+export type ReviewSide = "new" | "old"
+
+/** Where a comment is being left: the checkout, the file, and which side of the
+ * diff the line numbers belong to. */
+export type ReviewPlace = {
+  rootId: string
+  path: string
+  side: ReviewSide
+}
 
 /** One thing said in a thread. */
 export type ReviewNote = {
@@ -64,7 +90,9 @@ export type ReviewThread = {
   rootId: string
   /** Absolute, as every path in the Explorer is. */
   path: string
-  /** Inclusive, in the working file. A single line is `from === to`. */
+  /** Which file the two numbers below are in — see `ReviewSide`. */
+  side: ReviewSide
+  /** Inclusive, in the file `side` names. A single line is `from === to`. */
   fromLine: number
   toLine: number
   /**
@@ -85,6 +113,7 @@ export type ReviewThread = {
 export type PendingRange = {
   rootId: string
   path: string
+  side: ReviewSide
   fromLine: number
   toLine: number
   /**
@@ -112,6 +141,9 @@ export type ThreadInput = {
   snippet: string
   body: string
   author?: ReviewAuthor
+  /** The working file unless said otherwise: a caller with a line number in
+   * hand — an agent leaving its own review — means the file as it is now. */
+  side?: ReviewSide
 }
 
 type ReviewState = {
@@ -131,20 +163,30 @@ type ReviewState = {
    * `drafts` note in `review-marks.ts`.
    */
   replyTo: string | null
+  /**
+   * The committed text of the file the diff is showing, or null.
+   *
+   * Here because of one thing only: a comment on a **deleted** line quotes lines
+   * that are not in the working file, so `snippetOf` has to read them out of the
+   * commit — and the panel that writes the thread has the working buffer to hand
+   * and not this. It is pushed in by the diff (`codemirror-diff.tsx`), which is
+   * the one place that holds both halves of what is on screen.
+   *
+   * One file rather than a cache: the pane draws one diff, and a committed text
+   * kept for a file nobody is looking at is a copy of a file going stale.
+   */
+  committed: { path: string; text: string } | null
 
   /**
    * A click in the review gutter.
    *
    * `extend` is a shift-click, which grows the range the way a diff is selected
-   * everywhere else. It only extends a range **in the same file**: a shift-click
-   * after switching files is a new range rather than one spanning two files,
-   * which is not a thing a comment can be about.
+   * everywhere else. It only extends a range **in the same file and on the same
+   * side**: a shift-click after switching files is a new range rather than one
+   * spanning two files, and one that lands on a deleted line after a kept one is
+   * a new range because the two are numbered in different files.
    */
-  pick: (
-    place: { rootId: string; path: string },
-    line: number,
-    extend: boolean
-  ) => void
+  pick: (place: ReviewPlace, line: number, extend: boolean) => void
   /**
    * A range dragged from one line to another — the pointer held down in the
    * review column and moved.
@@ -155,11 +197,7 @@ type ReviewState = {
    * matter — dragging upwards is the same range as dragging down to the same
    * pair.
    */
-  stretch: (
-    place: { rootId: string; path: string },
-    anchor: number,
-    line: number
-  ) => void
+  stretch: (place: ReviewPlace, anchor: number, line: number) => void
   /** The pointer let go: the range stops being dragged and the box opens. */
   settle: () => void
   cancel: () => void
@@ -184,6 +222,8 @@ type ReviewState = {
   remove: (threadId: string) => void
   /** Everything for one root — `Discard`, and what sending the review does. */
   clear: (rootId: string) => void
+  /** What the diff on screen is comparing against — see `committed`. */
+  showing: (path: string, text: string) => void
 }
 
 /** Ids are unique within a run and mean nothing outside it, which is all a
@@ -195,11 +235,15 @@ export const useReview = create<ReviewState>((set, get) => ({
   threads: [],
   pending: null,
   replyTo: null,
+  committed: null,
 
   pick(place, line, extend) {
     const { pending } = get()
     const grow =
-      extend && pending !== null && pending.path === place.path
+      extend &&
+      pending !== null &&
+      pending.path === place.path &&
+      pending.side === place.side
         ? extendTo(pending, line)
         : null
 
@@ -207,6 +251,7 @@ export const useReview = create<ReviewState>((set, get) => ({
       pending: grow ?? {
         rootId: place.rootId,
         path: place.path,
+        side: place.side,
         fromLine: line,
         toLine: line,
         settled: false,
@@ -219,6 +264,7 @@ export const useReview = create<ReviewState>((set, get) => ({
       pending: {
         rootId: place.rootId,
         path: place.path,
+        side: place.side,
         fromLine: Math.min(anchor, line),
         toLine: Math.max(anchor, line),
         settled: false,
@@ -264,6 +310,7 @@ export const useReview = create<ReviewState>((set, get) => ({
           id,
           rootId: input.rootId,
           path: input.path,
+          side: input.side ?? "new",
           fromLine: input.fromLine,
           toLine: input.toLine,
           snippet: input.snippet,
@@ -306,6 +353,15 @@ export const useReview = create<ReviewState>((set, get) => ({
       threads: get().threads.filter((thread) => thread.id !== threadId),
       replyTo: get().replyTo === threadId ? null : get().replyTo,
     })
+  },
+
+  showing(path, text) {
+    // Guarded rather than set blind: this is called from an effect that runs on
+    // every rebuild of the diff, and a `set` with the same pair would re-render
+    // every subscriber of the review for nothing.
+    const held = get().committed
+    if (held?.path === path && held.text === text) return
+    set({ committed: { path, text } })
   },
 
   clear(rootId) {
@@ -352,15 +408,18 @@ export function noteCount(threads: ReviewThread[]): number {
  * Which of one file's lines carry a thread, as a flat set.
  *
  * A set rather than the ranges, because the caller is a gutter marker asking
- * about one line at a time and there is one of those per row on screen.
+ * about one line at a time and there is one of those per row on screen. One
+ * side at a time for the same reason a range cannot span both: line 12 of the
+ * commit and line 12 of the working file are two different rows.
  */
 export function commentedLines(
   threads: ReviewThread[],
-  path: string
+  path: string,
+  side: ReviewSide = "new"
 ): Set<number> {
   const lines = new Set<number>()
   for (const thread of threads) {
-    if (thread.path !== path) continue
+    if (thread.path !== path || thread.side !== side) continue
     for (let line = thread.fromLine; line <= thread.toLine; line += 1) {
       lines.add(line)
     }
@@ -416,6 +475,11 @@ const AUTHOR_LABEL: Record<ReviewAuthor, string> = {
  * that is what a turn reads best, and fenced code because a snippet with a `#`
  * in it would otherwise be a heading.
  *
+ * A **deleted** thread's heading says so, since its numbers are the commit's and
+ * an agent that opened the working file at one of them would be looking at
+ * whatever moved up into the gap. The quoted lines are the address in that case,
+ * which the preamble says out loud.
+ *
  * A thread with one note is that note, unattributed: naming an author in a
  * conversation with one voice is noise. A thread with several is the exchange,
  * each line labelled, because who said what is the whole content of a
@@ -439,7 +503,11 @@ export function reviewPrompt(
     path.startsWith(rootPath + "/") ? path.slice(rootPath.length + 1) : path
 
   const blocks = threads.map((thread) => {
-    const where = `${relative(thread.path)}:${rangeLabel(thread)}`
+    // The side is said on every heading that needs it rather than once at the
+    // top, because a turn reads these one at a time and acting on a deleted
+    // line's number as if it were the working file's is the mistake this stops.
+    const side = thread.side === "old" ? " (deleted — numbers are the commit's)" : "" // prettier-ignore
+    const where = `${relative(thread.path)}:${rangeLabel(thread)}${side}`
     const quoted = thread.snippet
       ? ["", "```", thread.snippet, "```"].join("\n")
       : ""
@@ -460,6 +528,8 @@ export function reviewPrompt(
     `Code review of the uncommitted changes in this checkout — ${count} below.`,
     "",
     "Each heading is a file and the lines it is about, followed by those lines as they read when the comment was written, then what was said about them. Line numbers may have moved since; the quoted lines are what was meant.",
+    "",
+    "A heading marked *deleted* is about lines this change removed: those numbers are the committed file's, and there is nothing at them in the working file. Find the code by what is quoted, not by the number.",
     "",
     "Address every one of them. Where a comment is a question rather than a change, answer it instead of editing.",
     "",

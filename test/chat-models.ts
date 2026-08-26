@@ -79,22 +79,17 @@ section("chatEfforts: what to offer over a model")
     chatEfforts(CHAT_MODEL_FALLBACK, "opus").length === 5
   )
   /*
-   * Four different answers off one list, which is the whole reason `efforts` is
-   * per model rather than a constant.
-   *
-   * `haiku` is the one that genuinely takes none, and it is `[]` rather than
-   * `null` for that reason. **`fable` takes all five** — confirmed against the
-   * CLI, not inferred. This line asserted zero for it while the row in
-   * `CHAT_MODEL_FALLBACK` had always offered the full set, so the suite was
-   * failing on a disagreement between two halves of one commit rather than on
-   * anything being wrong with the code.
+   * Every row in `CHAT_MODEL_FALLBACK` carries `efforts: null` on purpose —
+   * nobody has asked the CLI yet, so nobody knows what any of these aliases
+   * actually support — and `chatEfforts` reads `null` as "offer them all"
+   * rather than as a claim about the model. So every alias in the fallback,
+   * known or not, offers the full set until the CLI answers for real.
    */
   check(
-    "models have distinct effort counts",
-    chatEfforts(CHAT_MODEL_FALLBACK, "sonnet").length === 3 &&
-      chatEfforts(CHAT_MODEL_FALLBACK, "haiku").length === 0 &&
-      chatEfforts(CHAT_MODEL_FALLBACK, "fable").length === 5 &&
-      chatEfforts(CHAT_MODEL_FALLBACK, "sonnet-5-1m").length === 4
+    "every fallback alias offers all five, since nobody has asked yet",
+    CHAT_MODEL_FALLBACK.every(
+      (entry) => chatEfforts(CHAT_MODEL_FALLBACK, entry.value).length === 5
+    )
   )
 }
 
@@ -121,23 +116,25 @@ section("orderedModels: the menu's order")
   check("an empty answer is an empty menu", orderedModels([]).length === 0)
 
   const fallbackOrder = orderedModels(CHAT_MODEL_FALLBACK).map((e) => e.label)
-  check("fallback has 9 models", CHAT_MODEL_FALLBACK.length === 9)
+  // Aliases the CLI has always resolved for itself, and nothing invented —
+  // see the comment on `CHAT_MODEL_FALLBACK`.
+  check("fallback has 4 models", CHAT_MODEL_FALLBACK.length === 4)
   check(
-    "fallback maintains screenshot order",
-    fallbackOrder[0] === "Fable 5" &&
-      fallbackOrder[1] === "Opus 5" &&
-      fallbackOrder[2] === "Opus 4.8 1M" &&
-      fallbackOrder[8] === "Haiku 4.5",
+    "fallback keeps its own order",
+    fallbackOrder[0] === "Default (recommended)" &&
+      fallbackOrder[1] === "Opus" &&
+      fallbackOrder[2] === "Sonnet" &&
+      fallbackOrder[3] === "Haiku",
     fallbackOrder
   )
   check(
-    "badges and favorites are set",
-    CHAT_MODEL_FALLBACK[1]?.isNew === true &&
-      CHAT_MODEL_FALLBACK[2]?.isFavorite === true
+    "the recommended row is favorited",
+    CHAT_MODEL_FALLBACK.find((entry) => entry.value === "default")
+      ?.isFavorite === true
   )
 }
 
-section("mergeModels: preserves full list while merging CLI discoveries")
+section("mergeModels: the CLI's own list, decorated with the preset's order")
 {
   const discovered = [
     readModel(
@@ -150,15 +147,19 @@ section("mergeModels: preserves full list while merging CLI discoveries")
     readModel(row({ value: "haiku", supportsEffort: false })),
   ]
   const merged = mergeModels(CHAT_MODEL_FALLBACK, discovered)
-  check("preserves all 9 preset models", merged.length === 9)
+  check("the CLI's answer is the list, not the preset's", merged.length === 2)
   check(
-    "updates effort levels from CLI",
+    "keeps the CLI's own effort levels",
     merged.find((m) => m.value === "opus")?.efforts?.length === 2 &&
       merged.find((m) => m.value === "haiku")?.efforts?.length === 0
   )
   check(
-    "empty discovery leaves preset intact",
-    mergeModels(CHAT_MODEL_FALLBACK, []).length === 9
+    "decorates a matching row with the preset's order",
+    merged.find((m) => m.value === "opus")?.order === 2
+  )
+  check(
+    "empty discovery leaves the preset intact",
+    mergeModels(CHAT_MODEL_FALLBACK, []).length === 4
   )
 }
 

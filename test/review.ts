@@ -29,11 +29,13 @@ const thread = (
   fromLine: number,
   toLine: number,
   said: [Author, string][],
-  snippet = ""
+  snippet = "",
+  side: "new" | "old" = "new"
 ) => ({
-  id: `${path}:${fromLine}`,
+  id: `${path}:${side}:${fromLine}`,
   rootId: "root",
   path,
+  side,
   fromLine,
   toLine,
   snippet,
@@ -50,6 +52,7 @@ async function main() {
   const range = {
     rootId: "r",
     path: "/w/a.ts",
+    side: "new" as const,
     fromLine: 10,
     toLine: 10,
     settled: true,
@@ -74,7 +77,10 @@ async function main() {
   section("the store's own picking")
 
   const review = useReview.getState()
-  const place = { rootId: "root", path: "/w/a.ts" }
+  const place = { rootId: "root", path: "/w/a.ts", side: "new" as const }
+  /** The same file's deleted lines: numbered in the commit, which is what makes
+   * them a different place from `place` despite the same path. */
+  const deleted = { rootId: "root", path: "/w/a.ts", side: "old" as const }
 
   review.pick(place, 10, false)
   check(
@@ -136,7 +142,7 @@ async function main() {
   review.pick(place, 10, false)
   review.settle()
 
-  review.pick({ rootId: "root", path: "/w/b.ts" }, 3, true)
+  review.pick({ rootId: "root", path: "/w/b.ts", side: "new" }, 3, true)
   check(
     "a shift-click in another file starts again",
     useReview.getState().pending?.path === "/w/b.ts" &&
@@ -157,13 +163,66 @@ async function main() {
     saved.threads
   )
 
-  review.pick({ rootId: "root", path: "/w/b.ts" }, 9, false)
+  review.pick({ rootId: "root", path: "/w/b.ts", side: "new" }, 9, false)
   review.settle()
   review.add("   ", "")
   check(
     "an empty comment is a cancel rather than a blank remark",
     useReview.getState().threads.length === 1 &&
       useReview.getState().pending === null
+  )
+
+  section("the deleted side")
+
+  review.pick(place, 20, false)
+  review.pick(deleted, 772, true)
+  check(
+    "a shift-click on a deleted line starts a range rather than growing the kept one",
+    useReview.getState().pending?.side === "old" &&
+      useReview.getState().pending?.fromLine === 772 &&
+      useReview.getState().pending?.toLine === 772,
+    "the two sides are numbered in different files, so no range spans them"
+  )
+
+  review.pick(deleted, 775, true)
+  check(
+    "and one deleted line extends to another",
+    useReview.getState().pending?.fromLine === 772 &&
+      useReview.getState().pending?.toLine === 775 &&
+      useReview.getState().pending?.side === "old"
+  )
+
+  review.settle()
+  review.add("why did this go?", "  return")
+  const removed = useReview.getState().threads.at(-1)
+  check(
+    "a comment on deleted lines is kept as the commit's",
+    removed?.side === "old" &&
+      removed?.fromLine === 772 &&
+      removed?.notes[0]?.body === "why did this go?",
+    removed
+  )
+
+  review.remove(removed!.id)
+
+  check(
+    "a line number means one row on one side and nothing on the other",
+    (() => {
+      const lines = [
+        thread("/w/a.ts", 12, 12, [["you", "kept"]]),
+        thread("/w/a.ts", 40, 41, [["you", "gone"]], "", "old"),
+      ]
+      const now = commentedLines(lines, "/w/a.ts")
+      const before = commentedLines(lines, "/w/a.ts", "old")
+      return (
+        now.size === 1 &&
+        now.has(12) &&
+        before.size === 2 &&
+        before.has(40) &&
+        !before.has(12)
+      )
+    })(),
+    "the gutter asks about one side at a time, and the removed rows are the other"
   )
 
   section("answering one")
@@ -304,6 +363,32 @@ async function main() {
   )
 
   check("the count is stated", prompt.includes("2 comments"))
+
+  const gone = reviewPrompt(
+    [
+      thread(
+        "/w/repo/src/a.ts",
+        772,
+        773,
+        [["you", "this was load bearing"]],
+        "return\n}",
+        "old"
+      ),
+    ],
+    "/w/repo"
+  )
+
+  check(
+    "a comment on deleted lines says so on its own heading",
+    gone.includes("### src/a.ts:772–773 (deleted — numbers are the commit's)"),
+    gone
+  )
+
+  check(
+    "and the preamble says what to go by instead of the number",
+    gone.includes("Find the code by what is quoted, not by the number."),
+    "a turn that opened the working file at 772 would be reading whatever moved up into the gap"
+  )
 
   check(
     "and one comment is not stated as 1 comments",
