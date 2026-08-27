@@ -87,7 +87,6 @@ const {
   docker,
   terminals,
   preview,
-  mcp,
   worktreeChats,
   tsServers,
   watchers,
@@ -248,16 +247,12 @@ app.on("before-quit", (event) => {
       // awaited, since an Electron that exits first would leave them running
       // with nobody to reattach them to.
       // The note preview holds a port, and outliving the app would leave the
-      // workspace's notes being served by a process nobody can see. The MCP
-      // servers hold one for the same reason and are closed with it — the
-      // sessions they answered are being killed above, and the config file
-      // pointing at them is rewritten with a new port and secret next launch.
+      // workspace's notes being served by a process nobody can see.
       Promise.allSettled([
         terminals.killAll(),
         docker.stopAll(),
         sqlConnections.closeAll(),
         preview.stop(),
-        mcp.stop(),
         // A turn in flight is a `claude` this app spawned; it goes with the app
         // rather than being left talking to a window that has gone.
         worktreeChats.dispose(),

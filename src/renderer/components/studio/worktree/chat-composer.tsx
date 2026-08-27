@@ -1,10 +1,12 @@
 import {
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   type ComponentProps,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react"
 import {
   ArrowUp,
@@ -49,7 +51,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
-import { relativeTo } from "@/lib/files/paths"
+import { quotePath, relativeTo } from "@/lib/files/paths"
 import { useGitStatus } from "@/lib/files/git-status"
 import { iconFor } from "@/lib/files/icons"
 import { useFiles } from "@/lib/files/store"
@@ -117,7 +119,22 @@ const KIND_HUE: Record<PlainMentionKind, string> = {
   file: "var(--section-files)",
 }
 
+/**
+ * The one thing anything outside this component may do to the field.
+ *
+ * The draft is deliberately uncontrolled (see `initialDraft`), so a pane that
+ * wants a path in the message cannot put it there by handing a value down — it
+ * asks the field to type it, the way the `+` menu's picker does. That is the
+ * whole handle, and it should stay that way.
+ */
+export type ChatComposerHandle = {
+  /** Writes absolute paths at the caret, each one relative to `attachRoot`
+   * where it is inside it. */
+  insertPaths: (paths: string[]) => void
+}
+
 export function ChatComposer({
+  ref,
   sending,
   onSend,
   onStop,
@@ -128,6 +145,9 @@ export function ChatComposer({
   initialDraft = "",
   onLeave,
 }: {
+  /** The pane's way in, for a file dropped anywhere over the conversation
+   * rather than on the field itself — see `ChatComposerHandle`. */
+  ref?: RefObject<ChatComposerHandle | null>
   sending: boolean
   onSend: (text: string) => void
   onStop: () => void
@@ -295,12 +315,19 @@ export function ChatComposer({
    */
   async function attach() {
     const picked = await window.desktop.pickFiles(attachRoot).catch(() => [])
-    if (picked.length === 0) return
+    insertPaths(picked)
+  }
+
+  /** The same insertion for a file arriving any other way: dropped on the pane,
+   * or picked in the dialog above. */
+  function insertPaths(paths: string[]) {
+    if (paths.length === 0) return
 
     const element = field.current
     const caret = element?.selectionStart ?? draft.length
-    const written = picked
+    const written = paths
       .map((path) => (attachRoot ? relativeTo(attachRoot, path) : path))
+      .map(quotePath)
       .join(" ")
 
     // Spaced off whatever is already there, so a path does not run into the end
@@ -315,6 +342,11 @@ export function ChatComposer({
     setDraft(before + insertion + after)
     setMenu(null)
   }
+
+  // Rebuilt every render on purpose: it closes over the draft and the caret as
+  // they stand, and a memoised one would type into the field as it was when the
+  // pane last re-rendered.
+  useImperativeHandle(ref, () => ({ insertPaths }))
 
   /**
    * Sends, whatever the chat is doing.

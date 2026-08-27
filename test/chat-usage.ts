@@ -332,12 +332,12 @@ section("the context window")
    */
   check(
     "a live figure beats the last turn's",
-    chatLine(total, 52_000)?.includes("52.0k context"),
+    chatLine(total, 52_000)?.includes("52.0k context") === true,
     chatLine(total, 52_000)
   )
   check(
     "and the last turn's stands in when there is none",
-    chatLine(total)?.includes("41.0k context")
+    chatLine(total)?.includes("41.0k context") === true
   )
   check(
     "a first turn still running is the context alone",
@@ -379,11 +379,17 @@ section("the line somebody reads")
     usageLine(warm).includes("100% cached"),
     usageLine(warm)
   )
-  // The two numbers this whole line exists to put next to each other.
+  // The estimate is the breakdown's, not the line's — the line is token counts.
+  check(
+    "the line carries no money",
+    !usageLine(warm).includes("$") && !usageLine(cold).includes("$"),
+    [usageLine(cold), usageLine(warm)]
+  )
   check(
     "and the estimate keeps its digits under a cent",
-    usageLine(warm).endsWith("$0.0054") && usageLine(cold).endsWith("$0.08"),
-    [usageLine(cold), usageLine(warm)]
+    usageDetail(warm).includes("$0.0054") &&
+      usageDetail(cold).includes("$0.08"),
+    [usageDetail(cold), usageDetail(warm)]
   )
   check(
     "the breakdown splits the prompt three ways",

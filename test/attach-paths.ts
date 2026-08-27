@@ -1,4 +1,4 @@
-import { relativeTo } from "../src/renderer/lib/files/paths"
+import { quotePath, relativeTo } from "../src/renderer/lib/files/paths"
 import { check, finish, section } from "./harness"
 
 /**
@@ -64,6 +64,25 @@ check(
 check(
   "with no root to be relative to, the path is what it was",
   relativeTo("", "/checkouts/fix/src/main.ts") === "/checkouts/fix/src/main.ts"
+)
+
+section("a path with a space in it")
+
+check(
+  // Which is every screenshot macOS has ever taken.
+  "a name with spaces is quoted, so the message says where it ends",
+  quotePath("/Users/me/Desktop/Screenshot 2026-08-27 at 9.14.12 PM.png") ===
+    String.raw`"/Users/me/Desktop/Screenshot 2026-08-27 at 9.14.12 PM.png"`
+)
+
+check(
+  "one without them is left alone",
+  quotePath("src/main/ipc.ts") === "src/main/ipc.ts"
+)
+
+check(
+  "and one already quoted is not quoted twice",
+  quotePath(String.raw`"a file.png"`) === String.raw`"a file.png"`
 )
 
 finish()

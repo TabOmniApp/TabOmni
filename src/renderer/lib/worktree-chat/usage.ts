@@ -63,7 +63,10 @@ export function usageLine(usage: TurnUsage | ChatTotal): string {
   // and `undefined context` on the row of a chat from last week is worse than
   // the chat not saying.
   if (usage.context) parts.push(`${compact(usage.context)} context`)
-  if (usage.costUsd !== null) parts.push(money(usage.costUsd))
+  // The estimate is not on the line, only in `usageDetail` behind the hover: a
+  // running dollar figure under the composer is read every time it changes and
+  // says nothing that can be acted on mid-chat, where the token counts beside
+  // it do. It is still counted and still one hover away.
 
   // A result that reported nothing at all — a crashed turn carries zeroes —
   // rather than a row saying the turn was free.

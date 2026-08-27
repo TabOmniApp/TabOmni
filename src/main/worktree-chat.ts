@@ -60,24 +60,15 @@ import { expandHome } from "./shell-env"
  * prompt is still a turn that stalls — which is why they name their refusals
  * rather than leaving anything merely unlisted.
  *
- * The workspace's MCP servers are handed over, which is the thing no other
- * agent-in-an-editor has: the databases, the saved requests and the notes, in
- * the same conversation as the code — the config, the servers pre-approved,
- * and two `delete_*` tools refused. See `ALLOWED_TOOLS` and
- * `DISALLOWED_TOOLS`.
- *
- * **A turn is started without `--strict-mcp-config`.** There used to be a
- * fence here — a turn saw only the file this app wrote, and a server from the
- * user's own `claude` had to be copied in by name from Settings › MCP before a
- * chat could reach it, which meant an issue tracker already set up in the
- * terminal was invisible from the chat editing the branch the issue is about,
- * for no reason on screen. That copying, the per-server switches and the
- * strict flag are gone: the config named here still carries this app's own
- * three servers, but the CLI is left to merge it with whatever it would
- * already find running plain `claude` in this directory — `~/.claude.json`,
- * a repository's own `.mcp.json`, enabled plugins, claude.ai connectors. A
- * server that works from the dock's Terminal now works from a chat here with
- * nothing switched on for it.
+ * **No MCP config goes over at all.** This app used to serve its own panels as
+ * three `tabomni-*` servers and hand a turn the config naming them; that whole
+ * feature is gone (see `docs/design.md`). What is left is the CLI's own
+ * discovery, which is what a turn has always also had: `~/.claude.json`, a
+ * repository's own `.mcp.json`, enabled plugins, claude.ai connectors, all
+ * merged the way running plain `claude` in this directory would. So a server
+ * that works from the dock's Terminal works from a chat here, with nothing to
+ * switch on for it — and Settings › MCP is a listing of what that came to
+ * rather than a set of switches.
  *
  * **What the chat's own toolbar decides** is on the record rather than here:
  * `WorktreeChatOptions` is a model, an effort and a permission per chat, and a
@@ -137,10 +128,11 @@ type Live = {
 const IDLE_MS = 5 * 60 * 1000
 
 export type WorktreeChatSource = {
-  /** The file `--mcp-config` is pointed at for this app's own three servers,
-   * or null when none of them are switched on. Never paired with
-   * `--strict-mcp-config` — see the class comment above. */
-  mcpConfig: () => Promise<string | null>
+  /** The MCP tools Settings › MCP has switched off, as wire names or server
+   * prefixes — see `MCP_DISABLED_TOOLS_KEY`. Asked per message, like the
+   * profiles: it is an argument the CLI is started with, so a change to it opens
+   * a new session (`signatureOf`). */
+  disabledTools: () => Promise<string[]>
   /** The directory a project names, or null when it has left the workspace —
    * what a chat runs in. */
   folderDir: (folderId: string) => Promise<string | null>
@@ -166,20 +158,14 @@ export type WorktreeChatSource = {
  * would otherwise still be asked about, and in print mode "asked about" means
  * "refused".
  *
- * The `tabomni-*` servers are named as servers rather than as their tools, so a
- * tool added to one later is covered. Handing the
- * config over is not enough on its own — `--mcp-config` says the tools exist and
- * `--allowed-tools` says they may be used without asking, and a turn that had
- * only the first would meet a prompt nobody is there to answer. That was the
- * gap: this chat was given the workspace's servers and could not call them.
  * `ToolSearch` is on the list because a CLI configured to defer tools reaches an
- * MCP tool through it, and being asked to approve a search for a tool is another
- * prompt nobody can answer.
+ * MCP tool through it, and being asked to approve a search for a tool is a
+ * prompt nobody can answer. No MCP server is named here at all: this app no
+ * longer configures one, so it has no name to name — a tool from a server the
+ * CLI found on its own is decided by the mode, which for four of the five means
+ * refused with a message rather than left to stall.
  */
 const ALLOWED_TOOLS = [
-  "mcp__tabomni-database",
-  "mcp__tabomni-api",
-  "mcp__tabomni-notes",
   "ToolSearch",
   "Read",
   "Glob",
@@ -193,25 +179,6 @@ const ALLOWED_TOOLS = [
   "WebFetch",
   "WebSearch",
   "Task",
-]
-
-/**
- * The two the workspace's own tools are refused.
- *
- * Refused for a reason that survives the isolation argument rather than being
- * covered by it: a worktree is a branch, and a saved request is not in any
- * branch. Deleting one is a change to the
- * workspace that no checkout contains and no `git checkout` undoes, there is no
- * trash to fetch it back from, and print mode has nobody to ask first. The chat
- * can still write and change requests — that is the panel being useful — and
- * `delete_folder` cascades, which is what makes it the sharpest of the nine.
- *
- * Bash could do worse to the files in the checkout, and that is the point of
- * the distinction: those files are a branch, and this is not.
- */
-const DISALLOWED_TOOLS = [
-  "mcp__tabomni-api__delete_request",
-  "mcp__tabomni-api__delete_folder",
 ]
 
 /**
@@ -255,13 +222,6 @@ const ASK_TOOL = "AskUserQuestion"
  * of those is trusting that policy rather than this list.
  */
 const READ_TOOLS = [
-  "mcp__tabomni-database__list_databases",
-  "mcp__tabomni-database__list_tables",
-  "mcp__tabomni-database__query",
-  "mcp__tabomni-api__list_requests",
-  "mcp__tabomni-api__get_request",
-  "mcp__tabomni-notes__list_notes",
-  "mcp__tabomni-notes__read_note",
   "ToolSearch",
   "Read",
   "Glob",
@@ -348,19 +308,18 @@ const PERMISSIONS: Record<
   ask: { allowed: READ_TOOLS, prompt: ASK_PROMPT, asks: true },
   edits: { allowed: ALLOWED_TOOLS },
   /*
-   * Nothing is refused except `DISALLOWED_TOOLS` and `ASK_TOOL`, and nothing
-   * else is asked.
+   * Nothing is refused except `ASK_TOOL`, and nothing else is asked.
    *
-   * This was `bypassPermissions`, and dropping it is what turned the two
-   * `delete_*` refusals from a request into a guarantee: that mode
-   * auto-approves every call before `canUseTool` is reached, so what this app
-   * had named as refused was the CLI's business rather than this app's. With
-   * every mode on one `permissionMode` the refusal is enforced here, and
-   * `Full access` still means what its tooltip says — a turn reaching for a
-   * tool this app never listed runs rather than stalling. `AskUserQuestion`
-   * is the one exception `permitting` carves out of "everything": without it,
-   * `full`'s own `allowed: undefined` would auto-answer the model's question
-   * with its own unanswered input before `onAsk` ever saw it.
+   * This was `bypassPermissions`, and dropping it is what keeps every mode on
+   * one `permissionMode`: that mode auto-approves every call before
+   * `canUseTool` is reached, so anything this app named as refused was the
+   * CLI's business rather than this app's — and one `permissionMode` across the
+   * five is what keeps one cached prefix serving all of them. `Full access`
+   * still means what its tooltip says: a turn reaching for a tool this app
+   * never listed runs rather than stalling. `AskUserQuestion` is the one
+   * exception `permitting` carves out of "everything": without it, `full`'s own
+   * `allowed: undefined` would auto-answer the model's question with its own
+   * unanswered input before `onAsk` ever saw it.
    */
   full: {},
 }
@@ -368,10 +327,12 @@ const PERMISSIONS: Record<
 /**
  * One `permits` for `claude-agent.ts`, out of a mode's list.
  *
- * A server prefix (`mcp__tabomni-api`) stands for every tool on that server,
- * which is what `ALLOWED_TOOLS` has always meant by naming the three servers
- * rather than their nine tools — that reading was the CLI's before this moved
- * in-process, and it has to be kept or `edits` loses the workspace's writers.
+ * Names, matched whole. It used to also read an entry as a server prefix, so
+ * `mcp__tabomni-api` stood for every tool on that server; nothing names a
+ * server here any more — this app configures none — and a prefix rule with no
+ * entry to apply to is a rule that only matters the day somebody misreads it.
+ * A tool from a server the CLI found on its own is on no mode's list, which is
+ * the point: the modes below say what happens to it.
  *
  * `ASK_TOOL` never comes back permitted, `full`'s `allowed: undefined`
  * included: `deciding` in `claude-agent.ts` only reaches `onAsk` for a call
@@ -380,21 +341,8 @@ const PERMISSIONS: Record<
  */
 function permitting(allowed: string[] | undefined): (name: string) => boolean {
   if (!allowed) return (name) => name !== ASK_TOOL
-  return (name) =>
-    name !== ASK_TOOL &&
-    allowed.some((entry) => name === entry || name.startsWith(`${entry}__`))
+  return (name) => name !== ASK_TOOL && allowed.includes(name)
 }
-
-/**
- * What the model is told about where it is.
- *
- * Short, because the CLI can see the working directory for itself. What it
- * cannot see is what the `tabomni-*` tools are attached to: a tool
- * list says what a tool does, not that the databases and requests it reaches
- * belong to the workspace this checkout is part of.
- */
-const WORKSPACE_PROMPT =
-  "The workspace's databases, saved HTTP requests and notes are the `tabomni-*` MCP tools, and they belong to the whole workspace rather than to this directory; prefer them over guessing."
 
 /**
  * What the turn is told it is in, and what that costs it.
@@ -405,11 +353,12 @@ const WORKSPACE_PROMPT =
  * checked out elsewhere" — which is false here and is the one line worth
  * getting right, since it decides how freely a turn reaches for `Bash` and how
  * much it bothers to ask.
+ *
+ * One sentence rather than the two it was: the second told the turn what the
+ * `tabomni-*` tools were attached to, and there are no such tools now.
  */
-const SYSTEM_PROMPT = [
-  "You are a chat in a project inside TabOmni, a desktop studio: this directory is the user's own working tree on whatever branch they have checked out, so edits and commands here change the files they are working in. There is no isolation to fall back on — prefer the smallest change that does the job, and say what you are about to do before doing anything wide-reaching.",
-  WORKSPACE_PROMPT,
-].join(" ")
+const SYSTEM_PROMPT =
+  "You are a chat in a project inside TabOmni, a desktop studio: this directory is the user's own working tree on whatever branch they have checked out, so edits and commands here change the files they are working in. There is no isolation to fall back on — prefer the smallest change that does the job, and say what you are about to do before doing anything wide-reaching."
 
 export class WorktreeChats {
   /** A turn per chat, keyed by chat id. Several chats can be answering at once,
@@ -602,10 +551,11 @@ export class WorktreeChats {
     message: string
   ): Promise<void> {
     // Asked per message rather than held, because Settings can be changed
-    // between two messages in the same chat — and unlike the model, this one is
-    // an argument the CLI was started with, so a change to it needs a new
-    // process. Same for the profile below.
-    const mcpConfig = await this.source.mcpConfig()
+    // between two messages in the same chat — and unlike the model, this is an
+    // argument the CLI was started with, so a change to it needs a new process.
+    // Sorted so that two lists with the same tools in a different order are the
+    // same signature and do not close a session for nothing.
+    const disabledTools = [...(await this.source.disabledTools())].sort()
 
     // Looked up by id rather than trusted whole: a profile named on the record
     // can have been renamed or deleted since — see `WorktreeChatOptions.
@@ -623,7 +573,7 @@ export class WorktreeChats {
       : null
     const configDir = profileConfigDir ? expandHome(profileConfigDir) : null
 
-    const signature = signatureOf(cwd, configDir, mcpConfig)
+    const signature = signatureOf(cwd, configDir, disabledTools)
 
     const live = this.live.get(id)
     if (live) {
@@ -680,8 +630,8 @@ export class WorktreeChats {
       id,
       cwd,
       options,
-      mcpConfig,
       configDir,
+      disabledTools,
       resume,
       message
     )
@@ -862,8 +812,10 @@ export class WorktreeChats {
     id: string,
     cwd: string,
     options: WorktreeChatOptions,
-    mcpConfig: string | null,
     configDir: string | null,
+    /** The workspace's switched-off MCP tools — see `AgentSessionOptions.
+     * disallowedTools`. */
+    disabledTools: string[],
     resume: boolean,
     /** The message the session is being opened for, queued by
      * `startAgentSession` before it waits for the CLI. */
@@ -894,11 +846,10 @@ export class WorktreeChats {
         // goes to the CLI is identical for every mode, which is what keeps one
         // cached prefix serving all five — see `permits` in `claude-agent.ts`.
         permits: (name) => permitting(this.permissionOf(id).allowed)(name),
-        disallowedTools: DISALLOWED_TOOLS,
+        // Not a mode's business and not read per call: the same list for every
+        // turn of this session, which is what keeps it inside the cached prefix.
+        disallowedTools: disabledTools,
         permissionMode: "manual",
-        // No `--strict-mcp-config` — see the class comment above. The CLI
-        // merges this with whatever it would already find on its own.
-        mcpConfig,
         // The same sentence for every mode. What the mode is goes at the head of
         // each message instead: this one is part of the cached prefix, and one
         // session answers messages sent under several modes.
@@ -1026,7 +977,15 @@ export class WorktreeChats {
     if (!resume && exitError !== null && isSessionTaken(exitError)) {
       // The same message, which the retry is *for* — it was never delivered, and
       // it is already written down, so it must not be appended again.
-      return this.open(id, cwd, options, mcpConfig, configDir, true, message)
+      return this.open(
+        id,
+        cwd,
+        options,
+        configDir,
+        disabledTools,
+        true,
+        message
+      )
     }
 
     this.live.delete(id)
@@ -1484,27 +1443,31 @@ export function said(ask: WorktreeChatAsk, answer: WorktreeChatAnswer): string {
 /**
  * What a session cannot be changed out from under.
  *
- * The three things the CLI took as arguments and has no control request for: the
- * directory it runs in, the account it runs as, and the MCP config file it was
- * pointed at. A chat whose project moved, whose profile was switched or whose
- * Settings › MCP changed is a chat the running process is answering *wrongly*,
- * so the next message closes it and opens another rather than being queued into
- * it. Model, effort and permission are deliberately absent — those move under a
- * live session, which is the point of `retune`.
+ * The things the CLI took as arguments and has no control request for: the
+ * directory it runs in, the account it runs as, and the tool list it was started
+ * with. A chat whose project moved, whose profile was switched, or whose
+ * switched-off MCP tools changed in Settings is a chat the running process is
+ * answering *wrongly*, so the next message closes it and opens another rather
+ * than being queued into it. (There was a fourth — the MCP config file this app
+ * wrote — and it went with the servers it named.) Model, effort and permission
+ * are deliberately absent: those move under a live session, which is the point
+ * of `retune`.
  *
  * A joined string rather than an object compared field by field, because it is
  * only ever tested for equality and a null is a real value here: "no profile" is
  * a state a session can be in, and it must not compare equal to a profile named
- * `""`. `\0` is the separator because all three are paths and it is the one byte
- * a path cannot hold — a separator that could turn up inside one is two
- * different signatures comparing equal.
+ * `""`. `\0` is the separator because the first two are paths and it is the one
+ * byte a path cannot hold — a separator that could turn up inside one is two
+ * different signatures comparing equal. The tool list is joined on `\n`, which a
+ * tool name cannot hold either, and is expected **sorted** by the caller so that
+ * the same set in another order is the same signature.
  */
 function signatureOf(
   cwd: string,
   configDir: string | null,
-  mcpConfig: string | null
+  disabledTools: string[]
 ): string {
-  return [cwd, configDir ?? "", mcpConfig ?? ""].join("\0")
+  return [cwd, configDir ?? "", disabledTools.join("\n")].join("\0")
 }
 
 /**

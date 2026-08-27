@@ -10,6 +10,9 @@
     "cssVariables": true
   },
   "iconLibrary": "lucide",
+  "registries": {
+    "@svgl": "https://svgl.app/r/{name}.json"
+  },
   "aliases": {
     "components": "@/components",
     "hooks": "@/hooks",

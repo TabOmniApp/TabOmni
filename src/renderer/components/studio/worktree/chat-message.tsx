@@ -2,7 +2,6 @@ import { useState } from "react"
 import {
   Brain,
   Check,
-  ChevronRight,
   Coins,
   Copy,
   FileText,
@@ -13,7 +12,6 @@ import {
 import type { AssistantMessage } from "@shared/api"
 import { iconFor } from "@/lib/files/icons"
 import { nameOf } from "@/lib/files/paths"
-import { useSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import { AGENT_TOOL } from "@/lib/worktree-chat/activity"
 import { usageDetail, usageLine } from "@/lib/worktree-chat/usage"
@@ -41,12 +39,6 @@ import { toolLabel, toolMark } from "./chat-marks"
  * defeats all three.
  */
 export function ChatMessage({ of }: { of: AssistantMessage }) {
-  // Settings › Chat, under the key a chat view that no longer exists wrote.
-  // Read here rather than by the pane: the switch is about the rows, and the
-  // rows are this file.
-  const showToolCalls = useSettings((state) => state.showToolCalls)
-  const showThinking = useSettings((state) => state.showThinking)
-
   if (of.role === "user") {
     return (
       <div className="relative ml-4">
@@ -59,7 +51,6 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
   }
 
   if (of.role === "thinking") {
-    if (!showThinking) return null
     return (
       <div className="flex items-baseline gap-1.5 px-1 text-[0.7rem] text-muted-foreground">
         <Brain className="size-3 shrink-0 translate-y-0.5" />
@@ -75,18 +66,15 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
   }
 
   if (of.role === "tool") {
-    if (!showToolCalls) return null
     return <ToolRow of={of} />
   }
 
   if (of.role === "ask") {
     // A row like a tool call rather than a bubble, and for the same reason: it
-    // is a note about the turn rather than either side speaking. Under
-    // `showToolCalls` too — somebody who has turned the machinery off does not
-    // want half of it back — except that a refusal changed what the turn did,
-    // so it says so either way.
+    // is a note about the turn rather than either side speaking. A refusal is
+    // the same row in the destructive colour, because it changed what the turn
+    // did.
     const refused = of.text.startsWith("Refused")
-    if (!showToolCalls && !refused) return null
     return (
       <div
         className={cn(
@@ -104,8 +92,7 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
     /*
      * What the turn cost, at the end of it.
      *
-     * Outside `showToolCalls` and outside the fold: the cost of a turn is not
-     * part of its working — it is the one line that is about the turn rather
+     * Outside the fold: the cost of a turn is not part of its working — it is the one line that is about the turn rather
      * than in it — and a number somebody has to open a fold to find is a number
      * nobody reads until the bill arrives. One row, muted, with the three prompt
      * figures on the hover line.
@@ -239,16 +226,12 @@ function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
           onClick={() => setOpen(!open)}
           className={cn(TOOL_ROW, "hover:bg-muted/60 hover:text-foreground")}
         >
-          {/* In place of the tool's own mark rather than beside it: two glyphs
-              at the head of a 0.7rem row is a row that leads with punctuation.
-              Which tool it was is the label immediately after. */}
-          <ChevronRight
-            className={cn(
-              "size-3 shrink-0 translate-y-0.5 transition-transform",
-              open && "rotate-90"
-            )}
-          />
-          <ToolLine of={of} said={said} agent={agent} />
+          {/* The tool's own mark on both kinds of row, openable or not: a
+              chevron in its place said "this opens" at the cost of the one
+              thing the eye actually scans a transcript for, which is what ran.
+              That it opens is the argument chip disappearing into the panel. */}
+          {toolMark(of.name, "size-3 shrink-0 translate-y-0.5")}
+          <ToolLine of={of} said={said} agent={agent} open={open} />
         </button>
       ) : (
         <div className={TOOL_ROW}>
@@ -275,22 +258,41 @@ function ToolLine({
   of,
   said,
   agent,
+  open = false,
 }: {
   of: Extract<AssistantMessage, { role: "tool" }>
   said?: string
   agent: boolean
+  /** Whether the panel below is showing. An open row keeps its label and drops
+   * everything the panel is now saying in full — the same argument in both
+   * places reads as two, and the row is what the eye follows down the fold. */
+  open?: boolean
 }) {
   return (
     <>
-      <span className="shrink-0 font-medium text-foreground/80">
+      {/* Shrinks, but a fraction as readily as anything after it: the lead is
+          the row, so it gives way only once the result and the argument have
+          nothing left to give. A `description` is capped at 120 characters too,
+          and unshrinkable it widened the column the same way a result did. */}
+      <span className="min-w-0 shrink-[0.05] truncate font-medium text-foreground/80">
         {agent ? "Agent" : (of.title ?? toolLabel(of.name))}
       </span>
 
       {/* What came back, next to what it was — `Read` and `631 lines` are one
           fact, and putting the count at the end of the row would leave it
-          against whichever argument happened to be longest. */}
-      {said && (
-        <span className={cn("shrink-0", of.failed && "text-destructive/80")}>
+          against whichever argument happened to be longest.
+
+          Truncating rather than `shrink-0`, because this is not always a count:
+          main caps a result at 120 characters, and a fetch whose whole reply is
+          one line of prose arrives as all 120 of them. Unshrinkable, that one row
+          set the transcript's scroll width and put a horizontal scrollbar under
+          the whole conversation — every other row then truncated against the
+          widened column instead of the pane. A short `+4 −1` still shrinks by
+          nothing, since flex takes it out of the widest item first. */}
+      {said && (!open || of.failed) && (
+        <span
+          className={cn("min-w-0 truncate", of.failed && "text-destructive/80")}
+        >
           {said}
         </span>
       )}
@@ -310,8 +312,14 @@ function ToolLine({
         <FileChip path={of.path} />
       ) : (
         !agent &&
+        !open &&
         of.summary && (
-          <span className="min-w-0 truncate font-mono opacity-70">
+          /* A chip rather than bare text, for the reason `FileChip` is one: a
+             command sitting loose on the row read as part of the sentence
+             beside it, and what it is is a value the call was given. Borderless
+             where that one has a border — a path is a thing to click, this is
+             the head of what the panel opens onto. */
+          <span className="min-w-0 truncate rounded bg-muted/60 px-1.5 py-0.5 font-mono opacity-90">
             {of.summary}
           </span>
         )
