@@ -31,8 +31,45 @@ type WorktreeChatState = {
 
   /** Lines per chat, for the chats that have been opened this run. */
   messages: Record<string, AssistantMessage[]>
-  /** Which chats have a turn in flight. */
+  /**
+   * Which chats are having their lines read off disk — the first time one is
+   * opened, and only then (see `select`).
+   *
+   * Separate from `messages[id] === undefined`, which is also what a chat
+   * nobody has opened looks like: the pane draws a welcome for an empty chat
+   * and a skeleton for one still arriving, and it cannot tell those apart from
+   * the lines alone.
+   */
+  reading: string[]
+  /**
+   * Which chats are working on something.
+   *
+   * Not "which have been sent to and not answered yet", which is what it was:
+   * a chat takes a message while it is answering now, so a turn ending is not
+   * the chat going quiet — the one behind it starts on its own. Main owns the
+   * answer and says so with `busy`; the optimistic add in `send` is only there
+   * so the spinner does not wait for the round trip.
+   */
   sending: string[]
+  /**
+   * When each working chat started working, for the elapsed time under the
+   * spinner. Kept beside `sending` rather than in the pane because the pane is
+   * one instance reused across the strip: a clock local to it would restart
+   * every time somebody looked at another chat and came back. Held across a
+   * queued message and an `ask` too — it is how long this stretch of work has
+   * been going, not how long the current turn has.
+   */
+  startedAt: Record<string, number>
+  /**
+   * How full each chat's context window is, as of its last reply.
+   *
+   * Live, and only for the chats a session has spoken for this run: main sends
+   * it per reply rather than per turn, which is the whole point — the figure on
+   * a turn's usage line is the same number an answer late. Nothing keeps it,
+   * so a reloaded window falls back to the last usage line (`totalOf`) until
+   * the next reply arrives.
+   */
+  context: Record<string, number>
   /**
    * The question each chat is stopped on, for the chats that are.
    *
@@ -120,8 +157,11 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
   chats: [],
   loading: false,
   messages: {},
+  reading: [],
   drafts: {},
   sending: [],
+  startedAt: {},
+  context: {},
   asks: {},
   openIds: [],
   selectedId: null,
@@ -174,6 +214,7 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     // so a re-read on every tab switch would be a file read for an answer we
     // already have.
     if (!messages[id]) {
+      set({ reading: [...get().reading, id] })
       void window.desktop
         .readWorktreeChat(id)
         .then((lines) => {
@@ -181,6 +222,12 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
         })
         .catch((error: unknown) => {
           console.error("Could not read that chat", error)
+        })
+        .finally(() => {
+          // In `finally` rather than beside the `set` above: a read that failed
+          // leaves no lines, and a chat left marked as reading would sit under
+          // a skeleton that never resolves.
+          set({ reading: get().reading.filter((entry) => entry !== id) })
         })
     }
   },
@@ -278,17 +325,31 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     get().close(id)
   },
 
+  /**
+   * A message, whether or not the chat is already answering.
+   *
+   * The guard that used to be here — drop it if this chat is `sending` — was the
+   * renderer's half of a rule the main process no longer has: a chat holds its
+   * CLI open, so a second message is queued rather than refused. Enter while a
+   * turn is running now does what it does in the terminal.
+   */
   async send(id, prompt) {
     const text = prompt.trim()
-    if (!text || get().sending.includes(id)) return
+    if (!text) return
 
     // Shown as sent before the turn starts: a composer that empties and then
     // shows nothing for a second reads as a message that went nowhere. This is
     // the *only* copy on screen — main writes the line down but does not
     // announce it, since a `text` event is a line of the answer and the prompt
     // drawn as one appeared twice.
+    const already = get().sending.includes(id)
     set({
-      sending: [...get().sending, id],
+      sending: already ? get().sending : [...get().sending, id],
+      // A message sent into a chat that is already working does not restart the
+      // clock: the work has been going since the first one.
+      startedAt: already
+        ? get().startedAt
+        : { ...get().startedAt, [id]: Date.now() },
       messages: {
         ...get().messages,
         [id]: [
@@ -303,6 +364,7 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
     } catch (error) {
       set({
         sending: get().sending.filter((entry) => entry !== id),
+        startedAt: without(get().startedAt, id),
         messages: {
           ...get().messages,
           [id]: [
@@ -371,16 +433,47 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
         return
       }
 
+      /*
+       * Whether the chat is working, which is main's to say.
+       *
+       * Its own event because `done` is no longer the answer: a message sent
+       * mid-turn is queued, and the turn that runs it starts without anything
+       * arriving here to say so. Set rather than counted — the same value can
+       * arrive twice.
+       */
+      // Where the conversation stands right now. Not a line, so nothing is
+      // appended and no chat is re-read: the number simply moves.
+      if (event.type === "context") {
+        set({ context: { ...get().context, [chatId]: event.tokens } })
+        return
+      }
+
+      if (event.type === "busy") {
+        const sending = get().sending
+        const has = sending.includes(chatId)
+        if (event.busy === has) return
+        set({
+          sending: event.busy
+            ? [...sending, chatId]
+            : sending.filter((entry) => entry !== chatId),
+          startedAt: event.busy
+            ? { ...get().startedAt, [chatId]: Date.now() }
+            : without(get().startedAt, chatId),
+        })
+        return
+      }
+
       if (event.type === "done") {
-        set({ sending: get().sending.filter((entry) => entry !== chatId) })
         // A turn can end while a card is up — Stop, or a failure — and the
         // question died with the process that asked it.
         if (get().asks[chatId]) set({ asks: without(get().asks, chatId) })
-        if (!event.error) {
-          // The listing's title and order moved with the turn.
-          void get().refresh()
-          return
-        }
+        // The listing's title and order moved with the turn. Not on a failure:
+        // its error line is still being written when this arrives, so the
+        // listing would be re-read a beat too early. The line itself comes as
+        // its own `error` event — drawing it from this one showed the failure
+        // twice.
+        if (!event.error) void get().refresh()
+        return
       }
 
       /*
@@ -450,11 +543,11 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
                       role: "ask",
                       text: event.text,
                     }
-                  : event.type === "done" && event.error
+                  : event.type === "error"
                     ? {
                         id: `s${Date.now()}-${Math.random()}`,
                         role: "error",
-                        text: event.error,
+                        text: event.text,
                       }
                     : null
 

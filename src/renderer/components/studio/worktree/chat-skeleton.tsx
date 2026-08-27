@@ -1,47 +1,85 @@
+import { useEffect, useState } from "react"
+
 import { cn } from "@/lib/utils"
 import { Spinner } from "@/components/ui/spinner"
+import { elapsed } from "@/lib/worktree-chat/since"
 
 /**
- * Skeleton loading for the chat pane while a turn is being sent.
- *
- * Replaces the single "Working…" spinner with a set of skeleton blocks that
- * mimic the shape of a real turn — a thinking line, a few tool-call rows,
- * and an assistant bubble — so the user can see something is happening and
- * has a sense of the structure being built.
- *
- * The skeleton is deliberately less structured than the real rows: it should
- * read as "something is happening, the page is alive" without pretending to
- * be exact content.
+ * What the chat pane shows while a turn is being sent: a spinner, and how long
+ * it has been going. Placeholder bars mimicking a turn's shape were tried here
+ * and read as content arriving that never did — the rows a turn actually draws
+ * land within a second of the spinner anyway.
  */
-export function ChatSkeleton() {
+export function ChatSkeleton({ startedAt }: { startedAt?: number }) {
   return (
-    <div className="flex animate-pulse flex-col gap-3">
-      {/* Spinner line — still shows the turn is working */}
-      <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
-        <Spinner className="size-3" />
-        <span className="text-muted-foreground/60">Working…</span>
-      </div>
+    <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+      <Spinner className="size-3" />
+      <span className="text-muted-foreground/60">Working…</span>
+      {startedAt !== undefined && <Elapsed startedAt={startedAt} />}
+    </div>
+  )
+}
 
-      {/* Thinking skeleton */}
-      <SkeletonBlock
-        lines={1}
-        className="ml-8 w-3/5"
-        barClassName="h-3 rounded"
-      />
+/**
+ * The running clock beside `Working…`.
+ *
+ * Its own component so the tick re-renders this line and not the transcript
+ * above it — a pane of rendered markdown redrawn once a second is the whole
+ * chat's worth of work for two changing characters.
+ *
+ * A second is also the resolution the label has, so a faster interval would
+ * only produce renders that draw the same string. `tabular-nums` keeps a digit
+ * changing from nudging the ones beside it.
+ */
+function Elapsed({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now())
 
-      {/* Tool call skeleton */}
-      <SkeletonBlock
-        lines={2}
-        className="ml-8"
-        barClassName="h-[0.6rem] rounded"
-      />
+  // `now` is an absolute time rather than a duration, so it does not need
+  // resetting when `startedAt` changes — the next tick is at most a second away
+  // and the label's resolution is a second.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
 
-      {/* Assistant message skeleton */}
-      <SkeletonBlock
-        lines={3}
-        className="ml-4"
-        barClassName="h-3 rounded last:w-2/3"
-      />
+  return (
+    <span className="text-muted-foreground/50 tabular-nums">
+      {elapsed(startedAt, now)}
+    </span>
+  )
+}
+
+/**
+ * Skeleton for a chat whose lines are still being read off disk — opening a
+ * conversation for the first time this run.
+ *
+ * A different shape from `ChatSkeleton`, which is one turn being worked on at
+ * the end of a transcript: this stands in for a whole conversation, so it is
+ * alternating bubbles down the pane and says nothing about "working". Without
+ * it the pane drew the welcome — "this chat is empty, ask it something" — for
+ * the moment before the lines landed, which is the wrong thing to say about a
+ * chat that has a hundred of them.
+ */
+export function ChatTranscriptSkeleton() {
+  return (
+    <div className="flex animate-pulse flex-col gap-6" aria-hidden>
+      {[0, 1, 2].map((turn) => (
+        <div key={turn} className="flex flex-col gap-3">
+          {/* The user's message: short, and to the right, as a real one is. */}
+          <div className="flex justify-end">
+            <SkeletonBlock
+              lines={1}
+              className="w-2/5"
+              barClassName="h-8 rounded-lg"
+            />
+          </div>
+          <SkeletonBlock
+            lines={turn === 1 ? 4 : 3}
+            className="ml-4"
+            barClassName="h-3 rounded last:w-2/3"
+          />
+        </div>
+      ))}
     </div>
   )
 }

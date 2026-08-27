@@ -1,58 +1,50 @@
-import type { MentionKind } from "../mention-text"
-
 /**
  * The rules a chat composer's `@` follows, with nothing behind them.
  *
- * The same split as `lib/mention-text.ts` against `mentions.ts`, and
- * the same reason: the catalogue touches four zustand stores as it is imported,
- * so this is the half a test can reach.
+ * The split is so a test can reach these: the catalogue next door reads the
+ * Explorer's store as it is imported, and this half is strings and arithmetic.
  *
- * **A mention is a name, and nothing is expanded.** There was a composer that
- * put a chip in the message and swapped it for a line of context on the way
- * out, because a CLI in a pty could see nothing but the prompt. A worktree's
- * chat is the other case: it is started with whichever of the Database, API and
- * Notes MCP servers are switched on, and every one of their tools takes a
- * thing's *name* — so the name is the whole reference. Pasting a table's columns
- * in would be handing the agent a stale copy of something it can read for
- * itself.
+ * **`@` offers the chat's own folders and files, and a mention is a path.**
+ * Nothing is expanded and nothing is attached: the turn runs in the checkout
+ * with `Read`, so `src/main/ipc.ts` is already something the agent can open —
+ * and it is what the agent would have typed itself. Pasting the file in would
+ * be handing it a copy of something that may have changed by the time it looks.
+ *
+ * There was an `@` here that listed the workspace's databases, saved requests
+ * and notes instead, on the grounds that only a studio can offer them. It is
+ * gone: those three are reachable in the turn as MCP tools that take a name,
+ * while the thing somebody actually reaches for mid-sentence is a path, and a
+ * menu of two dozen table names is a menu without the file they meant in it.
+ * See `docs/design.md`.
  *
  * So a mention is plain text, and the highlight is drawn behind it from the
- * catalogue: what is tinted is what the workspace still holds, which means a
- * name typed by hand lights up as well as one picked from the menu, and one
- * whose thing has been deleted stops being tinted.
+ * index: what is tinted is a path the workspace still holds, which means a path
+ * typed by hand lights up as well as one picked from the menu, and one whose
+ * file has been deleted stops being tinted once the index is walked again.
  */
 
-/**
- * What can be mentioned: the catalogue's kinds, plus one.
- *
- * A **database** is mentionable for the same reason the rest of this file
- * exists: a chip has to expand into something, and what a database would expand
- * into is its schema — which means connecting, and a menu opening is not consent
- * to connect (the comment on `primeMentions` in `lib/mentions.ts`). A name needs
- * no connection, and `list_tables` takes one. So the workspace's databases are
- * all offered whether or not the Database panel has opened any of them, and the
- * open one's tables are offered on top.
- */
-export type PlainMentionKind = MentionKind | "database"
+/** A folder or a file — the two things the index holds. */
+export type PlainMentionKind = "file" | "directory"
 
-/** The row's right-hand word — which panel this came from. */
+/** The row's right-hand word. "folder", not "directory": it is what the
+ * Explorer's own menus call one. */
 export const PLAIN_LABELS: Record<PlainMentionKind, string> = {
-  database: "database",
-  table: "table",
-  request: "request",
-  note: "note",
+  directory: "folder",
+  file: "file",
 }
 
-/** A thing a chat can be pointed at, as the menu shows it. No `resolve`: the
- * name is the reference. */
+/** A path a chat can be pointed at, as the menu shows it. */
 export type PlainMention = {
   kind: PlainMentionKind
-  /** Inserted verbatim, and what the MCP tools take — `list_databases`,
-   * `list_tables`, `get_request` and `read_note` all accept a name. */
+  /** Inserted verbatim: the path relative to the chat's checkout, which is the
+   * agent's cwd. */
   label: string
-  /** The row's right-hand hint — which database a table is in, what a request
-   * sends. */
+  /** The row's right-hand hint — what mentioning this would cost the turn. */
   detail: string
+  /** The estimate behind `detail`, kept apart so the row can show it in its own
+   * right and a caller can sort or cap on it. A folder's is everything indexed
+   * under it. */
+  tokens: number
 }
 
 /** Where the `@` being typed starts, and what has been typed after it. */
@@ -60,11 +52,11 @@ export type MentionQuery = { from: number; filter: string }
 
 /**
  * `@` anywhere a word could start rather than only at the start of the message,
- * because a mention belongs mid-sentence ("why is @users slow?"). The leading
- * boundary is what keeps an email address typed into the prompt from opening a
- * menu.
+ * because a mention belongs mid-sentence ("why is @src/main/git.ts slow?"). The
+ * leading boundary is what keeps an email address typed into the prompt from
+ * opening a menu.
  */
-const QUERY = /(?:^|\s)@([\w./:-]*)$/
+const QUERY = /(?:^|\s)@([\w./:@-]*)$/
 
 /** The mention query the caret is sitting in, or null when it is not in one. */
 export function mentionQuery(text: string, caret: number): MentionQuery | null {
@@ -75,11 +67,11 @@ export function mentionQuery(text: string, caret: number): MentionQuery | null {
 }
 
 /**
- * The draft with the typed `@query` replaced by the name, and where the caret
+ * The draft with the typed `@query` replaced by the path, and where the caret
  * lands.
  *
- * A space follows, so the next word is not typed onto the end of the name — and
- * so the tint, which ends at the name, does not appear to swallow it. Not a
+ * A space follows, so the next word is not typed onto the end of the path — and
+ * so the tint, which ends at the path, does not appear to swallow it. Not a
  * second one where the draft already had one: picking a row in the middle of a
  * finished sentence must not push its words apart.
  */
@@ -96,28 +88,115 @@ export function insertMention(
   }
 }
 
-/** A run of the draft, tinted when it names something the workspace holds. */
-export type MentionSegment = { text: string; kind: PlainMentionKind | null }
+/**
+ * How many bytes of source a token is worth.
+ *
+ * Four is the figure Anthropic's own docs give for English and it holds close
+ * enough for code. Deliberately an estimate from the size rather than a count
+ * from the text: the index walks twenty thousand paths and reads none of them,
+ * and a menu row does not need to be right to the token — it needs to say
+ * whether this is a hundred tokens or a hundred thousand.
+ */
+const BYTES_PER_TOKEN = 4
+
+/** Roughly what a file of `bytes` costs a turn. */
+export function estimateTokens(bytes: number): number {
+  return Math.ceil(Math.max(0, bytes) / BYTES_PER_TOKEN)
+}
 
 /**
- * A single-character name would tint every `a` in the message. Two is the
- * shortest that can be meant.
+ * A token count as a row shows it — `~820`, `~12.4k`, `~1.3M` tokens.
+ *
+ * Rounded hard on purpose. The number is an estimate of an estimate, and
+ * `~12,431 tokens` beside a path would be claiming a precision the walk never
+ * had.
  */
+export function formatTokens(tokens: number): string {
+  if (tokens < 1000) return `~${tokens} tokens`
+  if (tokens < 1_000_000) return `~${trim(tokens / 1000)}k tokens`
+  return `~${trim(tokens / 1_000_000)}M tokens`
+}
+
+/** One decimal below ten, none above: `~1.2k`, `~48k`. */
+function trim(value: number): string {
+  return value < 10
+    ? value.toFixed(1).replace(/\.0$/, "")
+    : String(Math.round(value))
+}
+
+/** What the menu needs of an indexed path — `FileIndexEntry` cut to the part
+ * this file can be tested with. */
+export type IndexedPath = {
+  /** Relative to the chat's checkout, with forward slashes. */
+  relative: string
+  kind: PlainMentionKind
+  bytes: number
+}
+
+/**
+ * The index as menu rows, with a folder carrying what is under it.
+ *
+ * A folder's estimate is the sum of every indexed file below it, because that
+ * is the question being asked of the row: mentioning `src/main` is asking the
+ * turn to read a directory, and the number that matters is the directory's, not
+ * the zero bytes of the entry itself. Summed by walking each file's ancestors
+ * once, so this is one pass over the index rather than a scan per folder.
+ *
+ * The walk's own ceiling and its ignored directories (`node_modules`, `dist`,
+ * `.git` — `IGNORED_DIRECTORIES` in `main/files.ts`) mean a folder's total is a
+ * floor, not an audit. That is the right direction to be wrong in: nothing here
+ * promises a budget, it warns about an order of magnitude.
+ */
+export function pathMentions(entries: readonly IndexedPath[]): PlainMention[] {
+  const totals = new Map<string, number>()
+  for (const entry of entries) {
+    if (entry.kind !== "file") continue
+    const parts = entry.relative.split("/")
+    // The file's own name is not a folder; every segment above it is one.
+    for (let depth = 1; depth < parts.length; depth += 1) {
+      const folder = parts.slice(0, depth).join("/")
+      totals.set(folder, (totals.get(folder) ?? 0) + entry.bytes)
+    }
+  }
+
+  return entries.map((entry) => {
+    const bytes =
+      entry.kind === "directory"
+        ? (totals.get(entry.relative) ?? 0)
+        : entry.bytes
+    const tokens = estimateTokens(bytes)
+    return {
+      kind: entry.kind,
+      label: entry.relative,
+      detail: formatTokens(tokens),
+      tokens,
+    }
+  })
+}
+
+/** A run of the draft, tinted when it names a path the workspace holds. */
+export type MentionSegment = { text: string; kind: PlainMentionKind | null }
+
+/** A one-character path would tint every `a` in the message. Two is the
+ * shortest that can be meant. */
 const MIN_LABEL = 2
+
+/** Punctuation a path can be wrapped in without stopping being one: a path in
+ * brackets, or at the end of a sentence. A full stop is only shed from the end,
+ * so `src/main/ipc.ts` keeps its extension. */
+const OPENERS = "('\"`[{<"
+const CLOSERS = ")'\"`]}>,;:!?."
 
 /**
  * The draft cut into tinted and untinted runs.
  *
- * Matched case-sensitively and against whole names: a note called `Notes` does
- * not tint the word `notes`, and `public.users` does not tint the `users` inside
- * `other.users`. Longest first, so a database-qualified table wins over the same
- * table unqualified.
+ * Word by word against a lookup, rather than the one regexp of every known name
+ * this used to build: the catalogue was a few dozen table names and the index is
+ * twenty thousand paths, so a pattern rebuilt on every keystroke is the one
+ * thing here that would be felt while typing.
  *
- * The trailing boundary has to let a full stop through — a mention at the end of
- * a sentence has one — while still refusing a dot that another name is hanging
- * off: with only the database `shop` known, `shop.public.users` is a table this
- * app has not read, and tinting the `shop` at the front of it would claim
- * otherwise.
+ * Matched whole and case-sensitively — `src/main` does not tint the `src/main`
+ * inside `src/main/ipc.ts`, which is its own row and tints as itself.
  */
 export function markMentions(
   text: string,
@@ -130,58 +209,109 @@ export function markMentions(
   }
   if (text === "" || kinds.size === 0) return [{ text, kind: null }]
 
-  const labels = [...kinds.keys()].sort((left, right) =>
-    right.length === left.length
-      ? left.localeCompare(right)
-      : right.length - left.length
-  )
-  const pattern = new RegExp(
-    `(?<![\\w.])(?:${labels.map(escapeForRegExp).join("|")})(?!\\w)(?!\\.\\w)`,
-    "g"
-  )
-
   const segments: MentionSegment[] = []
   let at = 0
-  for (const match of text.matchAll(pattern)) {
-    const start = match.index
+  for (const match of text.matchAll(/\S+/g)) {
+    const { value, offset } = unwrap(match[0])
+    const kind = kinds.get(value)
+    if (!kind) continue
+
+    const start = match.index + offset
     if (start > at) segments.push({ text: text.slice(at, start), kind: null })
-    segments.push({
-      text: match[0],
-      kind: kinds.get(match[0]) ?? null,
-    })
-    at = start + match[0].length
+    segments.push({ text: value, kind })
+    at = start + value.length
   }
   if (at < text.length) segments.push({ text: text.slice(at), kind: null })
 
   return segments
 }
 
-/** A name is a database's or a note's own, so it can hold anything. */
-function escapeForRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+/** A word without the punctuation around it, and how far in what is left
+ * starts. */
+function unwrap(word: string): { value: string; offset: number } {
+  let start = 0
+  let end = word.length
+  while (start < end && OPENERS.includes(word[start]!)) start += 1
+  while (end > start && CLOSERS.includes(word[end - 1]!)) end -= 1
+  return { value: word.slice(start, end), offset: start }
 }
 
 /**
- * Orders `all` by how well it answers `filter` — a name that starts with it
- * first, then one that contains it, then a detail that does.
+ * The rows worth showing for `filter`, best first.
+ *
+ * With nothing typed this is the top of the tree — shallowest first, folders
+ * before files — because the moment after `@` the useful answer is "what is in
+ * this repository", not twenty thousand paths in whatever order the walk found
+ * them.
+ *
+ * With something typed it is the palette's kind of match, in the order somebody
+ * thinks about it: the name starting with what was typed, then containing it,
+ * then the directories above it, then the characters merely appearing in order
+ * (`slfs` finds `src/lib/files/store.ts`). Shorter breaks a tie, which is what
+ * keeps `src/store.ts` above `src/renderer/lib/db/explorer-store.ts`.
  */
 export function rankPlainMentions(
   all: readonly PlainMention[],
-  filter: string
+  filter: string,
+  limit = 40
 ): PlainMention[] {
-  if (filter === "") return [...all]
-  const needle = filter.toLowerCase()
+  const needle = filter.trim().toLowerCase()
+
+  if (needle === "") {
+    return [...all]
+      .sort((left, right) => {
+        const depth = depthOf(left.label) - depthOf(right.label)
+        if (depth !== 0) return depth
+        if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1
+        return left.label.localeCompare(right.label)
+      })
+      .slice(0, limit)
+  }
 
   const scored: { mention: PlainMention; score: number }[] = []
   for (const mention of all) {
-    const at = mention.label.toLowerCase().indexOf(needle)
-    if (at === 0) scored.push({ mention, score: 0 })
-    else if (at > 0) scored.push({ mention, score: 1 })
-    else if (mention.detail.toLowerCase().includes(needle))
-      scored.push({ mention, score: 2 })
+    const score = scoreOf(mention.label, needle)
+    if (score !== null) scored.push({ mention, score })
   }
 
   return scored
-    .sort((left, right) => left.score - right.score)
+    .sort((left, right) =>
+      left.score === right.score
+        ? left.mention.label.length - right.mention.label.length
+        : left.score - right.score
+    )
+    .slice(0, limit)
     .map((entry) => entry.mention)
+}
+
+function depthOf(label: string): number {
+  let depth = 0
+  for (const character of label) if (character === "/") depth += 1
+  return depth
+}
+
+/** Lower is better, and null is no match at all. */
+function scoreOf(label: string, needle: string): number | null {
+  const path = label.toLowerCase()
+  const name = path.slice(path.lastIndexOf("/") + 1)
+
+  if (name.startsWith(needle)) return 0
+  if (name.includes(needle)) return 1
+  if (path.includes(needle)) return 2
+
+  // Slashes are how a path is typed but not necessarily how it is being
+  // matched: dropping them lets "libfiles" find `lib/files`.
+  const loose = needle.replace(/[/\\ ]/g, "")
+  return subsequence(path.replace(/\//g, ""), loose) ? 3 : null
+}
+
+/** Whether every character of `needle` appears in `text`, in order. */
+function subsequence(text: string, needle: string): boolean {
+  let at = 0
+  for (const character of needle) {
+    at = text.indexOf(character, at)
+    if (at === -1) return false
+    at += 1
+  }
+  return true
 }

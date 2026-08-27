@@ -1,6 +1,7 @@
 import type { AssistantMessage, TurnUsage } from "../src/shared/api"
-import { usageOf } from "../src/main/claude-agent"
+import { contextOf, usageOf } from "../src/main/claude-agent"
 import {
+  chatLine,
   compact,
   modelLabel,
   money,
@@ -74,6 +75,7 @@ const usage = (over: Partial<TurnUsage> = {}): TurnUsage => ({
   output: 0,
   thinking: 0,
   costUsd: null,
+  context: null,
   ...over,
 })
 
@@ -138,6 +140,214 @@ section("usageOf: the SDK's result line")
     "which the line says out loud",
     usageLine(crashed) === "nothing counted",
     usageLine(crashed)
+  )
+}
+
+/**
+ * The half that streaming input added.
+ *
+ * A session answers many turns from one process, and the SDK's `modelUsage` and
+ * `total_cost_usd` are the session's running total on every result line. Read
+ * raw, the second turn of a chat is drawn as having cost what the first one cost
+ * as well — which is exactly the number somebody is looking at the line to find
+ * out. So the previous result goes in and the difference comes out.
+ */
+section("usageOf: one turn out of a session's running total")
+{
+  const first = result(
+    {
+      "claude-opus-5": {
+        inputTokens: 10,
+        cacheCreationInputTokens: 1_500,
+        cacheReadInputTokens: 30_000,
+        outputTokens: 900,
+      },
+    },
+    { cost: 0.2, thinking: 100 }
+  )
+  // The same line a turn later: everything above, plus what this turn added.
+  const second = result(
+    {
+      "claude-opus-5": {
+        inputTokens: 14,
+        cacheCreationInputTokens: 1_700,
+        cacheReadInputTokens: 68_000,
+        outputTokens: 1_400,
+      },
+    },
+    { cost: 0.35, thinking: 250 }
+  )
+
+  const turn = usageOf(second, first)
+  check(
+    "counts what this turn added, not the session",
+    turn.input === 4 &&
+      turn.cacheWrite === 200 &&
+      turn.cacheRead === 38_000 &&
+      turn.output === 500,
+    turn
+  )
+  check("and the cost with it", closeTo(turn.costUsd, 0.15), turn.costUsd)
+  // Per-turn on the SDK's own account, so it is the one number not subtracted —
+  // taking 250 − 100 here would report a turn that reasoned less than it did.
+  check(
+    "leaves thinking alone, which is already per turn",
+    turn.thinking === 250,
+    turn
+  )
+
+  // No previous line at all is the first turn of a process, which is the whole
+  // of what it spent — and the shape every existing caller of one argument has.
+  const opening = usageOf(first)
+  check(
+    "the first turn of a session is read whole",
+    opening.input === 10 && opening.output === 900,
+    opening
+  )
+
+  /*
+   * A model that did nothing this turn is still on the line.
+   *
+   * The SDK carries every model the session has ever used, at last turn's
+   * numbers, so a chat that ran a Haiku subagent once has a Haiku entry for ever
+   * — and it subtracts to zero. The label has to name the one that actually
+   * worked, or every later turn of that chat is attributed to a subagent that
+   * ran twenty minutes ago.
+   */
+  const laterTurn = usageOf(
+    result({
+      "claude-opus-5": { inputTokens: 20, cacheReadInputTokens: 50_000 },
+      "claude-haiku-4-5-20251001": { cacheReadInputTokens: 90_000 },
+    }),
+    result({
+      "claude-opus-5": { inputTokens: 10, cacheReadInputTokens: 10_000 },
+      "claude-haiku-4-5-20251001": { cacheReadInputTokens: 90_000 },
+    })
+  )
+  check(
+    "a model that sat this turn out counts for nothing",
+    laterTurn.cacheRead === 40_000,
+    laterTurn
+  )
+  check(
+    "and cannot take the label off the one that worked",
+    laterTurn.model === "claude-opus-5",
+    laterTurn
+  )
+
+  /*
+   * A total that went backwards is a reset, not a refund.
+   *
+   * A mid-session `/clear` starts the running totals over, and so does a session
+   * opened again over the same id. The only reading of the new line that is not
+   * negative is the line itself.
+   */
+  const afterClear = usageOf(
+    result(
+      { "claude-opus-5": { inputTokens: 3, outputTokens: 40 } },
+      { cost: 0.01 }
+    ),
+    second
+  )
+  check(
+    "a reset is read as the line standing on its own",
+    afterClear.input === 3 && afterClear.output === 40,
+    afterClear
+  )
+  check(
+    "including its cost, rather than a negative one",
+    closeTo(afterClear.costUsd, 0.01),
+    afterClear.costUsd
+  )
+}
+
+/** Floating-point subtraction of two decimals does not land on the decimal —
+ * `0.35 - 0.2` is `0.15000000000000002` — and the difference is money nobody
+ * can see. */
+function closeTo(value: number | null, expected: number): boolean {
+  return value !== null && Math.abs(value - expected) < 1e-9
+}
+
+/**
+ * Where the conversation stands, which is not one of the spends.
+ *
+ * The trap this guards is the one that makes the number meaningless: every
+ * other figure on the line is a sum — over the turn's model calls, its
+ * subagents, and then over the chat's turns — and a context read the same way
+ * grows without limit, so a chat of ten 40k turns would claim 400k of a window
+ * it never filled. It is a level: the last reply's own prompt and answer, and
+ * the last turn's rather than every turn's.
+ */
+section("the context window")
+{
+  check(
+    "a reply's own numbers are the window it sat in",
+    contextOf({
+      input_tokens: 12,
+      cache_creation_input_tokens: 1_500,
+      cache_read_input_tokens: 46_000,
+      output_tokens: 800,
+    }) === 48_312
+  )
+  check("a reply that counted nothing reports none", contextOf({}) === null)
+  check("and neither does a missing one", contextOf(undefined) === null)
+
+  const turn = usageOf(
+    result({ "claude-opus-5": { inputTokens: 10, outputTokens: 900 } }),
+    null,
+    48_312
+  )
+  check("the result line carries it", turn.context === 48_312, turn)
+  check(
+    "a turn that never got a reply has none",
+    usageOf(result({})).context === null
+  )
+
+  check(
+    "the line names it",
+    usageLine(usage({ context: 48_312 })).includes("48.3k context"),
+    usageLine(usage({ context: 48_312 }))
+  )
+  check(
+    "and a chat from before the field says nothing rather than `undefined`",
+    !usageLine(usage({ context: null })).includes("context")
+  )
+
+  // The whole point: two turns of 40k each are a 40k conversation.
+  const total = totalOf([line({ context: 39_000 }), line({ context: 41_000 })])
+  check("a chat stands where its last turn left it", total?.context === 41_000)
+  check(
+    "and a turn that reported none does not empty it",
+    totalOf([line({ context: 41_000 }), line({ context: null })])?.context ===
+      41_000
+  )
+
+  /*
+   * The line under the composer, where the live figure meets the record.
+   *
+   * The case worth the test is the first turn of a chat: there are no usage
+   * lines yet — they are written when a turn *ends* — so a line built from the
+   * total alone says nothing for the whole of the first answer, which is the
+   * one somebody is watching this number for.
+   */
+  check(
+    "a live figure beats the last turn's",
+    chatLine(total, 52_000)?.includes("52.0k context"),
+    chatLine(total, 52_000)
+  )
+  check(
+    "and the last turn's stands in when there is none",
+    chatLine(total)?.includes("41.0k context")
+  )
+  check(
+    "a first turn still running is the context alone",
+    chatLine(null, 12_800) === "12.8k context"
+  )
+  check("and a chat with nothing at all says nothing", chatLine(null) === null)
+  check(
+    "as does one whose turns are all older than the field",
+    chatLine(totalOf([line({ context: null })])) !== null &&
+      !chatLine(totalOf([line({ context: null })]))?.includes("context")
   )
 }
 

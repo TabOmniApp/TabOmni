@@ -50,7 +50,7 @@ import {
 } from "lucide-react"
 
 import type { FileEntry, WorkspaceFolder } from "@shared/api"
-import { useChanges, useWatchChanges } from "@/lib/files/changes"
+import { changeCount, useChanges, useWatchChanges } from "@/lib/files/changes"
 import { isDirty, useFiles, viewOf } from "@/lib/files/store"
 import {
   gitStateOf,
@@ -192,9 +192,12 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
    * so `Changes 12` is true before it is clicked — which is the whole use of a
    * number on a tab. */
   const tab = useStudio((state) => state.explorerTab)
-  const changeCount = useChanges((state) =>
-    shown ? state.byRoot[shown.id]?.length : undefined
+  // Files, not rows: a file staged and then edited again is two rows in the
+  // list below and one file here.
+  const changes = useChanges((state) =>
+    shown ? state.byRoot[shown.id] : undefined
   )
+  const changed = changes === undefined ? undefined : changeCount(changes)
   useWatchChanges(shown)
 
   return (
@@ -216,11 +219,7 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
             className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden"
           >
             <ExplorerTabButton id="files" label="All files" />
-            <ExplorerTabButton
-              id="changes"
-              label="Changes"
-              count={changeCount}
-            />
+            <ExplorerTabButton id="changes" label="Changes" count={changed} />
           </div>
 
           <div className="flex shrink-0 items-center gap-0.5">
@@ -254,7 +253,9 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
         {/* The changed files, when that is the tab. Its own scroller and
             **outside** the tree's context menu: the rows there open a diff, and
             a right-click offering `Add folder…` over them would be the
-            workspace's menu on a list that is not about the workspace. */}
+            workspace's menu on a list that is not about the workspace. The list
+            carries its own menu — Stage, Unstage, Discard — inside this
+            scroller. */}
         {tab === "changes" ? (
           <div className="min-h-0 flex-1 overflow-auto pb-3">
             {shown && <ChangesList root={shown} />}

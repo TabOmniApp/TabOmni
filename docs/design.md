@@ -258,6 +258,67 @@ The cwd resolve is deliberately **not** a fallback chain: a chat whose folder ha
 left the workspace finishes with a line saying so, rather than running its next
 turn in whichever directory happens to be readable.
 
+#### A chat holds its CLI open, and can be typed into mid-answer
+
+**A chat is a session, not a sequence of turns.** It used to be the second: one
+`query()` per message, with a **string** prompt, which is the SDK's single-turn
+mode — it closes stdin on the first result, the process exits, and the next
+message opens a new one with `resume`. That has one consequence that is not a
+detail: while a turn is running there is no process to say anything to, so the
+composer was disabled for the length of it. Everybody who uses the terminal
+`claude` types the next thing while the current answer is still scrolling, and
+this app was the one place that could not.
+
+`query()` also takes an **async iterable** prompt, which is its streaming input
+mode: one CLI for the life of the chat, reading user messages off a queue
+(`Inbox` in `main/claude-agent.ts`) as they are pushed. A message sent mid-turn
+is handed to the CLI, which queues it and folds it into the next turn — the
+CLI's own behaviour, not something reimplemented here. So the composer is live
+at all times, Enter always sends, and `Stop` sits beside `Send` rather than
+replacing it: stopping what is running and adding to it are two different things
+somebody might want, and they are not alternatives.
+
+Four things fall out of that, and each cost something to get right:
+
+- **`result` stopped being the end of anything.** It is the end of a _turn_; the
+  session ends when the stream does. An error result no longer ends it either —
+  the SDK only closes its input on a single-turn query — so a failed turn leaves
+  the chat usable instead of taking its CLI with it. `onTurn` and `onExit` are
+  the two halves that used to be one `onDone`.
+- **Token counts became cumulative.** The SDK documents `modelUsage` and
+  `total_cost_usd` as the session's running total on every result of a
+  streaming-input session; read raw, the fifth turn of a chat is drawn as having
+  cost what the first four cost as well. `usageOf` takes the previous result and
+  subtracts, per model rather than on the sum — a chat switched from Sonnet to
+  Opus would otherwise credit one against the other — and reads a total that went
+  _backwards_ as a reset (`/clear`, or a session reopened) rather than a refund.
+  `test/chat-usage.ts` covers all of it.
+- **A renderer can no longer work out whether a chat is busy.** "Sent, and no
+  `done` yet" was the whole truth while a chat refused a second message; now a
+  turn can end with another already queued behind it. So busy is main's to say,
+  as its own `busy` event, taken from the CLI's `session_state_changed` where it
+  sends one and from the pushes and results otherwise.
+- **The toolbar moves under a running session.** Model and effort go over as
+  control requests (`setModel`, `applyFlagSettings`) instead of being an argument
+  list a new process is spawned with, and the permission never was the CLI's —
+  `permits` is consulted per tool call, so putting the picker on `Plan` takes
+  effect on the next call. What still cannot move is the cwd, the
+  `CLAUDE_CONFIG_DIR` profile and the MCP config file: those _are_ the argument
+  list, so a change to one closes the session and the next message opens another
+  (`signatureOf`).
+
+`Stop` became an **interrupt** rather than a kill. Killing the process was only
+ever how a turn was stopped when a turn _was_ the process, and it cost the chat
+its warm CLI as well; an interrupt ends the turn and leaves what was queued
+behind it to run, which is the CLI's own rule and the terminal's.
+
+The cost of all this is a `claude` per chat that has been sent to, resident until
+the app quits — which is a real cost and not one the user asked to pay. So a
+session with nothing to do for five minutes is **closed** (`IDLE_MS`), quietly
+and with no line written: the conversation is on disk and the next message opens
+it again as a resume, which is precisely what every message used to do. The
+window only has to cover reading an answer and typing a reply.
+
 #### What a turn looks like
 
 **A turn's working is folded, and its answer is not.** A finished turn is read
@@ -357,12 +418,27 @@ turn that was actually thinking has any, which is the effort picked on the
 composer's toolbar — so a chat on Haiku at `low` draws none rather than drawing
 empty ones.
 
+**A turn being worked on is a spinner, `Working…`, and how long it has been
+going** (`chat-skeleton.tsx`). It was a set of placeholder bars shaped like a
+turn — a thinking line, tool rows, an answer — and they read as content arriving
+that never did, when the rows a turn actually draws land a second later anyway.
+What was missing instead was the elapsed time: the question somebody asks of a
+spinner after a minute is whether it is stuck, and `1m5s` moving answers it
+where a still bar does not. It is `elapsed` in `lib/worktree-chat/since.ts`,
+every unit down to the second because the second is the part that moves — the
+coarse single unit `since` draws in a sidebar row would sit on `1m` for the next
+fifty-nine of them. The start is `startedAt` on the store, beside `sending`,
+rather than state in the pane: the pane is one instance reused across the strip,
+so a clock local to it would restart every time somebody looked at another chat.
+It survives a queued message and an `ask` for the same reason — it is how long
+this stretch of work has been going, not the current turn.
+
 #### What a turn cost
 
 **Every turn ends with a line saying what it spent**, and it is not folded:
 
 ```
-Opus 5 · 39.1k prompt, 96% cached · 1.9k out · $0.31
+Opus 5 · 39.1k prompt, 96% cached · 1.9k out · 41.3k context · $0.31
 ```
 
 The numbers were being read and dropped — the SDK reports them once, on the
@@ -395,6 +471,38 @@ a turn that compacted on Haiku is still an Opus turn. `thinking` is the one
 figure that comes off `usage`, the only place the SDK breaks the output down; it
 is main-loop only, so it is a floor, and a floor answers what it is read for —
 whether reasoning is where the output went.
+
+**The context figure is the one number on the line that is not a spend**, and it
+is read differently from all of them. Everything else is a sum — over the turn's
+model calls, its subagents, and then over the chat's turns — and a context
+summed the same way is meaningless: ten 40k turns are not 400k of a window. It
+is a level. So it is taken off the turn's **last assistant message** rather than
+its result line (the result's `usage` aggregates every call the turn made, so a
+turn of eight round trips reports eight prompts), the main loop's own only
+(`parent_tool_use_id` marks a subagent's, whose conversation dies with the
+`Task`), and the chat's total carries the last turn that reported one rather
+than adding them up — which is why it can also go **down**, when the CLI
+compacts.
+
+**And it is live.** Main sends it as its own event on every reply
+(`type: "context"`), not only on the usage line, because the number is watched
+rather than looked up: a turn that reads twenty files moves the window a long
+way before it ends, and a figure that only lands once the turn is over answers
+the question after the moment it was asked. The event is not written down — the
+usage lines are the record, and this is the same quantity arriving sooner — so a
+reloaded window falls back to the last line until the next reply. `chatLine`
+joins the two, and it draws the context **alone** for a chat whose first turn is
+still running: there are no usage lines until a turn ends, and a footer that
+stays empty through the first answer is empty for exactly the turn somebody
+opened the chat to watch.
+
+There is no denominator beside it. The SDK reports the window size only in the
+`context_usage` twin of the `/context` report, which arrives on a slash-command
+result — so a `41.3k / 200k` would cost a turn to keep current, and a table of
+windows per model id in this app would be a guess that goes stale on the next
+model and is wrong for the `[1m]` variants (`lib/worktree-chat/models.ts` makes
+the same argument about capability ordering). The used figure alone answers what
+it is read for: whether the conversation is near the point where it compacts.
 
 It is a **line of the conversation** (`role: "usage"`), written and read back
 with the rest, rather than a field on the record. A chat holds several turns and
@@ -680,14 +788,15 @@ draws — because a toolbar saying `Edits` over a turn that ran as a plan is the
 one disagreement worth a function to make impossible.
 
 The `+` menu is two items. **Attach file** (⌘U) is the OS picker, and what it
-leaves in the draft is a path relative to the project — plain text, not a
-mention, for the same reason `@` inserts a name: the turn runs in this directory
-with `Read`, so a path is already something the agent can open, and print mode
-takes a prompt rather than an upload. A file from somewhere else keeps its
-absolute path, since a `../..` chain reads like a path in this project and is
-not one (`relativeTo` in `lib/files/paths.ts`, `test/attach-paths.ts`).
-**Mention…** types the `@`, which is all it has to do — the menu that follows is
-the one a typed `@` opens.
+leaves in the draft is a path relative to the project — plain text, the same
+thing `@` inserts: the turn runs in this directory with `Read`, so a path is
+already something the agent can open, and print mode takes a prompt rather than
+an upload. It is still the picker rather than a second `@`, since the OS dialog
+reaches files the index does not — anywhere on the machine, and past what the
+walk skipped. A file from somewhere else keeps its absolute path, since a `../..`
+chain reads like a path in this project and is not one (`relativeTo` in
+`lib/files/paths.ts`, `test/attach-paths.ts`). **Mention a file…** types the `@`,
+which is all it has to do — the menu that follows is the one a typed `@` opens.
 
 The workspace's MCP servers are handed over, which is the thing an agent in an
 editor cannot have: the databases, the saved requests and the notes, in the same
@@ -1547,41 +1656,97 @@ CLI's own and reachable with `claude --resume`.
 
 ## `@` in a chat's composer
 
-`@` in a chat's composer inserts a **name**, and pastes nothing.
+`@` in a chat's composer offers the checkout's **folders and files**, with what
+each would cost a turn, and inserts the **path**. It pastes nothing.
 
-There was a composer that put a chip in the message and swapped it for a line of
-context on the way out, because a CLI in a pty could see nothing but the prompt —
-a table it had never been told about was a table it could not ask about. A chat
-here is the other case: it is started with whichever of the Database, API and
-Notes servers are switched on, and every one of those tools takes a thing by
-_name_ (`list_tables`, `get_request`, `read_note` all say "id or name"). So
-picking a row inserts the name and stops there. Pasting the schema in beside it
-would be handing the agent a second, staler copy of something it can read for
-itself, and the reply would have to be read wondering which of the two it went
-by.
+It listed the workspace's other panels before this — every database, the open
+one's tables, every saved request, every note — on the grounds that it is the
+thing only a studio can offer: an agent in an editor cannot see the schema of the
+database this project talks to or the note saying what the payload has to look
+like, and here they are in stores the composer can read. That is still true and it
+was still the wrong menu. What somebody reaches for mid-sentence is a file, tens
+of times for every time they mean a table, and a menu of two dozen table names is
+a menu without the thing they meant in it. The three panels are not lost by
+losing the rows: a chat is started with whichever of the Database, API and Notes
+MCP servers are switched on, and each of those tools takes a thing by _name_, so
+`list_tables` and `read_note` answer from a name the agent can also simply be
+told in words. Deleted rather than kept beside the paths, and deleted the way
+this repository deletes things: `lib/mentions.ts`, `lib/mention-text.ts` and
+`test/mentions.ts` are gone, along with the `Mention` type's `resolve` and the
+`database` kind.
 
-**The databases themselves are listed, which a chip could not be.** A chip has to
-expand into something, and what a database would expand into is its schema —
-which means connecting, and a menu opening is not consent to connect. A name
-needs no connection: the list is the manifest's, read at launch, and
-`list_databases` and `list_tables` both take one. So every database is offered
-whether or not the Database panel has opened it, and the open one's tables are
-offered on top of that — which is the difference between `@` answering "what is
-in this workspace?" and only answering "what is in the database I happen to be
-browsing?".
+**A mention is a path, relative to the chat's checkout.** The turn runs there
+with `Read`, so `src/main/ipc.ts` is already something the agent can open, and it
+is what the agent would have typed itself — the same reasoning as **Attach file**,
+which writes a path for the same reason. Nothing is expanded on the way out:
+pasting the file in would hand the agent a copy of something that may have
+changed by the time it looks, and the reply would have to be read wondering which
+of the two it went by.
 
-A row is the name and nothing else — `mydatabase.mytable` rather than that name
-with its connection spliced on. On the engines where a schema _is_ a database the
-name already says it, and a connection called `Shop (staging)` does not belong in
-the middle of an identifier. Which connection a table is in is the row's second
-line instead, and the agent's own `list_databases` — which answers with each
-record's name _and_ its database — is what pins a bare `public.users` down when
-there is more than one Postgres connection.
+**Each row says what mentioning it would cost.** `src/main` and
+`src/main/git.ts` look alike in a menu and are three orders of magnitude apart in
+a context window, and that difference is the whole of what a path does not say
+about itself. A file's estimate is its size over four bytes a token — the figure
+for English, close enough for code; a folder's is every indexed file below it,
+which is what the row is actually being asked. Deliberately estimated from sizes
+rather than counted from text: the index walks twenty thousand paths and reads
+none of them, and the number does not need to be right to the token, it needs to
+say whether this is a hundred tokens or a hundred thousand. The formatting rounds
+hard for the same reason — `~48k tokens`, never `~48,213`.
 
-That is also the reason the tint refuses a dot with a name hanging off it: with
-the database `shop` known and its tables unread, `shop.public.orders` is tinted
-nowhere rather than tinted at the front, which would have claimed the workspace
-had read a table it has not.
+**The Explorer's index is what is listed**, not a walk of its own
+(`listWorkspaceFiles`, held by `lib/files/store.ts` and shared with `⌘P`). One
+answer to "what is in this workspace" rather than two that would drift, and it is
+also why the rows are what they are: the walk skips `node_modules`, `dist` and
+the rest and stops at twenty thousand paths, so a folder's estimate is a floor
+rather than an audit — which is the right direction to be wrong in for a warning.
+Folders are indexed alongside the files for this menu, and the palette asks for
+`kind === "file"` because a palette row opens a tab, which a folder is not. The
+walk `stat`s a directory's files at once as it goes; that size is the only thing
+cheap enough to have for every path in a workspace.
+
+**And what git ignores is dropped on top of that.** The fixed list in
+`main/files.ts` is deliberately not `.gitignore` — the reasons are recorded with
+it, and they are about the _tree_, which shows everything there is — but a
+repository's own statement of what is not its source is exactly the right filter
+for a menu offering things to point a turn at. Build output, a `.env`, a
+generated lockfile: none of it is what a sentence means by "look at this file",
+and no list written here could know it, since it is per repository.
+
+Read from what Explorer already holds (`lib/files/git-status.ts`) rather than
+asked for a second time: that store keeps one `git status --ignored` per root for
+the tree's colours, and a wholly ignored directory arrives as one entry, so a
+path inside `dist/` is answered from the entry git gave for the folder. Two
+readers of the same question would drift the first time one of them refreshed.
+It also means git does the ignore parsing — nesting, negation,
+`.git/info/exclude`, somebody's global excludes — which is the whole reason
+`main/files.ts` never tried to.
+
+The palette is deliberately **not** filtered this way. `⌘P` is somebody looking
+for a file they know is there, and a file this app can plainly see and refuses to
+find is the failure the fixed-list decision was written against; `@` is a menu
+proposing what is worth a turn's attention, and the two want different lists off
+one index. Both are cached against the index's and the status's identities, so a
+commit or an Explorer refresh rebuilds the rows and nothing else does.
+
+With nothing typed yet the menu is the top of the tree — shallowest first,
+folders before files — because the useful answer the moment after `@` is "what is
+in this repository", not twenty thousand paths in the order the walk found them.
+With something typed it is the palette's kind of match, in the order somebody
+thinks about it: the file's own name starting with what was typed, then containing
+it, then the directories above it, then the characters merely appearing in order,
+so `slfs` finds `src/lib/files/store.ts`. Shorter breaks a tie.
+
+**A row wears the file type's own icon**, from the same vendored set the tree and
+a tool row's chip draw from (`iconFor` in `lib/files/icons.ts`), with a Lucide
+glyph where there is no icon for the type and a plain folder glyph for a folder —
+the tree's reason, that coloured folders would compete with the files they hold.
+It was a dot in the panel's hue first, and a dot says only "this is a row": what
+the eye is doing down a list of forty paths is looking for a kind of file, and the
+icon is the fastest thing to answer that. It is deliberately the _same_ picture
+as in Explorer, or the two lists would be two vocabularies for one workspace. The
+word `file` / `folder` stays on the right of the row, since the icon is
+`aria-hidden` and a menu has to say what a row is out loud as well.
 
 The tint is drawn behind the text rather than in it. The composer is a plain
 textarea over a mirror of its own value — one class list, `FIELD` in
@@ -1591,15 +1756,21 @@ screen is the textarea's own and selection, IME and undo are the platform's. A
 rich-text editor would have been a document model to keep in step for a
 decoration, over a message that is plain text on the wire and in the transcript.
 
-What is tinted is read from the catalogue rather than remembered from the menu,
-which is `markMentions` in `lib/worktree-chat/mention-text.ts`: a name typed by
-hand lights up like one that was picked, half a name deleted stops being tinted,
-and a note that has since been deleted is plain text — the tint means "the
-workspace still holds this", which is the thing worth knowing before sending.
-Names are matched whole and case-sensitively, longest first, and a
-one-character name is not matched at all, because it would tint every letter it
-appeared in. The same marks are drawn on the message once it is sent, so a line
-still reads as pointing at a table rather than mentioning one in passing.
+What is tinted is read from the index rather than remembered from the menu, which
+is `markMentions` in `lib/worktree-chat/mention-text.ts`: a path typed by hand
+lights up like one that was picked, half a path deleted stops being tinted, and a
+file that has since been deleted goes plain the next time the index is walked —
+the tint means "the workspace still holds this", which is the thing worth knowing
+before sending. Matched word by word against a lookup rather than by one regexp
+built from every known name, which is what the catalogue's few dozen table names
+allowed and twenty thousand paths do not: a pattern rebuilt on every keystroke is
+the one thing here that would be felt while typing. The cost of the word split is
+that a path with a space in it is not tinted, which is a decoration missing
+rather than a mention lost. Punctuation around a word is shed before the lookup,
+so a path in brackets or at the end of a sentence still lights up while
+`src/main/ipc.ts.map` — a file the index does not hold — lights up nowhere. The
+same marks are drawn on the message once it is sent, so a line still reads as
+pointing at a file rather than mentioning one in passing.
 
 ## Explorer
 
@@ -1704,6 +1875,96 @@ megabytes (`MAX_COUNTED_NEW_FILES` in `main/git.ts`). Where there is no honest
 number the row shows none: a binary file, a file past the cap, a repository with
 no commit yet. Nothing ignored is listed — those are what the tree greys, and
 they are not anybody's changes.
+
+**A wholly new directory is drawn as one.** Git reports it as a single entry —
+`?? public/images/building/`, the same shape that keeps `node_modules` from
+being a hundred thousand rows — and drawn like every other row it read as a file
+with no counts, which is a row that says nothing about the twenty new files
+under it. It carries a folder glyph and a trailing separator now, and it is the
+one row in this list that does **not** open the diff tab: there is no diff of a
+directory, and the row used to open the pane on a path that is not a file and
+leave it blank. It goes to `All files` instead, revealed and opened, which is
+where a directory's contents are.
+
+### Staging, discarding, and where this stops
+
+**The list stages and discards; it does not commit.** Both writes went out with
+the working-tree panel and both came back here, which is a reversal worth
+recording. The argument for keeping them out was that the studio is not a git
+client — and it is not — but the Changes list is what somebody reads straight
+after an agent's turn, and the sentence being said at that moment is "keep this
+one, throw that one away". Every other panel lets somebody act on the thing it
+is showing. This one made them go to a shell to act on rows they were already
+pointing at.
+
+Committing stays out, and the line is not arbitrary: staging and discarding are
+answered by pointing at rows, and a commit is a sentence somebody writes. The
+dock has a shell in the same folder two panels down, so stopping here is
+stopping exactly where the shell is better — rather than growing a message box,
+then an amend, then a log, then a second and worse git client.
+
+**The index is no longer collapsed in this list, and still is in the tree.**
+Porcelain's two columns are the index against `HEAD` and the working tree
+against the index; the tree keeps reading them as one state, because a row there
+has nothing useful to say beyond "changed and not committed" and forty rows of
+staged-versus-not is a tree nobody reads. The list cannot, because staging is
+done from it — so it has a `Staged` pile and a `Changes` pile, and **one path
+can be two rows**: a file staged and then edited again is both, with each row
+carrying its own side's counts (`--cached` for the first, a plain `git diff` for
+the second). Summing them would be the number for neither. Each pile has a
+heading whenever it has anything in it, carrying its count and its own actions.
+The tab's number counts **files**, not rows.
+
+**The actions are on the row, under the pointer** — `+` to stage, `↩` to throw
+away, `−` to unstage, and the same three on a pile's heading for the whole pile.
+This is the Source Control gesture, and it is here because it is the one
+somebody arrives already knowing. It cost an argument twice over. A row is a
+`<button>`, and a button inside a button is dropped by the browser — the same
+wall the rename field ran into — so the buttons are a **sibling** of the row,
+positioned over its right-hand end, where the state letter and `+112 −8` turn
+`invisible` to make room. `invisible` rather than `hidden`, or the row's width
+would change under the pointer and the name would reflow as the cursor arrived;
+and `pointer-events-none` while they are transparent, or an invisible button
+would swallow the click meant for the row. They answer to `focus-within` as well
+as to `hover`, so Tab reaches them.
+
+The right-click menu is the fuller way and stays: it carries `Copy path`, it is
+what a row reached by keyboard has, and `Stage all` / `Unstage all` /
+`Discard all changes…` are on it as well as on the headings. Those are repeated
+on a row's menu deliberately — a list long enough to want `Discard all` is one
+with no empty space left to right-click.
+
+The heading was the one thing conditional on state, and that is what settled its
+own argument. `Changes` inside the `Changes` tab is the panel's name said twice,
+so the headings were drawn only once something was staged — until they became
+where `Stage all` lives, at which point a heading that appears in some states is
+an action that appears in some states. Both are drawn whenever their pile has
+rows.
+
+**Discard means back to `HEAD`, both sides.** Not "the working tree back to the
+index", which is a second, similar thing to explain and would leave a staged
+copy of what was just discarded. Whichever of a file's two rows the menu was
+opened on, the file ends up as `HEAD` has it. A file `HEAD` does not have — a
+new file, or where a rename landed — cannot be restored from it, so discarding
+that one is taking it out of the index and moving it to the **trash**, never
+`unlink`: the studio has no undo of its own, which is the same promise the
+Explorer's Delete makes. `discardAll` is built on the same path-by-path work
+rather than on `git reset --hard`, which would be one command and wrong twice —
+it leaves untracked files exactly where they are, which are the ones an agent's
+turn most often adds, and it deletes tracked ones past any trash. A rename is
+restored whole: porcelain reports the source as a second record, and discarding
+the destination without putting the old name back leaves a working tree in a
+state nobody asked for. It is the one action in this panel with a dialog in
+front of it, and the dialog says which files go back to the last commit and
+which go to the trash.
+
+The writes are gated **twice**. `ipc.ts` checks every path against the
+workspace's folders, the same gate the eight `files:*` calls pass through, and
+`main/git.ts` then refuses anything not under the folder it was handed — so a
+path inside another of the workspace's folders cannot be staged into this one's
+repository. Nothing is optimistic: what a `git add` did to a `MM` file is git's
+answer to give, so all three writes end by re-reading the list, the tree's
+colours and the listings the paths were in.
 
 Its list is read for the **one project on screen**, unlike the colours, which
 are read for every root so that any path can be coloured — `useWatchChanges` is
@@ -1997,9 +2258,12 @@ ordinary row and has neither colour nor letter, so the tree is mostly plain and
 the marks mean something. The hover line says the state in words as well, since
 a palette nobody was taught is not information.
 
-The index and the working tree are collapsed into one state deliberately:
-nothing in the studio stages anything, so "changed and not committed" is the
-whole of what a row can usefully say. A wholly untracked or ignored _directory_
+The index and the working tree are collapsed into one state deliberately — in
+**the tree**, which is what this is about: a row here has nothing useful to say
+beyond "changed and not committed", and a `node_modules` of files marked staged
+or not is a tree nobody reads. The Changes list keeps them apart, because
+staging is done from it; see _Staging, discarding, and where this stops_ above.
+A wholly untracked or ignored _directory_
 arrives as one entry — git reports `node_modules/` rather than its contents,
 which is the difference between one line and a hundred thousand — and the
 renderer reads it as a prefix, which is also how a folder gets a colour without

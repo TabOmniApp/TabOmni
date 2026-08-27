@@ -1,4 +1,4 @@
-import { since } from "../src/renderer/lib/worktree-chat/since"
+import { elapsed, since } from "../src/renderer/lib/worktree-chat/since"
 import { check, finish, section } from "./harness"
 
 /**
@@ -61,6 +61,37 @@ check(
 check(
   "and 47 hours is 1d rather than 2d",
   since(ago(2 * DAY - HOUR), NOW) === "1d"
+)
+
+/**
+ * The stopwatch beside `Working…`. Every case here is a carry — the field
+ * widths are what the label lives or dies by, since it is read while it moves.
+ */
+section("elapsed: the clock under the spinner")
+
+check("a turn that has just started", elapsed(NOW, NOW) === "0s")
+check("a second in", elapsed(NOW - 1_000, NOW) === "1s")
+check("truncated, not rounded", elapsed(NOW - 7_900, NOW) === "7s")
+check("seconds run to the minute", elapsed(NOW - 59_000, NOW) === "59s")
+check("a minute carries", elapsed(NOW - MINUTE, NOW) === "1m0s")
+check("and keeps the seconds beside it", elapsed(NOW - 65_000, NOW) === "1m5s")
+check(
+  "minutes run to the hour",
+  elapsed(NOW - (59 * MINUTE + 59_000), NOW) === "59m59s"
+)
+check("an hour carries", elapsed(NOW - HOUR, NOW) === "1h0m0s")
+check(
+  "the middle unit is kept even at zero",
+  elapsed(NOW - (HOUR + 5_000), NOW) === "1h0m5s"
+)
+check(
+  "an hour, a minute and six seconds",
+  elapsed(NOW - (HOUR + MINUTE + 6_000), NOW) === "1h1m6s"
+)
+check("and no cap on the hours", elapsed(NOW - 30 * HOUR, NOW) === "30h0m0s")
+check(
+  "a clock that went backwards reads zero, not -1",
+  elapsed(NOW + MINUTE, NOW) === "0s"
 )
 
 finish()

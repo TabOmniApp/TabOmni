@@ -136,6 +136,8 @@ async function main() {
   const change = (path: string) => ({
     path,
     state: "modified" as const,
+    staged: false,
+    directory: false,
     added: 1,
     removed: 0,
   })

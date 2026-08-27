@@ -56,11 +56,43 @@ export function usageLine(usage: TurnUsage | ChatTotal): string {
     parts.push(`${compact(prompt)} prompt, ${cached}% cached`)
   }
   if (usage.output > 0) parts.push(`${compact(usage.output)} out`)
+  // Where the chat stands rather than what it spent, and the reason it is last:
+  // the figures before it are sums that only grow, and this one is a level —
+  // it falls when the conversation is compacted. Truthy rather than `!== null`
+  // because a line written before the field existed has no `context` at all,
+  // and `undefined context` on the row of a chat from last week is worse than
+  // the chat not saying.
+  if (usage.context) parts.push(`${compact(usage.context)} context`)
   if (usage.costUsd !== null) parts.push(money(usage.costUsd))
 
   // A result that reported nothing at all — a crashed turn carries zeroes —
   // rather than a row saying the turn was free.
   return parts.join(" · ") || "nothing counted"
+}
+
+/**
+ * The line under the composer: the chat's own totals, with the context figure
+ * as of the last reply rather than the last turn.
+ *
+ * The two come from different places and only this line joins them. The totals
+ * are summed from the usage lines, which land once a turn ends; `context` is
+ * the live figure main sends per reply, and it is what somebody watching a long
+ * turn is watching. Where there is no live one — a reloaded window, a chat
+ * nothing has run this session — the last turn's own stands in, which is the
+ * same quantity one answer stale rather than a different number.
+ *
+ * Null when there is nothing to say at all. A chat whose first turn is still
+ * running has no usage lines yet but does have a context, and that alone is the
+ * line: a chat that says nothing until its first turn ends is the case this
+ * whole figure exists for.
+ */
+export function chatLine(
+  total: ChatTotal | null,
+  context?: number | null
+): string | null {
+  const live = context ?? total?.context ?? null
+  if (!total) return live ? `${compact(live)} context` : null
+  return usageLine({ ...total, context: live })
 }
 
 /**
@@ -80,6 +112,9 @@ export function usageDetail(usage: TurnUsage | ChatTotal): string {
       usage.thinking > 0 ? `, ${count(usage.thinking)} of it thinking` : ""
     }`,
   ]
+  if (usage.context) {
+    lines.push(`${count(usage.context)} in the window when the turn ended`)
+  }
   if (usage.model) lines.push(usage.model)
   if (usage.costUsd !== null) {
     lines.push(`${money(usage.costUsd)} — the CLI's own estimate`)
@@ -119,6 +154,12 @@ export function totalOf(lines: AssistantMessage[]): ChatTotal | null {
       // still cost what the others cost.
       costUsd:
         use.costUsd === null ? sum.costUsd : (sum.costUsd ?? 0) + use.costUsd,
+      // The last one that reported, never a sum: this is where the conversation
+      // stands, and adding the turns up would say a chat of ten 40k turns is
+      // 400k of context — four times a window it never came close to filling.
+      // Turns that reported nothing are skipped rather than resetting it, since
+      // a crash does not empty the conversation behind it.
+      context: use.context ?? sum.context,
     }),
     {
       turns: 0,
@@ -129,6 +170,7 @@ export function totalOf(lines: AssistantMessage[]): ChatTotal | null {
       output: 0,
       thinking: 0,
       costUsd: null,
+      context: null,
     }
   )
 }

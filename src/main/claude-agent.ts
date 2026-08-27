@@ -2,6 +2,7 @@ import {
   query,
   type Options,
   type SDKMessage,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 
 import type { AssistantMessage, TurnUsage } from "../shared/api"
@@ -9,7 +10,33 @@ import { claudeBinary } from "./claude-bin"
 import { environment, locate } from "./shell-env"
 
 /**
- * Running one turn of an agent conversation, over `@anthropic-ai/claude-agent-sdk`.
+ * Running an agent conversation, over `@anthropic-ai/claude-agent-sdk`.
+ *
+ * **A session, not a turn.** This used to spawn a CLI per message: `query()`
+ * with a string prompt, which the SDK runs as a single turn and then closes
+ * stdin on, so the process exits and the next message resumes the session from
+ * disk. That shape cannot be typed into while it is answering — there is no
+ * process left to say anything to — and the composer was disabled for the
+ * length of a turn because of it. `query()` with an **async iterable** prompt is
+ * the SDK's streaming input mode: one process for the life of the chat, reading
+ * user messages off `Inbox` as they are pushed. A message sent while a turn is
+ * running is queued by the CLI and coalesced into the next turn, which is what
+ * the interactive `claude` does with a line typed mid-answer.
+ *
+ * Three things follow from that and are easy to miss:
+ *
+ * 1. `result` no longer ends anything. It is the end of a **turn** (`onTurn`);
+ *    the session ends when the stream does (`onExit`). An error result does not
+ *    close the stream either — the SDK only ends input on `isSingleUserTurn`,
+ *    which streaming mode is not — so a failed turn leaves the chat usable.
+ * 2. `modelUsage` and `total_cost_usd` on that line are **cumulative across the
+ *    session**, where they used to be one turn's whole spend. `usageOf` takes
+ *    the previous result and subtracts.
+ * 3. Model, effort and permission can now change *without* a new process —
+ *    `setModel`, `applyFlagSettings` and `permits`, which is consulted per call.
+ *    What still cannot is `cwd`, `CLAUDE_CONFIG_DIR` and the MCP config file:
+ *    those are the CLI's own argument list, and `worktree-chat.ts` opens a new
+ *    session when one of them moves.
  *
  * Apart from `worktree-chat.ts`, its one caller, because the part worth having
  * on its own is the **driving**: what the SDK hands back moves between
@@ -35,18 +62,19 @@ import { environment, locate } from "./shell-env"
  * authentication story of its own.
  */
 
-/** What a turn is: the prompt, where it runs, and what it is allowed to do. */
-export type AgentTurn = {
+/** What a session is: where it runs, who it is, and what it is allowed to do.
+ * The prompt is not here — a session is sent to, over and over. */
+export type AgentSessionOptions = {
   /** The directory the CLI runs in. Must exist — the CLI refuses otherwise. */
   cwd: string
-  prompt: string
   /**
-   * The CLI session this turn belongs to.
+   * The CLI session this one *is*.
    *
-   * Passed as `sessionId` the first time and `resume` afterwards, which is what
-   * makes a second turn a continuation rather than a fresh conversation. The
-   * caller owns the id and owns knowing which of the two it is. Must be a UUID:
-   * the SDK refuses anything else, as `--session-id` did.
+   * Passed as `sessionId` the first time the id is used and `resume` afterwards,
+   * which is what makes a session opened after a restart a continuation rather
+   * than a fresh conversation. The caller owns the id and owns knowing which of
+   * the two it is. Must be a UUID: the SDK refuses anything else, as
+   * `--session-id` did.
    */
   sessionId: string
   resume: boolean
@@ -56,12 +84,21 @@ export type AgentTurn = {
    * Left unset for whichever model the user's own `claude` is on, which is not
    * the same as naming today's default here: their choice is a setting of
    * theirs, and this app overriding it silently would be this app deciding.
+   *
+   * What the session *starts* on. `setModel` moves it afterwards without a new
+   * process, which is the whole reason the toolbar can be touched mid-chat.
    */
   model?: string | null
-  /** Reasoning effort. Unset for the CLI's own default, for the same reason. */
+  /** Reasoning effort. Unset for the CLI's own default, for the same reason,
+   * and moved afterwards by `setEffort`. */
   effort?: string | null
   /**
-   * Whether this mode allows a tool, answered here rather than by the CLI.
+   * Whether the chat's *current* mode allows a tool, answered here rather than
+   * by the CLI.
+   *
+   * Consulted on every call rather than read once, which is what lets the
+   * permission picker move mid-session: the caller's closure reads the record,
+   * so a turn queued under `Ask` and run under `Edits` is run under `Edits`.
    *
    * It was `--allowed-tools`, and that list is what made changing mode
    * expensive: tool definitions sit ahead of the system prompt in the request,
@@ -110,9 +147,12 @@ export type AgentTurn = {
    * Who answers a permission prompt, for a turn that may stop and put one on
    * screen.
    *
-   * Left unset for every mode but `ask` — those must not stop. What a mode
-   * without one does with a call `permits` refused is refuse it too, with a
-   * sentence the model can read: see `deciding`.
+   * Read on every call, like `permits` and for the same reason: whether *this*
+   * chat stops or refuses outright is its picker's business, and the picker
+   * moves while the session is open. Left unset only by a caller where nothing
+   * can ever stop; what a session without one does with a call `permits`
+   * refused is refuse it too, with a sentence the model can read — see
+   * `deciding`.
    */
   onAsk?: AskHandler
 }
@@ -192,103 +232,225 @@ export type AgentHandlers = {
    * Reported at all because it is otherwise invisible: the numbers arrive once,
    * on one message, and a host that reads past them has no way to answer "why
    * did that turn cost what it did" afterwards — the transcript the CLI keeps is
-   * not this app's to read. Called at most once, and before `onDone`, so the
-   * cost lands in the conversation ahead of an error rather than after it.
+   * not this app's to read. Once per turn, and before `onTurn`, so the cost
+   * lands in the conversation ahead of an error rather than after it.
+   *
+   * Already a **delta**: the SDK's own numbers are the session's running total
+   * once input is streamed, and this is what that turn added — see `usageOf`.
    */
   onUsage: (usage: TurnUsage) => void
-  /** The turn is over. `error` is null when it succeeded. Called exactly once. */
-  onDone: (error: string | null) => void
+  /**
+   * How full the window is, at every reply rather than at the end of the turn.
+   *
+   * Apart from `onUsage` because it is not a spend and does not wait for the
+   * result line: the same number lands on the turn's usage line when it ends
+   * (`context` on `TurnUsage`), and this is it arriving while the turn is still
+   * working. A caller that only wants the record can ignore it.
+   */
+  onContext: (tokens: number) => void
+  /**
+   * Whether the CLI is working on something right now.
+   *
+   * The one thing a host cannot infer for itself any more. With a process per
+   * turn, "sent" and "not yet finished" was the whole of it; a session takes a
+   * message while it is answering and runs it afterwards, so the end of a turn
+   * is not the end of being busy. Driven by the CLI's own
+   * `session_state_changed` where it sends one, and by the pushes and results
+   * this module can see where it does not.
+   *
+   * Called with the same value twice quite happily — the caller is expected to
+   * be a state it can set rather than an edge it has to count.
+   */
+  onBusy: (busy: boolean) => void
+  /** One turn is over. `error` is null when it succeeded. The session is not
+   * over: another message may already be queued behind this one. */
+  onTurn: (error: string | null) => void
+  /**
+   * The session is over — the CLI exited, or `close` was called.
+   *
+   * `error` is null for an ordinary close and for one this host asked for.
+   * Called exactly once, always after a final `onBusy(false)`, and nothing
+   * arrives afterwards.
+   */
+  onExit: (error: string | null) => void
 }
 
-/** A turn in flight. `kill` is the only way to stop one. */
-export type AgentRun = {
-  kill: () => void
+/**
+ * A conversation the CLI is holding open, for as long as the caller wants it.
+ *
+ * `send` is the whole point: it does not wait, and it does not care whether a
+ * turn is running. A message pushed mid-turn is queued by the CLI and folded
+ * into the next one, which is what typing while Claude is answering has always
+ * done in the terminal.
+ */
+export type AgentSession = {
+  send: (prompt: string) => void
+  /** Stops the running turn without ending the session — the Stop button. What
+   * was queued behind it still runs, which is the CLI's own rule. */
+  interrupt: () => void
+  /** Null for the user's own default, the same as never having named one. */
+  setModel: (model: string | null) => void
+  setEffort: (effort: string | null) => void
+  /** Ends it. `onExit` fires with a null error: this is a close, not a failure. */
+  close: () => void
 }
 
 const NOT_INSTALLED =
   "Claude Code is not installed, or not on the PATH your shell gives it. Install it with: npm install -g @anthropic-ai/claude-code"
 
 /**
- * Starts a turn, or reports that it cannot be started.
+ * The user's half of a streaming session, as the iterable the SDK reads.
  *
- * Resolves once the CLI is actually up — its first message — and the turn itself
- * is over when `onDone` fires. Resolves to null when it could not be started at
- * all, having already called `onDone` with the reason, so a caller has one path
- * for "the turn failed" rather than two.
+ * A queue and a promise rather than anything cleverer, because the SDK pulls:
+ * it awaits the next message, and this parks on `wake` until one is pushed.
+ * Nothing here is dropped on the floor — a message pushed while the generator
+ * is parked wakes it, and one pushed while it is not sits in `waiting`.
+ *
+ * `close` is what ends the CLI: the process lives as long as its stdin does, so
+ * a session nobody closes is a `claude` nobody reaps.
+ */
+class Inbox {
+  private readonly waiting: SDKUserMessage[] = []
+  private wake: (() => void) | null = null
+  private closed = false
+
+  constructor(private readonly sessionId: string) {}
+
+  push(prompt: string): void {
+    if (this.closed) return
+    this.waiting.push({
+      type: "user",
+      message: { role: "user", content: prompt },
+      // Not a subagent's — this is the person typing.
+      parent_tool_use_id: null,
+      session_id: this.sessionId,
+    })
+    this.wake?.()
+  }
+
+  close(): void {
+    this.closed = true
+    this.wake?.()
+  }
+
+  async *stream(): AsyncGenerator<SDKUserMessage> {
+    for (;;) {
+      const next = this.waiting.shift()
+      if (next) {
+        yield next
+        continue
+      }
+      if (this.closed) return
+      await new Promise<void>((resolve) => {
+        this.wake = () => {
+          this.wake = null
+          resolve()
+        }
+      })
+    }
+  }
+}
+
+/**
+ * Opens a session on its first message, or reports that it cannot be opened.
+ *
+ * Resolves once the CLI is actually up — its first message back — and the
+ * session is over when `onExit` fires. Resolves to null when it could not be
+ * opened at all, having already called `onExit` with the reason, so a caller has
+ * one path for "it failed" rather than two.
  *
  * Waiting for that first message is the point rather than an implementation
  * detail: the caller writes down that the CLI now owns this session id, and a
  * session it never opened must not be resumed on the next try. `query()` is
  * lazy — the process starts on the first read of the stream — so "the call
  * returned" is not on its own evidence of anything.
+ *
+ * **Which is exactly why `first` is an argument.** It was not, briefly, and that
+ * deadlocked every chat: the caller waited for this to resolve before sending
+ * anything, and a CLI whose input stream has yielded nothing has nothing to
+ * answer and says nothing — so the wait was on a message that could only have
+ * been caused by the send that was waiting. A session is always opened *for* a
+ * message, so it goes in the queue before the wait rather than after it.
  */
-export async function runAgentTurn(
-  turn: AgentTurn,
-  handlers: AgentHandlers
-): Promise<AgentRun | null> {
+export async function startAgentSession(
+  session: AgentSessionOptions,
+  handlers: AgentHandlers,
+  /** The message this session is being opened for. Queued before the CLI is
+   * waited on — see above. */
+  first: string
+): Promise<AgentSession | null> {
   // A GUI app inherits almost none of the user's PATH, so where `claude` is has
   // to be asked of their own login shell rather than of `process.env`.
   const binary = await locate(claudeBinary())
   if (!binary) {
-    handlers.onDone(NOT_INSTALLED)
+    handlers.onBusy(false)
+    handlers.onExit(NOT_INSTALLED)
     return null
   }
 
   const abort = new AbortController()
-  /** Set by a kill, so the failure that follows one is not reported as a
+  /** Set by a close, so the failure that follows one is not reported as a
    * failure: an aborted stream throws like any other. */
   let stopped = false
-  /** `onDone` is a promise to the caller that it fires once, and there are three
-   * ways to reach the end: the result line, the stream closing, and a throw. */
+  /** `onExit` is a promise to the caller that it fires once, and there are three
+   * ways to reach the end: the stream closing, a throw, and a close. */
   let finished = false
-  const done = (error: string | null) => {
+  const exit = (error: string | null) => {
     if (finished) return
     finished = true
-    handlers.onDone(error)
+    handlers.onBusy(false)
+    handlers.onExit(error)
   }
 
   let stderr = ""
+  const inbox = new Inbox(session.sessionId)
 
   const conversation = query({
-    prompt: turn.prompt,
+    // The streaming half. A string here is the SDK's single-turn mode, which
+    // closes stdin on the first result — see the module comment.
+    prompt: inbox.stream(),
     options: {
-      cwd: turn.cwd,
+      cwd: session.cwd,
       abortController: abort,
       // The user's own install, not the SDK's bundled CLI: their login, their
       // settings, their `CLAUDE_BIN` override.
       pathToClaudeCodeExecutable: binary,
       env: environment(
-        turn.configDir ? { CLAUDE_CONFIG_DIR: turn.configDir } : {}
+        session.configDir ? { CLAUDE_CONFIG_DIR: session.configDir } : {}
       ),
       // One or the other, never both — the SDK refuses `sessionId` together
       // with `resume`, which is the same rule `--session-id` had.
-      ...(turn.resume
-        ? { resume: turn.sessionId }
-        : { sessionId: turn.sessionId }),
-      ...(turn.model ? { model: turn.model } : {}),
-      ...(turn.effort ? { effort: turn.effort as Options["effort"] } : {}),
+      ...(session.resume
+        ? { resume: session.sessionId }
+        : { sessionId: session.sessionId }),
+      ...(session.model ? { model: session.model } : {}),
+      ...(session.effort
+        ? { effort: session.effort as Options["effort"] }
+        : {}),
       // No `allowedTools`. Every call falls through to `canUseTool`, which is
       // both what lets one cached prefix serve all five modes and what makes
       // the callback reachable at all — see `permits`.
-      ...(turn.disallowedTools?.length
-        ? { disallowedTools: turn.disallowedTools }
+      ...(session.disallowedTools?.length
+        ? { disallowedTools: session.disallowedTools }
         : {}),
-      ...permissionArgs(turn.permissionMode),
-      ...mcpArgs(turn.mcpConfig),
-      ...(turn.addDirs?.length ? { additionalDirectories: turn.addDirs } : {}),
+      ...permissionArgs(session.permissionMode),
+      ...mcpArgs(session.mcpConfig),
+      ...(session.addDirs?.length
+        ? { additionalDirectories: session.addDirs }
+        : {}),
       // The CLI's own system prompt with this app's note after it, rather than
       // in place of it: a bare string here would *replace* the preset, and a
       // turn that had never been told it is Claude Code is a different thing.
-      ...(turn.appendSystemPrompt
+      ...(session.appendSystemPrompt
         ? {
             systemPrompt: {
               type: "preset" as const,
               preset: "claude_code" as const,
-              append: turn.appendSystemPrompt,
+              append: session.appendSystemPrompt,
             },
           }
         : {}),
-      canUseTool: deciding(turn.permits, turn.onAsk),
+      canUseTool: deciding(session.permits, session.onAsk),
       stderr: (data) => {
         // Kept rather than reported as it arrives: the CLI writes warnings here
         // on a turn that goes on to succeed, and only a failure makes them
@@ -298,33 +460,115 @@ export async function runAgentTurn(
     },
   })
 
+  /**
+   * The previous result line, for taking the running totals off this one.
+   *
+   * Held here rather than by the caller because it is a fact about *this*
+   * process: a session that is closed and opened again starts its totals over,
+   * and a baseline that outlived the process it was measured against would read
+   * the first turn of the new one as a refund. See `usageOf`.
+   */
+  let previous: ResultMessage | null = null
+
+  /**
+   * Where the conversation stood at the last reply of the turn being read.
+   *
+   * The result line cannot answer this — see `context` on `TurnUsage` — so it
+   * is taken off the assistant messages as they go past and handed to `usageOf`
+   * when the turn ends. Reset per turn rather than kept: a turn that crashed
+   * before its first reply reports nothing, which is the honest answer, and a
+   * stale number would be drawn as this turn's.
+   */
+  let context: number | null = null
+
+  /**
+   * Whether this CLI reports its own state, so the fallback below can stand
+   * down.
+   *
+   * Not version-sniffed: `session_state_changed` is simply absent from an older
+   * CLI's stream, and the first one that arrives says the CLI has it. Until
+   * then, "the turn ended" is the best guess at "no longer busy" available —
+   * wrong only in that a chat with something queued blinks idle for as long as
+   * it takes the CLI to start the next turn.
+   */
+  let reportsState = false
+
   /** Resolved with whether the CLI came up at all — see the note above. */
   let settle: (running: boolean) => void = () => {}
   const running = new Promise<boolean>((resolve) => {
     settle = resolve
   })
 
+  // Before the reader, and before anything is waited on: this is the work the
+  // CLI comes up to do, and without it in the queue there is nothing for it to
+  // say and nothing for `running` to resolve on. `Inbox` buffers, so pushing
+  // ahead of the process existing is the ordinary case rather than a race.
+  handlers.onBusy(true)
+  inbox.push(first)
+
   void (async () => {
     try {
       for await (const message of conversation) {
         settle(true)
-        read(message, handlers, done)
+
+        if (
+          message.type === "system" &&
+          message.subtype === "session_state_changed"
+        ) {
+          reportsState = true
+          // `requires_action` is an ask on screen. Still busy: the turn is held
+          // rather than over, and a composer that said otherwise would invite a
+          // second message on top of a question nobody has answered.
+          handlers.onBusy(message.state !== "idle")
+          continue
+        }
+
+        /*
+         * The window as of this reply, kept for the result line to carry. Only
+         * the main loop's own: a subagent's assistant messages arrive on this
+         * same stream (`parent_tool_use_id` is what tells them apart) and its
+         * context is a conversation of its own that ends with the Task.
+         *
+         * Every frame overwrites the last, so what the result gets is the
+         * turn's final reply. The SDK emits one of these per content block
+         * while a response streams and only the last of a response carries
+         * final counts — but they all carry the same request's prompt, which is
+         * all but a rounding error of the number here.
+         */
+        if (message.type === "assistant" && !message.parent_tool_use_id) {
+          const at = contextOf(message.message.usage)
+          if (at !== null && at !== context) {
+            context = at
+            handlers.onContext(at)
+          }
+        }
+
+        if (message.type === "result") {
+          handlers.onUsage(usageOf(message, previous, context))
+          previous = message
+          context = null
+          if (!reportsState) handlers.onBusy(false)
+          handlers.onTurn(errorOf(message))
+          continue
+        }
+
+        read(message, handlers)
       }
-      // The stream ended without a result line — nothing said the turn failed,
-      // so nothing here says so either.
-      done(null)
+      // The stream ended, which for a session means the CLI is gone. Nothing
+      // said it failed, so nothing here says so either.
+      exit(null)
     } catch (error) {
       /*
        * The SDK throws where the old reader only read.
        *
-       * An error *result* is delivered as a message and then thrown as an
-       * exception, so `read` has already drawn the row and called `done`; the
-       * `finished` guard is what keeps this from reporting it twice. What is
-       * left for this branch is the turn that never got that far — a CLI that
-       * would not launch, a session id it refused — where its own message, or
-       * failing that its stderr, is the only account of why.
+       * Not for an error *result* any more, which is the difference streaming
+       * input makes: the SDK only closes its input on a single-turn query, so a
+       * failed turn is delivered as a result line and the session carries on.
+       * What reaches this branch is the process itself ending — a CLI that would
+       * not launch, a session id it refused, a crash — where its own message,
+       * or failing that its stderr, is the only account of why.
        */
-      done(stopped ? null : failure(error, stderr))
+      exit(stopped ? null : failure(error, stderr))
     } finally {
       settle(false)
     }
@@ -333,11 +577,82 @@ export async function runAgentTurn(
   if (!(await running)) return null
 
   return {
-    kill: () => {
+    send: (prompt) => {
+      // Ahead of any word from the CLI, and deliberately: the composer has just
+      // emptied itself, and a chat that looked idle until the CLI got round to
+      // saying otherwise reads as a message that went nowhere.
+      handlers.onBusy(true)
+      inbox.push(prompt)
+    },
+    interrupt: () => {
+      // Rejections are the CLI having nothing to interrupt — a Stop that raced
+      // the end of the turn — which is not worth a line in the chat.
+      void conversation.interrupt().catch(() => {})
+    },
+    setModel: (model) => {
+      void conversation.setModel(model ?? undefined).catch((error: unknown) => {
+        console.error("Could not change the model mid-session", error)
+      })
+    },
+    setEffort: (effort) => {
+      void conversation
+        // The flag settings layer, which is where `effort` would have gone as an
+        // option: there is no `setEffort`, and this is the documented way to
+        // move one mid-session.
+        .applyFlagSettings({ effortLevel: effort as EffortLevel | null })
+        .catch((error: unknown) => {
+          console.error("Could not change the effort mid-session", error)
+        })
+    },
+    close: () => {
       stopped = true
+      inbox.close()
+      // Both, in that order: closing stdin is the polite end and the abort is
+      // what makes a CLI that is mid-turn actually stop.
       abort.abort()
     },
   }
+}
+
+/** The SDK's own result line, named once rather than spelled out at each use. */
+type ResultMessage = SDKMessage & { type: "result" }
+
+/**
+ * The token counts on one reply, structurally rather than by the SDK's name for
+ * them: the result line's usage has these fields non-null and an assistant
+ * message's has them optional, and `contextOf` reads both.
+ */
+type ReplyUsage = {
+  input_tokens?: number | null
+  cache_creation_input_tokens?: number | null
+  cache_read_input_tokens?: number | null
+  output_tokens?: number | null
+}
+
+/** What a settings key is, borrowed from the SDK rather than re-listed: the
+ * effort levels are the CLI's and this app does not own them. */
+type EffortLevel = Parameters<
+  ReturnType<typeof query>["applyFlagSettings"]
+>[0]["effortLevel"]
+
+/**
+ * Why the turn stopped, or null.
+ *
+ * Split out of `read` when `result` stopped being the end of anything: the
+ * session's reader needs the sentence and the usage off the same line, and a
+ * `read` that also decided what "failed" meant would be two readers of one
+ * message.
+ */
+function errorOf(message: ResultMessage): string | null {
+  const failed = message.is_error || message.subtype !== "success"
+  if (!failed) return null
+  // Only a successful result carries the assistant's own last word; an error
+  // subtype has no `result` field to explain itself with.
+  const said =
+    "result" in message && typeof message.result === "string"
+      ? message.result.trim()
+      : ""
+  return said || `The turn ended as "${message.subtype}".`
 }
 
 /**
@@ -472,16 +787,14 @@ export function lineId(): string {
  * One message from the SDK, narrowed to what a chat draws.
  *
  * Everything else it sends — the init line, the status and progress events — is
- * read and not passed on. What is drawn is the assistant's own blocks, the tool
- * results that come back in the `user` messages between them, and the result
- * that ends the turn, which is also the one message carrying what the turn
- * spent.
+ * read and not passed on. What is drawn is the assistant's own blocks and the
+ * tool results that come back in the `user` messages between them.
+ *
+ * The result line is **not** here. It ends a turn rather than adding to it, and
+ * it needs the session's own previous result to be read at all, so the reader in
+ * `startAgentSession` takes it before anything reaches this.
  */
-function read(
-  message: SDKMessage,
-  handlers: AgentHandlers,
-  done: (error: string | null) => void
-): void {
+function read(message: SDKMessage, handlers: AgentHandlers): void {
   const { onMessage, onToolResult } = handlers
 
   if (message.type === "assistant") {
@@ -537,25 +850,6 @@ function read(
     }
     return
   }
-
-  if (message.type === "result") {
-    const failed = message.is_error || message.subtype !== "success"
-    // Only a successful result carries the assistant's own last word; an error
-    // subtype has no `result` field to explain itself with.
-    const said =
-      "result" in message && typeof message.result === "string"
-        ? message.result.trim()
-        : ""
-    const error = failed
-      ? said || `The turn ended as "${message.subtype}".`
-      : null
-    // Before the error line and before `done`: what a turn spent is worth
-    // knowing most about the turn that failed, and a cost written after the
-    // failure would read as the cost of something that came next.
-    handlers.onUsage(usageOf(message))
-    if (error) onMessage({ id: lineId(), role: "error", text: error })
-    done(error)
-  }
 }
 
 /**
@@ -569,45 +863,114 @@ function read(
  * both this turn — and labelled with whichever of them did the most input,
  * since that is the one the toolbar was talking about.
  *
- * Cumulative-across-turns is not a worry here: the SDK says so of
- * streaming-input sessions, and this app spawns a process per turn with a
- * string prompt, so each result is its own turn's.
+ * **`previous` is what makes this a turn rather than a session.** The SDK is
+ * explicit that `modelUsage` and `total_cost_usd` are cumulative across the
+ * turns of a streaming-input session: each result carries the running total so
+ * far. This app used to spawn a process per turn, so every result was its own
+ * turn's and there was nothing to subtract; now one process answers a whole
+ * chat, and reading the raw line would draw the fifth turn as having cost what
+ * the first four cost as well. So the previous result goes in and the
+ * difference comes out — per model, not on the sum, or a chat switched from
+ * Sonnet to Opus would credit one against the other.
+ *
+ * A backwards total is a **reset**, not a refund: a mid-session `/clear` starts
+ * the running totals over, and so does a session opened again over the same id.
+ * Where that happens the line stands on its own, which is the only reading of
+ * it that is not negative.
  *
  * `thinking` is the exception that comes off `usage`, which is the only place
- * the SDK breaks the output down; being main-loop only makes it a floor, and a
- * floor answers the question it is read for — whether reasoning is where the
- * output went.
+ * the SDK breaks the output down; it is per-turn even here, so it is not
+ * subtracted. Being main-loop only makes it a floor, and a floor answers the
+ * question it is read for — whether reasoning is where the output went.
  */
-export function usageOf(message: SDKMessage & { type: "result" }): TurnUsage {
-  const models = Object.entries(message.modelUsage ?? {})
+export function usageOf(
+  message: ResultMessage,
+  /** The last result of this same process, or null for its first turn. */
+  previous?: ResultMessage | null,
+  /** Where the conversation stood at the turn's last reply, which the result
+   * line does not say — see `context` on `TurnUsage`. */
+  context?: number | null
+): TurnUsage {
+  const before = previous?.modelUsage ?? {}
+  const models = Object.entries(message.modelUsage ?? {}).map(([name, use]) => {
+    const was = before[name]
+    return [
+      name,
+      {
+        input: since(use.inputTokens, was?.inputTokens),
+        cacheWrite: since(
+          use.cacheCreationInputTokens,
+          was?.cacheCreationInputTokens
+        ),
+        cacheRead: since(use.cacheReadInputTokens, was?.cacheReadInputTokens),
+        output: since(use.outputTokens, was?.outputTokens),
+      },
+    ] as const
+  })
 
   const total = models.reduce(
     (sum, [, use]) => ({
-      input: sum.input + (use.inputTokens || 0),
-      cacheWrite: sum.cacheWrite + (use.cacheCreationInputTokens || 0),
-      cacheRead: sum.cacheRead + (use.cacheReadInputTokens || 0),
-      output: sum.output + (use.outputTokens || 0),
+      input: sum.input + use.input,
+      cacheWrite: sum.cacheWrite + use.cacheWrite,
+      cacheRead: sum.cacheRead + use.cacheRead,
+      output: sum.output + use.output,
     }),
     { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 }
   )
 
   const busiest = models.reduce<[string, number] | null>(
     (best, [name, use]) => {
-      const read = (use.inputTokens || 0) + (use.cacheReadInputTokens || 0)
+      const read = use.input + use.cacheRead
+      // Strictly greater, so a model that did nothing this turn cannot displace
+      // the one that did — every model the session has ever used is still on
+      // the line, at last turn's numbers, and subtracts to zero.
       return best === null || read > best[1] ? [name, read] : best
     },
     null
   )
 
-  const cost = message.total_cost_usd
+  const cost = since(message.total_cost_usd, previous?.total_cost_usd)
   return {
     model: busiest?.[0] ?? null,
     ...total,
     thinking: message.usage?.output_tokens_details?.thinking_tokens ?? 0,
     // A crashed turn reports zero for everything, and a zero drawn as `$0.00`
     // is this app claiming a turn was free rather than that nobody counted it.
-    costUsd: typeof cost === "number" && cost > 0 ? cost : null,
+    costUsd: cost > 0 ? cost : null,
+    context: context ?? null,
   }
+}
+
+/**
+ * The conversation's size at one reply, out of that reply's own usage.
+ *
+ * Everything the model was sent plus what it answered with, which is what the
+ * next request starts from — the three prompt figures are the one prompt split
+ * by how it was billed, not three prompts. Null where the reply carried no
+ * usage at all, so a caller can keep the last number it had rather than draw a
+ * zero as an empty window.
+ */
+export function contextOf(usage: ReplyUsage | undefined): number | null {
+  if (!usage) return null
+  const total =
+    (usage.input_tokens || 0) +
+    (usage.cache_creation_input_tokens || 0) +
+    (usage.cache_read_input_tokens || 0) +
+    (usage.output_tokens || 0)
+  return total > 0 ? total : null
+}
+
+/**
+ * One counter's movement since the last result line.
+ *
+ * A missing number on either side reads as zero, which is the same thing the
+ * sums here have always done with one. A negative difference is the running
+ * total having been reset under us — see `usageOf` — and the honest reading of
+ * the line is then the line itself.
+ */
+function since(now: number | undefined, then: number | undefined): number {
+  const moved = (now || 0) - (then || 0)
+  return moved < 0 ? now || 0 : moved
 }
 
 /**

@@ -61,10 +61,11 @@ export type FileEntry = {
 }
 
 /**
- * One file in the search palette's index of the workspace.
+ * One path in the index of the workspace — what the search palette searches and
+ * what a chat's `@` menu offers.
  *
  * Separate from `FileEntry` because it answers a different question: that one
- * is a row in a directory somebody opened, this one is a file somewhere in the
+ * is a row in a directory somebody opened, this one is a path somewhere in the
  * workspace that nothing has necessarily looked at. `relative` is what is shown
  * and searched — `src/main/files.ts`, always with forward slashes so the string
  * reads the same on every platform — while `path` is the absolute one the tab
@@ -76,6 +77,21 @@ export type FileIndexEntry = {
   /** Which workspace folder it was found under, for the hint beside it: two
    * repositories in one workspace both have a `src/index.ts`. */
   folderId: string
+  /**
+   * Directories are indexed as well as files, because a chat's `@` menu offers
+   * a folder — "read everything under `src/main`" is a thing somebody means.
+   * The palette opens tabs and asks for `kind === "file"`.
+   */
+  kind: "file" | "directory"
+  /**
+   * A file's size on disk, and 0 for a directory.
+   *
+   * Here for the one thing that reads it: the `@` menu's approximate token
+   * count, which is what stops a folder being mentioned without any idea of
+   * what it would cost the turn. A size rather than a count of tokens because
+   * the walk must not read what it indexes.
+   */
+  bytes: number
 }
 
 /**
@@ -115,6 +131,29 @@ export type GitStatusEntry = {
 export type GitChange = {
   path: string
   state: GitFileState
+  /**
+   * Which side of the index this row is: the staged change, or the unstaged
+   * one.
+   *
+   * `GitStatusEntry` has no such field, and that difference is the point. The
+   * tree collapses porcelain's two columns because a row there can only say
+   * "changed and not committed"; the Changes list is where staging is done, so
+   * it has to keep them apart — and **one path can be two rows**, since a file
+   * can be staged and then edited again. `state` is that side's own state, and
+   * the counts are that side's own counts.
+   */
+  staged: boolean
+  /**
+   * Whether this row stands for a whole directory rather than for a file —
+   * `GitStatusEntry.directory`, carried through because the list has to say so.
+   *
+   * A wholly untracked directory is one entry (`?? public/images/building/`),
+   * and drawn like every other row it reads as a file with no line counts:
+   * nothing on it says the twenty files under it are what is new. The list
+   * marks it instead, and a click on it goes to the tree rather than to a diff
+   * — there is no diff of a directory to open.
+   */
+  directory: boolean
   /**
    * Lines added and removed against `HEAD`, or null when there is no honest
    * number: a binary file, a wholly new directory, a file too large to count,
@@ -456,6 +495,22 @@ export type TurnUsage = {
   /** The SDK's own estimate for the turn, in USD, or null where it reported
    * none — a crashed turn carries zeroes it would be wrong to draw as free. */
   costUsd: number | null
+  /**
+   * How much of the context window the conversation stood at when the turn
+   * ended: the last main-loop request's prompt plus what came back.
+   *
+   * Not a spend and not derivable from the fields above, which is why it is its
+   * own number. Those are sums over everything the turn did — every model call,
+   * every subagent — and a chat's context is none of that: it is the size of
+   * the *one* prompt the next turn will be built on, so a turn that made eight
+   * calls has a prompt eight times its own context, and a turn that ran three
+   * subagents counted three conversations this one never sees. Read off the
+   * turn's last assistant message rather than its result line for that reason.
+   *
+   * Null for a turn that reported none — a crash before the first reply, and
+   * every line written before this field existed.
+   */
+  context: number | null
 }
 
 /**
@@ -526,10 +581,39 @@ export type AssistantEvent =
    * waiting to drift apart. Arriving here also means the card can come down.
    */
   | { type: "decision"; text: string }
+  /**
+   * Why the turn failed, as a line of the conversation.
+   *
+   * Its own event rather than something read off `done`'s `error`, because the
+   * two are not the same thing arriving twice: this is a line `append` writes to
+   * the chat's file, `done` is the turn ending. Drawing the line from `done` as
+   * well meant one failure appearing twice — see `finish` in
+   * `main/worktree-chat.ts`.
+   */
+  | { type: "error"; text: string }
   /** The turn is over, one way or the other. `error` is set when it failed —
-   * including when `claude` itself could not be started. Any ask still pending
-   * is gone with it: the process that would have taken the answer has ended. */
+   * including when `claude` itself could not be started; the line saying so
+   * arrives as the `error` event above. Any ask still pending is gone with it:
+   * the process that would have taken the answer has ended.
+   *
+   * **Not** the chat going quiet: a message sent while that turn was running is
+   * queued, and the turn after it starts without anybody sending anything. What
+   * says whether a chat is working is `busy`. */
   | { type: "done"; error: string | null }
+  /**
+   * Whether the chat is working on something.
+   *
+   * Its own event because a renderer can no longer work it out. It used to be
+   * "sent, and no `done` yet", which was the whole truth while a turn was a
+   * process and a chat refused a second message until the first had finished.
+   * A chat now takes a message mid-turn and runs it afterwards, so the end of a
+   * turn and the end of being busy are different moments and only the main
+   * process knows both — see `onBusy` in `main/claude-agent.ts`.
+   *
+   * A state rather than an edge: the same value can arrive twice, and a receiver
+   * is expected to set rather than to count.
+   */
+  | { type: "busy"; busy: boolean }
   /**
    * What the turn cost, once it is over.
    *
@@ -539,6 +623,20 @@ export type AssistantEvent =
    * been the one event that both ends a turn and adds to it.
    */
   | { type: "usage"; usage: TurnUsage }
+  /**
+   * How full the context window is, as of the reply that just arrived.
+   *
+   * Its own event, and the only one here that is neither a line nor the state
+   * of the turn, because it is the one number somebody watches *while* a turn
+   * runs: a chat's context is what decides when the CLI compacts, and reading
+   * it off the `usage` line means being told after the fact, once per turn. A
+   * long turn that reads twenty files moves this a long way before it ends.
+   *
+   * Not written down. The chat's own usage lines are the record — see `context`
+   * on `TurnUsage` — and this is the same quantity arriving sooner, so a
+   * reloaded window falls back to the last line rather than to nothing.
+   */
+  | { type: "context"; tokens: number }
 
 /** One of the choices in a question the model asked. */
 export type ChatAskOption = {
@@ -1440,6 +1538,34 @@ export type DesktopApi = {
    * Ignored paths are left out — see `GitChange`.
    */
   gitChanges: (folderId: string) => Promise<GitChange[]>
+
+  /**
+   * The three writes the Changes list makes — `git add`, its undo, and
+   * throwing the work away.
+   *
+   * Paths are absolute, one call takes many, and every one of them is checked
+   * against the workspace's folders on the way in, like every `files:*` call:
+   * these write to somebody's repository, and the case worth defending against
+   * is the one where the renderer is wrong.
+   *
+   * Committing is deliberately not here. The dock has a shell in the same
+   * folder, a commit is a sentence somebody writes rather than a button, and a
+   * studio that stages but does not commit is one that stops at the point the
+   * shell is better.
+   */
+  gitStage: (folderId: string, paths: string[]) => Promise<void>
+  gitUnstage: (folderId: string, paths: string[]) => Promise<void>
+  /**
+   * Back to `HEAD`, index and working tree both — see `discard` in
+   * `main/git.ts` for why it is not "the working tree back to the index".
+   *
+   * A file `HEAD` does not have is moved to the trash rather than unlinked, the
+   * same way the Explorer's Delete works: the studio has no undo of its own.
+   */
+  gitDiscard: (folderId: string, paths: string[]) => Promise<void>
+  /** The same, for everything the folder has changed. */
+  gitDiscardAll: (folderId: string) => Promise<void>
+
   /**
    * A file as `HEAD` has it — the left-hand side of a diff.
    *
@@ -1874,6 +2000,10 @@ export const IPC = {
   gitBranch: "git:branch",
   gitStatus: "git:status",
   gitChanges: "git:changes",
+  gitStage: "git:stage",
+  gitUnstage: "git:unstage",
+  gitDiscard: "git:discard",
+  gitDiscardAll: "git:discard-all",
   fileAtHead: "git:file-at-head",
   getSetting: "settings:get",
   setSetting: "settings:set",

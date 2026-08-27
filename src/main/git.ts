@@ -8,17 +8,25 @@ import type { GitChange, GitFileState, GitStatusEntry } from "../shared/api"
 const run = promisify(execFile)
 
 /**
- * What is left of the git integration: the branch name beside a folder, and
- * the state of the files under it.
+ * What is left of the git integration: the branch name beside a folder, the
+ * state of the files under it, and the three writes the Changes list makes.
  *
  * The panel that read a working tree — staging, commits, and the GitHub pull
- * requests beside them — was removed, and none of *that* is coming back through
- * here: there is still no way to stage anything and nothing here talks to a
- * forge. What is answered is what a file **is** — which Explorer colours its
- * rows with, since a file nobody has committed reads differently from one that
- * has been edited, and a `node_modules` the same grey as `src` is a tree that
- * makes somebody read the names to find the code — and, for the Changes list,
- * which files those are and how far each has moved from `HEAD`.
+ * requests beside them — was removed, and most of *that* is still not coming
+ * back through here: nothing talks to a forge, nothing commits, and there is no
+ * history to read. What is answered is what a file **is** — which Explorer
+ * colours its rows with, since a file nobody has committed reads differently
+ * from one that has been edited, and a `node_modules` the same grey as `src` is
+ * a tree that makes somebody read the names to find the code — and, for the
+ * Changes list, which files those are and how far each has moved.
+ *
+ * **Staging came back, and committing did not.** The line between them is not
+ * arbitrary: `stage`, `unstage` and `discard` are answers to "which of these
+ * files do I keep", which is the question the Changes list exists to be read
+ * for and is answered by pointing at rows. A commit is a sentence somebody
+ * writes, with a shell already open in the same folder two panels down — and a
+ * studio that stages but does not commit stops exactly where the shell is
+ * better, rather than growing a second, worse git client.
  */
 export async function currentBranch(dir: string): Promise<string | null> {
   try {
@@ -52,7 +60,31 @@ export const MAX_STATUS_ENTRIES = 5000
  * second command's output — is how a repository reached through a symlink ends
  * up with two spellings of one file (`/tmp` on macOS is `/private/tmp`).
  */
-export type StatusEntry = GitStatusEntry & { relative: string }
+export type StatusEntry = GitStatusEntry & {
+  relative: string
+  /**
+   * Porcelain's own two columns, kept raw — the index against `HEAD`, and the
+   * working tree against the index.
+   *
+   * `state` beside them is the two collapsed into one, which is what the tree
+   * draws: a row there says "changed and not committed" and has no room to say
+   * more. The Changes list is the one place the difference is the whole point,
+   * so the letters travel with the entry rather than being read twice from two
+   * parsers that could disagree.
+   */
+  x: string
+  y: string
+  /**
+   * Where a rename came from, absolute, for the one caller that needs it.
+   *
+   * Porcelain reports a rename as the destination followed by the source, and
+   * the source is not a row: no file is there any more. Discarding the
+   * destination has to put it back, though — a rename half undone is a working
+   * tree in a state nobody asked for — so it is carried here rather than
+   * dropped.
+   */
+  from?: string
+}
 
 /**
  * Every path under `dir` git has something to say about — changed, new,
@@ -113,15 +145,19 @@ export async function workingTree(dir: string): Promise<StatusEntry[]> {
     return []
   }
 
+  // Back onto the path the tree actually holds: what is under the folder is
+  // addressed from the folder, and anything else in the repository keeps the
+  // repository's own path — it matches no row either way, and inventing one
+  // for it would be worse than carrying it.
+  const absolute = (relative: string) =>
+    isUnder(inRepo, relative)
+      ? path.join(dir, path.relative(inRepo, relative))
+      : path.join(root, relative)
+
   return parseStatus(stdout).map((entry) => ({
     ...entry,
-    // Back onto the path the tree actually holds: what is under the folder is
-    // addressed from the folder, and anything else in the repository keeps the
-    // repository's own path — it matches no row either way, and inventing one
-    // for it would be worse than carrying it.
-    path: isUnder(inRepo, entry.relative)
-      ? path.join(dir, path.relative(inRepo, entry.relative))
-      : path.join(root, entry.relative),
+    path: absolute(entry.relative),
+    ...(entry.from === undefined ? {} : { from: absolute(entry.from) }),
   }))
 }
 
@@ -152,11 +188,21 @@ const MAX_COUNTED_BYTES = 2 * 1024 * 1024
  * here is the counts, and what is taken away is the ignored — a repository's
  * ignored files are not anybody's changes, and they are most of the entries.
  *
- * The counts come from `--numstat` against `HEAD`, which covers everything git
- * is already tracking. An untracked file appears in no diff at all, so it is
- * counted by reading it, under the two caps above. A repository with no commit
- * yet has no `HEAD` to diff against: the files are still listed, with no
- * numbers, which is the honest answer rather than an empty panel.
+ * The counts come from `--numstat`, which covers everything git is already
+ * tracking. An untracked file appears in no diff at all, so it is counted by
+ * reading it, under the two caps above. A repository with no commit yet has no
+ * `HEAD` to diff against: the files are still listed, with no numbers, which is
+ * the honest answer rather than an empty panel.
+ *
+ * **One path can be two rows.** Porcelain's two columns are the index against
+ * `HEAD` and the working tree against the index, and a file can have both —
+ * `MM` is work that was staged and then edited again. The tree collapses them,
+ * because a row there has nothing useful to say beyond "not committed"; this
+ * list cannot, because staging is done from it. So a `MM` file is a staged row
+ * and an unstaged row, each with the count of *its own* side: `--cached` for
+ * the first, a plain `git diff` for the second. Summing the two would be the
+ * number for neither, and taking `HEAD` for both would say the same number
+ * twice.
  */
 export async function changes(dir: string): Promise<GitChange[]> {
   const entries = (await workingTree(dir)).filter(
@@ -164,7 +210,10 @@ export async function changes(dir: string): Promise<GitChange[]> {
   )
   if (entries.length === 0) return []
 
-  const counts = await numstat(dir)
+  const [stagedCounts, unstagedCounts] = await Promise.all([
+    numstat(dir, true),
+    numstat(dir, false),
+  ])
 
   // Newest work first would need a stat per row; alphabetical by path is what a
   // list of files in a repository is expected to be, and is stable while
@@ -175,41 +224,99 @@ export async function changes(dir: string): Promise<GitChange[]> {
   let counted = 0
   const changed: GitChange[] = []
   for (const entry of sorted) {
-    const numbers = counts.get(entry.relative)
-    if (numbers) {
-      changed.push({ path: entry.path, state: entry.state, ...numbers })
-      continue
+    // The staged row first, so the two rows for one path arrive in the order
+    // they are drawn in.
+    for (const staged of sidesOf(entry)) {
+      const numbers = (staged ? stagedCounts : unstagedCounts).get(
+        entry.relative
+      )
+      const state = staged ? letterState(entry.x) : letterState(entry.y)
+
+      if (numbers) {
+        changed.push({
+          path: entry.path,
+          state,
+          staged,
+          directory: entry.directory,
+          ...numbers,
+        })
+        continue
+      }
+
+      // Not in the diff: either untracked, or a repository with no `HEAD`.
+      const newLines =
+        !entry.directory &&
+        state === "untracked" &&
+        counted < MAX_COUNTED_NEW_FILES
+          ? await countLines(entry.path)
+          : null
+      if (newLines !== null) counted += 1
+
+      changed.push({
+        path: entry.path,
+        state,
+        staged,
+        directory: entry.directory,
+        added: newLines,
+        removed: newLines === null ? null : 0,
+      })
     }
-
-    // Not in the diff: either untracked, or a repository with no `HEAD`.
-    const newLines =
-      !entry.directory &&
-      entry.state === "untracked" &&
-      counted < MAX_COUNTED_NEW_FILES
-        ? await countLines(entry.path)
-        : null
-    if (newLines !== null) counted += 1
-
-    changed.push({
-      path: entry.path,
-      state: entry.state,
-      added: newLines,
-      removed: newLines === null ? null : 0,
-    })
   }
 
   return changed
 }
 
 /**
- * `--numstat` against `HEAD`, keyed by the same absolute path the entries carry.
+ * Which rows one status entry is: `[true]`, `[false]`, or both.
+ *
+ * A conflict is the one entry that is neither. Its two letters are not an index
+ * state and a working-tree state — `UU`, `AA`, `DU` say who touched what during
+ * the merge — so splitting it into a "staged" half would be inventing a
+ * distinction git is not making. It is one unstaged row, and `git add` on it
+ * means what it means everywhere else: this is resolved.
+ */
+function sidesOf(entry: StatusEntry): boolean[] {
+  if (entry.state === "conflicted") return [false]
+
+  const sides: boolean[] = []
+  // `!` never reaches here (ignored is filtered out) and `?` is the working
+  // tree's own column, so anything else in the first column is staged work.
+  if (entry.x !== " " && entry.x !== "?" && entry.x !== "!") sides.push(true)
+  if (entry.y !== " " && entry.y !== "!") sides.push(false)
+  // A rename with nothing since — `R ` — has no second column, and neither
+  // has a plain `M `. Both are one staged row, which is what the loop above
+  // already produced.
+  return sides
+}
+
+/** One porcelain column as a state. The vocabulary is `stateOf`'s, so a staged
+ * row and an unstaged one are drawn in the same colours as everywhere else. */
+function letterState(letter: string): GitFileState {
+  if (letter === "?") return "untracked"
+  if (letter === "A") return "added"
+  if (letter === "D") return "deleted"
+  if (letter === "U") return "conflicted"
+  // `M`, `R`, `C`, `T` — a retyped or renamed file is, to a list of changes, an
+  // edited one.
+  return "modified"
+}
+
+/**
+ * `--numstat` for one side of the change, keyed by git's own path.
+ *
+ * `--cached` is the index against `HEAD` — what a staged row moved — and the
+ * plain form is the working tree against the **index**, which is what an
+ * unstaged row moved. Neither names `HEAD` as an argument, deliberately: a
+ * repository with no commit has none to name, and `git diff --cached` there
+ * still reports the staged files against the empty tree rather than failing.
  *
  * `--no-renames` on purpose: porcelain status reports a rename as one entry for
  * the new name, so a numstat that split it into `old => new` would key a count
  * under a path no row has and leave the row that exists with none.
  */
 async function numstat(
-  dir: string
+  dir: string,
+  cached: boolean
 ): Promise<Map<string, { added: number; removed: number }>> {
   const counts = new Map<string, { added: number; removed: number }>()
 
@@ -223,7 +330,7 @@ async function numstat(
       "--numstat",
       "-z",
       "--no-renames",
-      "HEAD",
+      ...(cached ? ["--cached"] : []),
       "--",
     ])
   } catch {
@@ -322,6 +429,181 @@ export async function fileAtHead(
   }
 }
 
+/**
+ * The three writes: staging, unstaging, and throwing work away.
+ *
+ * The studio deliberately had none of these — the panel that staged and
+ * committed was removed, and the tree still collapses the index and the working
+ * tree into one state because a row there has nothing more to say. What brought
+ * them back is the Changes list: it is what somebody reads after an agent has
+ * run a turn, and "keep this file, throw that one away" is the sentence being
+ * said at that moment. Committing is still not here, and is still the shell's.
+ *
+ * Every path is a **pathspec relative to `dir`**, not to the repository root.
+ * Git resolves a pathspec against its own cwd, and `dir` is the cwd of every
+ * call in this file — so this is the one form that needs no `rev-parse`, and
+ * the one that cannot be thrown off by a folder reached through a symlink,
+ * which is what `/private/var` on macOS makes of `/var`.
+ *
+ * Anything not under `dir` is refused rather than adjusted. These write to
+ * somebody's working tree, and `ipc.ts` has already checked the path against
+ * the workspace's roots; a second, narrower check here is what keeps a bug in
+ * the caller from becoming a `git restore` in the wrong repository.
+ */
+export async function stage(dir: string, paths: string[]): Promise<void> {
+  const specs = pathspecs(dir, paths)
+  if (specs.length === 0) return
+
+  // `--all` so a deletion is staged as one. Plain `git add` does that too on
+  // any git this decade, but the flag is what says so.
+  await git(dir, ["add", "--all", "--", ...specs])
+}
+
+export async function unstage(dir: string, paths: string[]): Promise<void> {
+  const specs = pathspecs(dir, paths)
+  if (specs.length === 0) return
+
+  try {
+    await git(dir, ["restore", "--staged", "--", ...specs])
+  } catch {
+    // A repository with no commit has no `HEAD` for the index to be restored
+    // from, and everything in that index is an addition — so dropping it from
+    // the index is the whole of unstaging there. `--cached` leaves the file on
+    // disk, which is the difference between unstaging and deleting.
+    await git(dir, ["rm", "--cached", "-r", "--quiet", "--", ...specs])
+  }
+}
+
+/**
+ * Throws away the uncommitted work in each path, and answers with the ones the
+ * caller has to put in the trash.
+ *
+ * **Back to `HEAD`, both sides.** Not "the working tree back to the index":
+ * that is a second, similar thing to explain — and a `Discard` that left a
+ * staged copy of what it just discarded would be the answer nobody expects.
+ * Whichever of a file's two rows is clicked, the file ends up as `HEAD` has it.
+ *
+ * A file `HEAD` does not have cannot be restored from it — a new file, staged
+ * or not, and the destination of a rename. There, discarding is taking it out
+ * of the index and then deleting it, and **this function does not delete it**:
+ * it returns it. Deleting is `shell.trashItem` in `ipc.ts` — the studio has no
+ * undo and every desktop has a trash (the same rule the Explorer's Delete
+ * follows) — and `electron` must not be imported here, or this module stops
+ * being loadable by the tests under plain Bun.
+ */
+export async function discard(dir: string, paths: string[]): Promise<string[]> {
+  const wanted = new Set(pathspecs(dir, paths).map((spec) => spec))
+  if (wanted.size === 0) return []
+
+  const entries = (await workingTree(dir)).filter(
+    (entry) => entry.state !== "ignored" && wanted.has(specOf(dir, entry.path))
+  )
+
+  const restore: string[] = []
+  const drop: string[] = []
+  const trash: string[] = []
+
+  for (const entry of entries) {
+    // The old name of a rename is always restored, whatever becomes of the new
+    // one: it is committed work that is currently missing from the tree.
+    if (entry.from) restore.push(specOf(dir, entry.from))
+
+    if (entry.x === "?") {
+      trash.push(entry.path)
+      continue
+    }
+
+    if (await inHead(dir, specOf(dir, entry.path))) {
+      restore.push(specOf(dir, entry.path))
+      continue
+    }
+
+    // Staged, but nothing in `HEAD` to go back to: a new file that was added,
+    // or where a rename landed.
+    drop.push(specOf(dir, entry.path))
+    trash.push(entry.path)
+  }
+
+  // The index first: a path that is dropped and then restored would be
+  // restored from an index it is no longer in.
+  if (drop.length > 0)
+    await git(dir, ["rm", "--cached", "-r", "--quiet", "--", ...drop])
+  if (restore.length > 0)
+    await git(dir, [
+      "restore",
+      "--source=HEAD",
+      "--staged",
+      "--worktree",
+      "--",
+      ...restore,
+    ])
+
+  return trash
+}
+
+/**
+ * The same, for everything the Changes list is showing.
+ *
+ * Built on `discard` rather than on `git reset --hard`, which would be one
+ * command and the wrong one twice over: it leaves untracked files exactly where
+ * they are — the ones an agent's turn most often adds — and it deletes the
+ * tracked ones outright, past the trash.
+ */
+export async function discardAll(dir: string): Promise<string[]> {
+  const entries = (await workingTree(dir)).filter(
+    (entry) => entry.state !== "ignored"
+  )
+  if (entries.length === 0) return []
+
+  return discard(
+    dir,
+    entries.map((entry) => entry.path)
+  )
+}
+
+/** Whether `HEAD` has this path — the question that decides whether discarding
+ * it is a restore or a deletion. False for a repository with no commits, where
+ * nothing is in `HEAD` at all. */
+async function inHead(dir: string, spec: string): Promise<boolean> {
+  try {
+    const found = await git(dir, [
+      "ls-tree",
+      "-z",
+      "--name-only",
+      "HEAD",
+      "--",
+      spec,
+    ])
+    return found.replace(/\0/g, "").trim() !== ""
+  } catch {
+    return false
+  }
+}
+
+/** Each path as a pathspec relative to `dir`, with anything outside it
+ * refused — see the note above. */
+function pathspecs(dir: string, paths: string[]): string[] {
+  return paths
+    .filter((target) => target === dir || isInsideDir(dir, target))
+    .map((target) => specOf(dir, target))
+}
+
+function specOf(dir: string, target: string): string {
+  const relative = path.relative(dir, target)
+  // The folder itself, which is how "everything here" is spelt to git.
+  return relative === "" ? "." : relative
+}
+
+function isInsideDir(dir: string, target: string): boolean {
+  const relative = path.relative(dir, target)
+  return (
+    relative !== "" &&
+    !relative.startsWith(`..${path.sep}`) &&
+    relative !== ".." &&
+    !path.isAbsolute(relative)
+  )
+}
+
 function isUnder(dir: string, target: string): boolean {
   if (dir === "") return true
   return target === dir || target.startsWith(dir + "/")
@@ -341,11 +623,9 @@ function isUnder(dir: string, target: string): boolean {
  * slashes — and are made absolute by the caller, which is the one that knows
  * where the folder sits in the repository.
  */
-export function parseStatus(
-  stdout: string
-): (Omit<GitStatusEntry, "path"> & { relative: string })[] {
+export function parseStatus(stdout: string): ParsedEntry[] {
   const records = stdout.split("\0")
-  const entries: (Omit<GitStatusEntry, "path"> & { relative: string })[] = []
+  const entries: ParsedEntry[] = []
 
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index]
@@ -359,8 +639,13 @@ export function parseStatus(
 
     // The record after a rename or a copy is where it came from, and is not a
     // record of its own — stepping over it here is what keeps it from being
-    // read as a status of `R ` or a path of its own.
-    if (x === "R" || x === "C" || y === "R" || y === "C") index += 1
+    // read as a status of `R ` or a path of its own. It is kept beside the
+    // destination, for a discard that has to put the old name back.
+    let from: string | undefined
+    if (x === "R" || x === "C" || y === "R" || y === "C") {
+      index += 1
+      from = records[index] || undefined
+    }
 
     if (entries.length >= MAX_STATUS_ENTRIES) break
 
@@ -369,11 +654,22 @@ export function parseStatus(
     const directory = target.endsWith("/")
     const relative = directory ? target.slice(0, -1) : target
 
-    entries.push({ relative, state: stateOf(x, y), directory })
+    entries.push({
+      relative,
+      state: stateOf(x, y),
+      directory,
+      x,
+      y,
+      ...(from === undefined ? {} : { from }),
+    })
   }
 
   return entries
 }
+
+/** What `parseStatus` answers with: an entry before the caller has made its
+ * paths absolute. */
+type ParsedEntry = Omit<StatusEntry, "path" | "from"> & { from?: string }
 
 /**
  * The two status letters as one thing to draw.
