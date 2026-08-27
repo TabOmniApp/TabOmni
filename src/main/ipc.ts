@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
-import { homedir, tmpdir } from "node:os"
+import { tmpdir } from "node:os"
 import path from "node:path"
 
 import {
@@ -17,6 +17,7 @@ import {
   IPC,
   MCP_SETTING_KEYS,
   type ChatPlace,
+  type ClaudeProfile,
   type DatabaseConnectionInput,
   type FileIndexEntry,
   type UpdateDatabaseInput,
@@ -44,25 +45,12 @@ import { sendHttp } from "./http"
 import { McpServers } from "./mcp"
 import { NotePreview } from "./preview"
 import { ProcessManager } from "./process"
+import { expandHome } from "./shell-env"
 import { systemUsage } from "./system-usage"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
 import { TerminalManager } from "./terminal"
 import { TsServers } from "./tsserver"
 import { DirectoryWatchers } from "./watch"
-
-/**
- * Resolves a path the user typed, expanding a leading `~`.
- *
- * The picker hands back absolute paths, but the field beside it accepts typing —
- * and `~/code/app` failing with "there is no folder at ~/code/app" is a poor
- * answer when the folder is plainly there.
- */
-function expandHome(target: string): string {
-  const trimmed = target.trim()
-  if (trimmed === "~") return homedir()
-  if (trimmed.startsWith("~/")) return path.join(homedir(), trimmed.slice(2))
-  return trimmed
-}
 
 /** What `readImageDataUrl` will actually recognize — the same extensions
  * `pickImages`'s dialog filter offers. */
@@ -356,6 +344,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       // through that is easier to be sure of than two.
       folderDir: (folderId) =>
         store.resolveFolderDir(folderId).catch(() => null),
+      // Asked per turn rather than held, like `mcpConfig` — Settings can add,
+      // rename or delete a profile between two messages in the same chat.
+      claudeProfiles: () => store.listClaudeProfiles(),
       chats: () => store.listWorktreeChats(),
       saveChats: (chats) => store.saveWorktreeChats(chats),
       readChat: (id) => store.readWorktreeChat(id),
@@ -369,6 +360,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // `agent-models.ts`. Not a handler that touches any of the managers above,
   // which is why it takes no argument and keeps no state here.
   ipcMain.handle(IPC.agentModels, () => agentModels())
+
+  ipcMain.handle(IPC.listClaudeProfiles, () => store.listClaudeProfiles())
+
+  ipcMain.handle(IPC.saveClaudeProfiles, (_event, profiles: ClaudeProfile[]) =>
+    // `~` expanded here, like `addFolder`'s path field: the SDK spawns
+    // `claude` directly rather than through a shell, so nothing else would
+    // ever turn a typed `~/.claude-group/hung` into an absolute path before
+    // it became `CLAUDE_CONFIG_DIR` — and a literal `~` in that variable is a
+    // directory named `~` relative to the turn's cwd, not the user's home.
+    store.saveClaudeProfiles(
+      profiles.map((profile) => ({
+        ...profile,
+        configDir: expandHome(profile.configDir),
+      }))
+    )
+  )
+
   ipcMain.handle(IPC.listWorktreeChats, () => worktreeChats.list())
 
   ipcMain.handle(IPC.createWorktreeChat, (_event, place: ChatPlace) =>

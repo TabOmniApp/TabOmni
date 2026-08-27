@@ -10,6 +10,7 @@ import {
   ArrowUp,
   AtSign,
   Eye,
+  KeyRound,
   Map,
   MessageCircleQuestion,
   Paperclip,
@@ -33,6 +34,7 @@ import {
   type AgentModel,
   type ChatEffort,
   type ChatPermission,
+  type ClaudeProfile,
   type WorktreeChatOptions,
 } from "@shared/api"
 import {
@@ -47,6 +49,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { relativeTo } from "@/lib/files/paths"
 import { cn } from "@/lib/utils"
+import { useClaudeProfiles } from "@/lib/worktree-chat/claude-profiles"
 import { orderedModels, useAgentModels } from "@/lib/worktree-chat/models"
 import { chatMentions, primeMentions } from "@/lib/worktree-chat/mentions"
 import {
@@ -169,6 +172,9 @@ export function ChatComposer({
   // The user's own `claude`'s list, for the two pickers that need it — the
   // model's rows and, per model, which effort levels exist at all.
   const models = useAgentModels()
+  // Loaded once at launch (`studio.tsx`); read here for the profile picker,
+  // which is drawn only once there is a profile to choose — see `ProfileMenu`.
+  const profiles = useClaudeProfiles((state) => state.profiles)
 
   /* The draft as it stands, for the unmount below: the cleanup runs once and
    * would otherwise close over the empty string it was built with. */
@@ -454,6 +460,13 @@ export function ChatComposer({
                 permission={options.permission}
                 onPick={(permission) => onOptions({ ...options, permission })}
               />
+              {profiles.length > 0 && (
+                <ProfileMenu
+                  profiles={profiles}
+                  profileId={options.profileId ?? null}
+                  onPick={(profileId) => onOptions({ ...options, profileId })}
+                />
+              )}
             </>
           )}
 
@@ -840,6 +853,78 @@ function PermissionMenu({
             </DropdownMenuItem>
           )
         })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * Which `ClaudeProfile` this chat's turns run under — `CLAUDE_CONFIG_DIR`,
+ * picked per chat the way the model and the permission already are.
+ *
+ * Drawn only once a profile exists (see `ChatComposer`): with none configured
+ * the only choice is "this account", which is not a choice, and a fourth
+ * toolbar button that always says the same thing is one nobody asked for.
+ * Adding, naming and pointing a profile at a directory is Settings' own —
+ * `SettingsDialog`'s Claude section — this is only the picker.
+ */
+function ProfileMenu({
+  profiles,
+  profileId,
+  onPick,
+}: {
+  profiles: ClaudeProfile[]
+  profileId: string | null
+  onPick: (profileId: string | null) => void
+}) {
+  const chosen = profiles.find((profile) => profile.id === profileId)
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <ToolbarButton
+            icon={<KeyRound />}
+            label={chosen?.name ?? "Account"}
+            title="Which CLAUDE_CONFIG_DIR this chat's turns run under"
+            on={profileId !== null}
+          />
+        }
+      />
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuItem
+          onClick={() => onPick(null)}
+          className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
+        >
+          <div className="flex size-4 shrink-0 items-center justify-center">
+            {profileId === null && (
+              <CheckIcon className="size-3.5 text-foreground" />
+            )}
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-xs font-normal">This account</span>
+            <span className="truncate text-[10px] text-muted-foreground">
+              Whichever your own `claude` is already signed into
+            </span>
+          </div>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {profiles.map((profile) => (
+          <DropdownMenuItem
+            key={profile.id}
+            onClick={() => onPick(profile.id)}
+            className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
+          >
+            <div className="flex size-4 shrink-0 items-center justify-center">
+              {profileId === profile.id && (
+                <CheckIcon className="size-3.5 text-foreground" />
+              )}
+            </div>
+            <span className="min-w-0 flex-1 truncate text-xs font-normal">
+              {profile.name}
+            </span>
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   )

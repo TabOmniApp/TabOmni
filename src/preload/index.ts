@@ -120,6 +120,9 @@ const api: DesktopApi = {
   httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
 
   agentModels: () => ipcRenderer.invoke(IPC.agentModels),
+  listClaudeProfiles: () => ipcRenderer.invoke(IPC.listClaudeProfiles),
+  saveClaudeProfiles: (profiles) =>
+    ipcRenderer.invoke(IPC.saveClaudeProfiles, profiles),
   listWorktreeChats: () => ipcRenderer.invoke(IPC.listWorktreeChats),
   createWorktreeChat: (place) =>
     ipcRenderer.invoke(IPC.createWorktreeChat, place),

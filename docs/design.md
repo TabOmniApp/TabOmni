@@ -642,12 +642,19 @@ in or not, as that project already decides — and it is offered only where the 
 had a rule to suggest, since a button that did nothing would be worse than no
 button.
 
-**`AskUserQuestion` comes down the same callback**: the model's own
-multiple-choice question, the thing anyone who has used the interactive CLI will
-recognise. It reaches the app by being on no mode's permit list, which is the whole
-mechanism. In `Ask` that lands in `onAsk` and becomes a card; in the other four
-`deciding` refuses it with a sentence the model reads, since there a question is
-a turn waiting on nobody. It is answered by **allowing the call**
+**`AskUserQuestion` comes down the same callback, in every mode.** The model's
+own multiple-choice question, the thing anyone who has used the interactive CLI
+will recognise. It reaches the app by being on no mode's permit list, which is
+the whole mechanism — `permitting` in `main/worktree-chat.ts` carves it out of
+`Full access`'s "everything" for the same reason, since that mode's `allowed` is
+`undefined` and would otherwise answer the question with its own unanswered
+input before `onAsk` ever ran. Unlike the rest of what `canUseTool` sees, this
+one is the model asking the _user_ something rather than asking for permission,
+so `onAsk` is wired for it regardless of what else a mode permits or asks about
+— `Plan` and `Read only` included. Everything else `permits` refuses still goes
+through `permission.asks`: only `Ask` stops for those, and the other four refuse
+them with a sentence the model reads, since there a question is a turn waiting
+on nobody. `AskUserQuestion` itself is answered by **allowing the call**
 with the picks merged into its input, the original questions included, which the
 SDK requires and which is why `AskDecision.input` merges rather than replaces.
 Picks are arrays in the contract and in the pane whether or not a question is

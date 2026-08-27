@@ -1,12 +1,18 @@
+import type { ReactNode } from "react"
 import { useState } from "react"
-import { Check, ShieldQuestion } from "lucide-react"
+import { Pencil, ShieldQuestion } from "lucide-react"
 
 import type {
+  ChatAskOption,
   ChatAskQuestion,
   WorktreeChatAnswer,
   WorktreeChatAsk,
 } from "@shared/api"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { cn } from "@/lib/utils"
 
 /**
@@ -96,6 +102,13 @@ export function ChatAsk({
  * A multi-select question is the reason picks are held as arrays here and in the
  * contract: one shape for both, so nothing has to branch on `multiSelect` twice
  * and disagree with itself.
+ *
+ * The model's own options are not the only way to answer — the interactive CLI
+ * always leaves room to type past them, and a card that only offered its picks
+ * would be a step down from that. `custom` holds what was typed, kept apart from
+ * `picked` rather than folded into it as it is typed, because a single-select
+ * question needs the two to disagree while one is being edited: `answersFor` is
+ * where they reconcile, at read time.
  */
 function Questions({
   ask,
@@ -105,6 +118,8 @@ function Questions({
   onAnswer: (answer: WorktreeChatAnswer) => void
 }) {
   const [picked, setPicked] = useState<Record<string, string[]>>({})
+  const [custom, setCustom] = useState<Record<string, string>>({})
+  const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({})
 
   function toggle(question: ChatAskQuestion, label: string) {
     setPicked((was) => {
@@ -119,11 +134,53 @@ function Questions({
           : [...current, label],
       }
     })
+    // A single-select question has one answer: picking an option here is what
+    // a typed one loses to, same as the other way round in `toggleCustom`.
+    if (!question.multiSelect) {
+      setCustomOpen((was) => ({ ...was, [question.question]: false }))
+      setCustom((was) => ({ ...was, [question.question]: "" }))
+    }
+  }
+
+  function toggleCustom(question: ChatAskQuestion) {
+    const opening = !customOpen[question.question]
+    setCustomOpen((was) => ({ ...was, [question.question]: opening }))
+    if (!opening) {
+      setCustom((was) => ({ ...was, [question.question]: "" }))
+      return
+    }
+    if (!question.multiSelect) {
+      setPicked((was) => ({ ...was, [question.question]: [] }))
+    }
+  }
+
+  // What actually goes back for a question: the typed answer where there is
+  // one, alongside the picks for a multi-select and replacing them for a
+  // single-select — the same rule `toggle`/`toggleCustom` already enforce on
+  // screen, applied once more here rather than trusted to have held.
+  function answersFor(question: ChatAskQuestion): string[] {
+    const preset = picked[question.question] ?? []
+    const typed = (custom[question.question] ?? "").trim()
+    if (!typed) return preset
+    return question.multiSelect ? [...preset, typed] : [typed]
   }
 
   const answered = ask.questions.every(
-    (question) => (picked[question.question] ?? []).length > 0
+    (question) => answersFor(question).length > 0
   )
+
+  function submit() {
+    if (!answered) return
+    onAnswer({
+      kind: "answers",
+      answers: Object.fromEntries(
+        ask.questions.map((question) => [
+          question.question,
+          answersFor(question),
+        ])
+      ),
+    })
+  }
 
   return (
     <div className="space-y-3 rounded-lg border border-primary/40 bg-primary/5 p-2.5">
@@ -140,54 +197,136 @@ function Questions({
           )}
 
           <div className="mt-1.5 space-y-1 pl-5">
-            {question.options.map((option) => {
-              const on = (picked[question.question] ?? []).includes(
-                option.label
-              )
-              return (
-                <button
+            {question.multiSelect ? (
+              question.options.map((option) => (
+                <OptionRow
                   key={option.label}
-                  type="button"
-                  onClick={() => toggle(question, option.label)}
-                  className={cn(
-                    "flex w-full items-baseline gap-1.5 rounded-md border px-2 py-1 text-left transition-colors",
-                    on
-                      ? "border-primary/50 bg-primary/10"
-                      : "border-transparent hover:bg-accent"
-                  )}
-                >
-                  <Check
-                    className={cn(
-                      "size-3 shrink-0 translate-y-0.5",
-                      on ? "text-primary" : "text-transparent"
+                  option={option}
+                  on={(picked[question.question] ?? []).includes(option.label)}
+                  indicator={
+                    <Checkbox
+                      checked={(picked[question.question] ?? []).includes(
+                        option.label
+                      )}
+                      onCheckedChange={() => toggle(question, option.label)}
+                      className="mt-0.5"
+                    />
+                  }
+                />
+              ))
+            ) : (
+              // A group rather than one radio per button: base-ui's own arrow-key
+              // navigation between options, which a row of independent buttons
+              // never had.
+              <RadioGroup
+                value={picked[question.question]?.[0] ?? ""}
+                onValueChange={(value) => toggle(question, String(value))}
+                className="gap-1"
+              >
+                {question.options.map((option) => (
+                  <OptionRow
+                    key={option.label}
+                    option={option}
+                    on={(picked[question.question] ?? []).includes(
+                      option.label
                     )}
+                    indicator={
+                      <RadioGroupItem value={option.label} className="mt-0.5" />
+                    }
                   />
-                  <span className="min-w-0">
-                    <span className="block text-xs font-medium">
-                      {option.label}
-                    </span>
-                    {option.description && (
-                      <span className="block text-[0.7rem] text-muted-foreground">
-                        {option.description}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              )
-            })}
+                ))}
+              </RadioGroup>
+            )}
+
+            <button
+              type="button"
+              onClick={() => toggleCustom(question)}
+              className={cn(
+                "flex w-full items-baseline gap-1.5 rounded-md border px-2 py-1 text-left transition-colors",
+                customOpen[question.question]
+                  ? "border-primary/50 bg-primary/10"
+                  : "border-transparent hover:bg-accent"
+              )}
+            >
+              <Pencil
+                className={cn(
+                  "size-3 shrink-0 translate-y-0.5",
+                  customOpen[question.question]
+                    ? "text-primary"
+                    : "text-muted-foreground"
+                )}
+              />
+              <span className="min-w-0 text-xs font-medium">
+                Type your own answer
+              </span>
+            </button>
+            {customOpen[question.question] && (
+              <Input
+                type="text"
+                autoFocus
+                value={custom[question.question] ?? ""}
+                onChange={(event) =>
+                  setCustom((was) => ({
+                    ...was,
+                    [question.question]: event.target.value,
+                  }))
+                }
+                onKeyDown={(event) => {
+                  // Enter submits the whole card once every question has an
+                  // answer, the same as clicking `Answer` below — a typed
+                  // reply is usually the last thing filled in.
+                  if (event.key === "Enter") submit()
+                }}
+                placeholder="Type an answer…"
+                className="h-7 text-xs"
+              />
+            )}
           </div>
         </div>
       ))}
 
       <div className="pl-5">
-        <Button
-          size="sm"
-          disabled={!answered}
-          onClick={() => onAnswer({ kind: "answers", answers: picked })}
-        >
+        <Button size="sm" disabled={!answered} onClick={submit}>
           Answer
         </Button>
       </div>
     </div>
+  )
+}
+
+/**
+ * One option, radio or checkbox depending on the caller — the indicator is the
+ * only thing that differs, so it is the only thing passed in rather than this
+ * branching on `multiSelect` a second time next to where `Questions` already
+ * did.
+ */
+function OptionRow({
+  option,
+  on,
+  indicator,
+}: {
+  option: ChatAskOption
+  on: boolean
+  indicator: ReactNode
+}) {
+  return (
+    <Label
+      className={cn(
+        "flex w-full items-start gap-2 rounded-md border px-2 py-1 text-left text-xs font-normal transition-colors",
+        on
+          ? "border-primary/50 bg-primary/10"
+          : "border-transparent hover:bg-accent"
+      )}
+    >
+      {indicator}
+      <span className="min-w-0">
+        <span className="block text-xs font-medium">{option.label}</span>
+        {option.description && (
+          <span className="block text-[0.7rem] text-muted-foreground">
+            {option.description}
+          </span>
+        )}
+      </span>
+    </Label>
   )
 }

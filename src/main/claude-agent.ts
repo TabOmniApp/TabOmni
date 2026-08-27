@@ -93,6 +93,16 @@ export type AgentTurn = {
    * themselves — see `mcpArgs`. No `--strict-mcp-config` goes with it, so the
    * CLI merges it with whatever it would already have found on its own. */
   mcpConfig?: string | null
+  /**
+   * `CLAUDE_CONFIG_DIR`, for a turn running under one of the workspace's
+   * `ClaudeProfile`s rather than the default `~/.claude`.
+   *
+   * Unset (or null) for the account the user's own `claude` is already signed
+   * into — the same "leave it alone" default `model` and `effort` follow. Goes
+   * through `environment`'s `extra`, which is the one place this app's own env
+   * wins over whatever the shell already exports.
+   */
+  configDir?: string | null
   /** Directories outside `cwd` the turn may read. */
   addDirs?: string[]
   appendSystemPrompt?: string
@@ -247,7 +257,9 @@ export async function runAgentTurn(
       // The user's own install, not the SDK's bundled CLI: their login, their
       // settings, their `CLAUDE_BIN` override.
       pathToClaudeCodeExecutable: binary,
-      env: environment(),
+      env: environment(
+        turn.configDir ? { CLAUDE_CONFIG_DIR: turn.configDir } : {}
+      ),
       // One or the other, never both — the SDK refuses `sessionId` together
       // with `resume`, which is the same rule `--session-id` had.
       ...(turn.resume
