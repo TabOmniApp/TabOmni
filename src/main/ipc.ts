@@ -40,7 +40,16 @@ import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
 import * as files from "./files"
 import { MAX_INDEXED_FILES } from "./files"
-import { changes, currentBranch, fileAtHead, workingTree } from "./git"
+import {
+  changes,
+  currentBranch,
+  discard,
+  discardAll,
+  fileAtHead,
+  stage,
+  unstage,
+  workingTree,
+} from "./git"
 import { sendHttp } from "./http"
 import { McpServers } from "./mcp"
 import { NotePreview } from "./preview"
@@ -533,6 +542,69 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.gitChanges, async (_event, folderId: string) =>
     changes(await store.resolveFolderDir(folderId))
   )
+
+  /*
+   * The Changes list's three writes.
+   *
+   * Two gates, not one, and neither is redundant. `inWorkspace` is the same
+   * check the eight `files:*` handlers pass through — an absolute path from the
+   * renderer can name anything on the machine — and `git.ts` then refuses
+   * anything that is not under the folder it was handed, so a path inside
+   * *another* of the workspace's folders cannot be staged into this one's
+   * repository.
+   *
+   * What comes back from a discard is the paths git had nothing to restore —
+   * new files — and those are trashed here rather than in `git.ts`, which stays
+   * free of `electron` so the tests can import it.
+   */
+  ipcMain.handle(
+    IPC.gitStage,
+    async (_event, folderId: string, paths: string[]) =>
+      stage(
+        await store.resolveFolderDir(folderId),
+        await Promise.all(paths.map(inWorkspace))
+      )
+  )
+
+  ipcMain.handle(
+    IPC.gitUnstage,
+    async (_event, folderId: string, paths: string[]) =>
+      unstage(
+        await store.resolveFolderDir(folderId),
+        await Promise.all(paths.map(inWorkspace))
+      )
+  )
+
+  ipcMain.handle(
+    IPC.gitDiscard,
+    async (_event, folderId: string, paths: string[]) => {
+      const trash = await discard(
+        await store.resolveFolderDir(folderId),
+        await Promise.all(paths.map(inWorkspace))
+      )
+      await trashAll(trash)
+    }
+  )
+
+  ipcMain.handle(IPC.gitDiscardAll, async (_event, folderId: string) => {
+    await trashAll(await discardAll(await store.resolveFolderDir(folderId)))
+  })
+
+  /**
+   * The new files a discard could not restore, moved to the trash.
+   *
+   * One at a time and each failure swallowed: `shell.trashItem` refuses on a
+   * volume with no trash, and a discard that restored eleven files and then
+   * threw on the twelfth would leave the list saying nothing about the ten it
+   * did. The row that is still there afterwards is the report.
+   */
+  async function trashAll(paths: string[]): Promise<void> {
+    for (const target of paths) {
+      await shell.trashItem(target).catch((error: unknown) => {
+        console.error(`Could not trash ${target}`, error)
+      })
+    }
+  }
 
   /**
    * The committed side of a diff.

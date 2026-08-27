@@ -10,12 +10,12 @@ import { useStudio } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import { blocksOf } from "@/lib/worktree-chat/activity"
 import { placeOf, useWorktreeChats } from "@/lib/worktree-chat/store"
-import { totalOf, usageDetail, usageLine } from "@/lib/worktree-chat/usage"
+import { chatLine, totalOf, usageDetail } from "@/lib/worktree-chat/usage"
 import { ChatAsk } from "./chat-ask"
 import { ChatComposer } from "./chat-composer"
 import { ChatActivity } from "./chat-activity"
 import { ChatMessage } from "./chat-message"
-import { ChatSkeleton } from "./chat-skeleton"
+import { ChatSkeleton, ChatTranscriptSkeleton } from "./chat-skeleton"
 import { WorktreeWelcome } from "./worktree-welcome"
 
 /**
@@ -128,7 +128,10 @@ function Conversation({
   options: WorktreeChatOptions
 }) {
   const messages = useWorktreeChats((state) => state.messages[chatId])
+  const reading = useWorktreeChats((state) => state.reading.includes(chatId))
   const sending = useWorktreeChats((state) => state.sending.includes(chatId))
+  const startedAt = useWorktreeChats((state) => state.startedAt[chatId])
+  const context = useWorktreeChats((state) => state.context[chatId])
   const ask = useWorktreeChats((state) => state.asks[chatId])
   const send = useWorktreeChats((state) => state.send)
   const stop = useWorktreeChats((state) => state.stop)
@@ -155,25 +158,71 @@ function Conversation({
     state.folders.find((entry) => entry.id === place?.folderId)
   )?.path
 
-  const box = useRef<HTMLDivElement>(null)
-  const atBottom = useRef(true)
+  const lines = messages ?? []
+  // A chat with no lines *yet* is not an empty chat, and the two have nothing
+  // in common to say — one gets the skeleton, the other the welcome.
+  const empty = !reading && lines.length === 0
 
-  // Follows the newest turn, but only while it is already at the bottom:
-  // yanking the view down while somebody reads further up is what makes a
-  // transcript unusable.
+  const box = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLDivElement>(null)
+  /**
+   * Whether the view is following the end of the transcript. Deliberately not
+   * "is scrolled to the bottom": a message rendering taller a frame later —
+   * markdown, a code block, an image — leaves the view short of the bottom
+   * without anybody having scrolled, and reading the distance alone is what
+   * made the pane stop following after the first such block.
+   */
+  const pinned = useRef(true)
+  const lastTop = useRef(0)
+
+  // Follows the newest turn, but only while it is pinned: yanking the view down
+  // while somebody reads further up is what makes a transcript unusable.
   // `ask` is in here too: a question arriving is the one thing that must not be
   // left below the fold, since the turn is waiting on it.
   useEffect(() => {
     const element = box.current
-    if (element && atBottom.current) element.scrollTop = element.scrollHeight
+    if (element && pinned.current) element.scrollTop = element.scrollHeight
   }, [messages, sending, ask])
 
-  const lines = messages ?? []
-  const empty = lines.length === 0
+  // Opening a chat lands at its newest turn. The pane is one instance reused
+  // across the strip's chats rather than one per chat, so without this a switch
+  // inherits the previous conversation's scroll position — and its pin, which
+  // is what kept the effect above from following the new chat at all.
+  useEffect(() => {
+    const element = box.current
+    pinned.current = true
+    lastTop.current = 0
+    if (element) element.scrollTop = element.scrollHeight
+  }, [chatId])
+
+  // The transcript settles over several frames — lines arrive from disk after
+  // the switch, and a block that has just mounted grows as its markdown, code
+  // and images render. Scrolling once from an effect lands on whatever height
+  // existed at that moment, so the bottom is held here instead, for as long as
+  // the content keeps changing size.
+  useEffect(() => {
+    const element = box.current
+    const inner = content.current
+    if (!element || !inner) return
+    const observer = new ResizeObserver(() => {
+      if (!pinned.current) return
+      element.scrollTop = element.scrollHeight
+      lastTop.current = element.scrollTop
+    })
+    observer.observe(inner)
+    return () => observer.disconnect()
+  }, [empty, reading])
+
   // The chat's own running cost, added up from the turns' own lines rather than
   // kept anywhere — see `totalOf`. Null for a chat with no usage lines at all,
   // which is every chat written before there were any.
   const total = totalOf(lines)
+  // With the context window where it stands *now* rather than where the last
+  // turn left it: main sends that per reply, so it moves while a turn works.
+  const line = chatLine(total, context)
+  const detail = total
+    ? usageDetail({ ...total, context: context ?? total.context })
+    : undefined
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -181,21 +230,37 @@ function Conversation({
         ref={box}
         onScroll={(event) => {
           const { scrollTop, scrollHeight, clientHeight } = event.currentTarget
-          atBottom.current = scrollHeight - scrollTop - clientHeight < 8
+          // Reaching the bottom pins; only scrolling *up* unpins. Content
+          // growing under a still view fires a scroll event too, and treating
+          // that as leaving the bottom is what stopped the pane following a
+          // turn that was still rendering.
+          if (scrollHeight - scrollTop - clientHeight < 8) pinned.current = true
+          else if (scrollTop < lastTop.current - 1) pinned.current = false
+          lastTop.current = scrollTop
         }}
         className={cn(
           "min-h-0 flex-1 overflow-y-auto",
           empty ? "grid place-items-center px-6" : "px-4 py-4"
         )}
       >
-        {empty ? (
+        {reading ? (
+          <div
+            ref={content}
+            className="mx-auto flex w-full max-w-2xl flex-col gap-3"
+          >
+            <ChatTranscriptSkeleton />
+          </div>
+        ) : empty ? (
           // Where this chat is, which is what somebody with three checkouts of
           // one project open needs before they ask for anything.
           <div className="w-full max-w-md">
             <WorktreeWelcome place={place} />
           </div>
         ) : (
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-3">
+          <div
+            ref={content}
+            className="mx-auto flex w-full max-w-2xl flex-col gap-3"
+          >
             {blocksOf(lines).map((block) =>
               block.kind === "activity" ? (
                 <ChatActivity key={block.id} of={block} />
@@ -210,7 +275,7 @@ function Conversation({
             )}
             {/* Not while a question is up — the turn is held, not working, and
                 a spinner under the card would say otherwise. */}
-            {sending && !ask && <ChatSkeleton />}
+            {sending && !ask && <ChatSkeleton startedAt={startedAt} />}
           </div>
         )}
       </div>
@@ -238,7 +303,12 @@ function Conversation({
             placeholder={
               ask
                 ? "Answer above to carry on…"
-                : placeholderFor(options.permission, "this project")
+                : sending
+                  ? // Said rather than left to be discovered: the field is live
+                    // while a turn runs, and somebody who last used this app a
+                    // version ago has every reason to think it is not.
+                    "Type ahead — this goes when the turn ends…"
+                  : placeholderFor(options.permission, "this project")
             }
             options={options}
             onOptions={(next) => setOptions(chatId, next)}
@@ -268,12 +338,12 @@ function Conversation({
                 per-turn lines are up there, and what belongs here is the one
                 number somebody compares against `/cost` in a terminal — this
                 chat, so far. */}
-            {total && (
+            {line && (
               <p
-                title={usageDetail(total)}
+                title={detail}
                 className="shrink-0 text-muted-foreground/80 tabular-nums"
               >
-                {usageLine(total)}
+                {line}
               </p>
             )}
           </div>

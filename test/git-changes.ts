@@ -72,6 +72,10 @@ async function main() {
   await writeFile(path.join(root, "fresh.ts"), "a\nb\n")
   await mkdir(path.join(root, "dist"))
   await writeFile(path.join(root, "dist", "bundle.js"), "// built\n")
+  // A wholly untracked directory, which git reports as one entry rather than as
+  // the files under it — `?? assets/`.
+  await mkdir(path.join(root, "assets"))
+  await writeFile(path.join(root, "assets", "logo.svg"), "<svg/>\n")
 
   const rows = await rowsIn(root)
 
@@ -107,9 +111,29 @@ async function main() {
   )
 
   check(
+    // Without this the list draws it as a file with no line counts, and the row
+    // opens a diff of a path that is not a file.
+    "a wholly untracked directory says it is one",
+    rows["assets"]?.directory === true && rows["assets"]?.state === "untracked",
+    rows["assets"]
+  )
+
+  check(
+    "with no line counts, since a directory is in no diff and is not read",
+    rows["assets"]?.added === null && rows["assets"]?.removed === null,
+    rows["assets"]
+  )
+
+  check(
+    "and a file is not a directory",
+    rows["fresh.ts"]?.directory === false,
+    rows["fresh.ts"]
+  )
+
+  check(
     "rows are ordered by path, so the list does not move under a click",
     (await changes(root)).map((change) => path.basename(change.path)).join() ===
-      "edited.ts,fresh.ts,removed.ts"
+      "assets,edited.ts,fresh.ts,removed.ts"
   )
 
   section("the committed side")

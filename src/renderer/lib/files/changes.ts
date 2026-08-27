@@ -5,7 +5,9 @@ import type { GitChange } from "@shared/api"
 import { useProjects } from "../projects"
 import { useStudio } from "../store"
 import { useGitStatus } from "./git-status"
-import { fileRoots } from "./roots"
+import { parentOf } from "./paths"
+import { fileRoots, type FileRoot } from "./roots"
+import { useFiles } from "./store"
 
 /**
  * What has changed in a checkout: the Explorer's `Changes` list, and the diff
@@ -62,6 +64,26 @@ type ChangesState = {
    */
   refresh: (root: { id: string; folderId: string }) => Promise<void>
 
+  /**
+   * The three writes, each against one root — `git add`, its undo, and
+   * throwing the work away.
+   *
+   * They take the whole `FileRoot` rather than an id because all three end in
+   * the same three re-reads, and each needs a different half of it: the list
+   * here, the tree's colours in `useGitStatus`, and the Explorer's listings in
+   * `useFiles` — a discarded file is gone from disk, and a row left drawn for
+   * it is a row that opens nothing.
+   *
+   * Nothing is optimistic. A staged file is not a guess the renderer is in a
+   * position to make — git decides what `add` did to a `MM` file — so the list
+   * re-reads and draws git's own answer, which is also what a watcher would
+   * have made it do a moment later.
+   */
+  stage: (root: FileRoot, paths: string[]) => Promise<void>
+  unstage: (root: FileRoot, paths: string[]) => Promise<void>
+  discard: (root: FileRoot, paths: string[]) => Promise<void>
+  discardAll: (root: FileRoot) => Promise<void>
+
   /** Opens the diff tab for a root and puts it on screen — a row in the
    * Explorer's `Changes` list. */
   open: (rootId: string) => void
@@ -102,6 +124,29 @@ export const useChanges = create<ChangesState>((set, get) => ({
         : state.byRoot,
       selectedPath: keepSelected(state.selectedPath, root.id, changes),
     }))
+  },
+
+  async stage(root, paths) {
+    await window.desktop.gitStage(root.folderId, paths)
+    await settle(root, paths)
+  },
+
+  async unstage(root, paths) {
+    await window.desktop.gitUnstage(root.folderId, paths)
+    await settle(root, paths)
+  },
+
+  async discard(root, paths) {
+    await window.desktop.gitDiscard(root.folderId, paths)
+    await settle(root, paths)
+  },
+
+  async discardAll(root) {
+    // The paths before they are gone: `settle` re-reads the directories they
+    // were in, and after the call there is nothing left to read them from.
+    const paths = (get().byRoot[root.id] ?? []).map((change) => change.path)
+    await window.desktop.gitDiscardAll(root.folderId)
+    await settle(root, paths)
   },
 
   open(rootId) {
@@ -175,6 +220,27 @@ export const useChanges = create<ChangesState>((set, get) => ({
 }))
 
 /**
+ * What every write ends with: this list, the tree's colours, and the listings
+ * the paths were in.
+ *
+ * All three, because a write is the one moment the three stores can disagree
+ * about the same file — `git add` changes what this list says and what colour
+ * the tree draws, and a discard changes what is on disk as well. The watchers
+ * would report the last of those eventually; a list that is right only after a
+ * debounce is a list somebody clicks twice.
+ */
+async function settle(root: FileRoot, paths: string[]): Promise<void> {
+  await Promise.all([
+    useChanges.getState().refresh(root),
+    useGitStatus.getState().refresh(root),
+    // The directories, not the files: `syncDirs` re-reads a listing and the
+    // files in it that are on screen, and skips anything with unsaved edits —
+    // which is the rule everywhere else in the Explorer and stays the rule here.
+    useFiles.getState().syncDirs([...new Set(paths.map(parentOf))]),
+  ])
+}
+
+/**
  * A checkout removed takes its tab with it.
  *
  * The pane can say "that checkout has gone" and does, for the frame between the
@@ -216,6 +282,31 @@ export function keepSelected(
   const path = selected[rootId]
   if (!path || changes.some((change) => change.path === path)) return selected
   return { ...selected, [rootId]: null }
+}
+
+/**
+ * How many files have changed — the number on the `Changes` tab.
+ *
+ * Not `changes.length`, since a file staged and then edited again is two rows
+ * and one file. The tab answers "how much is there to look at here", and a `13`
+ * over a list of twelve names is the kind of wrong nobody reports and everybody
+ * notices.
+ */
+export function changeCount(changes: GitChange[] | undefined): number {
+  if (changes === undefined) return 0
+  return new Set(changes.map((change) => change.path)).size
+}
+
+/** The two halves the list draws under their own headings, each keeping the
+ * order `changes` arrived in — which is git's, by path. */
+export function splitChanges(changes: GitChange[]): {
+  staged: GitChange[]
+  unstaged: GitChange[]
+} {
+  return {
+    staged: changes.filter((change) => change.staged),
+    unstaged: changes.filter((change) => !change.staged),
+  }
 }
 
 /**

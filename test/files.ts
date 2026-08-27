@@ -13,6 +13,7 @@ import {
   renamePath,
 } from "../src/main/files"
 import { matchesLoosely, shortlist } from "../src/renderer/lib/files/search"
+import type { FileIndexEntry } from "../src/shared/api"
 import { iconNameFor } from "../src/renderer/lib/files/icon-names"
 import {
   defaultViewer,
@@ -400,19 +401,47 @@ async function main() {
       "every entry carries the folder it was found under",
       indexed.every((item) => item.folderId === "folder-1")
     )
+    check(
+      "a folder is indexed too, for a chat's @ menu",
+      indexed.some(
+        (item) => item.relative === "src/lib" && item.kind === "directory"
+      ),
+      relatives
+    )
+    check(
+      "an ignored folder is not itself a row either",
+      !relatives.includes("node_modules")
+    )
+    check(
+      "a file carries its size, which is what the @ menu turns into tokens",
+      indexed.find((item) => item.relative === "src/lib/store.ts")?.bytes ===
+        "export {}\n".length
+    )
+    check(
+      "a folder has no size of its own",
+      indexed
+        .filter((item) => item.kind === "directory")
+        .every((item) => item.bytes === 0)
+    )
 
     section("shortlist")
 
-    const entry = (relative: string) => ({
+    const entry = (
+      relative: string,
+      kind: "file" | "directory" = "file"
+    ): FileIndexEntry => ({
       path: `/w/${relative}`,
       relative,
       folderId: "folder-1",
+      kind,
+      bytes: 100,
     })
     const index = [
       entry("src/store.ts"),
       entry("src/renderer/lib/db/explorer-store.ts"),
       entry("docs/design.md"),
       entry("src/lib/files/store.ts"),
+      entry("src/lib/files", "directory"),
     ]
 
     check(
@@ -442,6 +471,11 @@ async function main() {
       shortlist(index, "zzz").length === 0
     )
     check("the limit is honoured", shortlist(index, "s", 2).length === 2)
+    check(
+      "a folder is not a palette row: the palette opens tabs",
+      shortlist(index, "libfiles").every((item) => item.kind === "file"),
+      shortlist(index, "libfiles").map((item) => item.relative)
+    )
 
     check("an empty query matches anything", matchesLoosely("abc", ""))
     check("characters must appear in order", !matchesLoosely("abc", "cb"))

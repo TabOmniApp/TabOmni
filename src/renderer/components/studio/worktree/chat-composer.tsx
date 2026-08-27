@@ -10,6 +10,8 @@ import {
   ArrowUp,
   AtSign,
   Eye,
+  File,
+  Folder,
   KeyRound,
   Map,
   MessageCircleQuestion,
@@ -48,6 +50,9 @@ import {
   DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
 import { relativeTo } from "@/lib/files/paths"
+import { useGitStatus } from "@/lib/files/git-status"
+import { iconFor } from "@/lib/files/icons"
+import { useFiles } from "@/lib/files/store"
 import { cn } from "@/lib/utils"
 import { useClaudeProfiles } from "@/lib/worktree-chat/claude-profiles"
 import { orderedModels, useAgentModels } from "@/lib/worktree-chat/models"
@@ -66,15 +71,23 @@ import {
 import { IconButton } from "../icon-button"
 
 /**
- * A chat's composer, with an `@` menu over the workspace's panels.
+ * A chat's composer, with an `@` menu over the checkout's folders and files.
  *
- * The turn already has the panels' tools — a chat is started with whichever of
- * the Database, API and Notes MCP servers are switched on — so a mention here is
- * only the name: `list_tables`, `get_request` and `read_note` all take one, and
- * a name is something the agent can look up when it needs to rather than a copy
- * of a schema that was true when the message was typed. There was a composer
- * whose `@` pasted the context in, because its CLI could see nothing but the
- * prompt; see `lib/worktree-chat/mention-text.ts` for why this one does not.
+ * A mention is the path and nothing else — the turn runs in this checkout with
+ * `Read`, so a path is already something the agent can open, and it is what the
+ * agent would have typed itself.
+ *
+ * What the menu leaves out is as deliberate as what it holds: `.git`,
+ * `node_modules` and the rest are never indexed, and what the repository's own
+ * `.gitignore` disowns is dropped on top of that (`lib/worktree-chat/
+ * mentions.ts`).
+ *
+ * A row is the file type's own icon, the path, and an estimate of what reading
+ * it would cost — the last being the one thing a path alone does not say:
+ * `src/main` and `src/main/git.ts` look alike in a menu and are three orders of
+ * magnitude apart in a context window. There was a composer whose `@` pasted the
+ * context in, and one that listed the Database, API and Notes panels' names; see
+ * `lib/worktree-chat/mention-text.ts` for why this one does neither.
  *
  * The tint is drawn *behind* the text by a mirror of it, rather than by making
  * this a rich-text editor: the message is plain text on the wire and in the
@@ -96,14 +109,12 @@ const MAX_ROWS = 40
 // the whole width back.
 const FIELD = "px-2.5 pt-2 pb-1 text-xs leading-relaxed md:text-xs"
 
-/** The hue each kind is known by — the section's own tokens, so a mention reads
- * as belonging to that panel here and on its icon. A database and one of its
- * tables share one: they are the same panel. */
+/** The hue each kind is known by — the Explorer's own token, since that is the
+ * panel a path belongs to, with a folder drawn in it more faintly than a file
+ * so the two are told apart at a glance. */
 const KIND_HUE: Record<PlainMentionKind, string> = {
-  database: "var(--section-database)",
-  table: "var(--section-database)",
-  request: "var(--section-api)",
-  note: "var(--section-note)",
+  directory: "color-mix(in oklab, var(--section-files) 60%, transparent)",
+  file: "var(--section-files)",
 }
 
 export function ChatComposer({
@@ -203,9 +214,26 @@ export function ChatComposer({
    * menu stays dismissed for this word rather than for ever. */
   const dismissed = useRef(false)
 
-  // The panels this menu reads load lazily, so the first `@` of a launch would
-  // otherwise offer a workspace that looks empty.
+  // The index this menu reads is walked on demand, so the first `@` of a launch
+  // would otherwise offer a workspace that looks empty.
   useEffect(primeMentions, [])
+
+  // Subscribed rather than read where they are needed: the walk and the
+  // `git status` that filters it both land a moment after the first `@` may
+  // already have been typed, and this is what redraws the menu — and the tint
+  // behind the draft — once they have.
+  const index = useFiles((state) => state.index)
+  const ignored = useGitStatus((state) => state.byRoot)
+  useEffect(() => {
+    const element = field.current
+    // Only for the field being typed in: this fires once a launch, and a menu
+    // opening over a composer nobody is in would be a list appearing by itself.
+    if (!element || document.activeElement !== element) return
+    refresh(draft, element.selectionStart)
+    // `refresh` and the draft are the current render's; this fires for the two
+    // reads landing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, ignored])
 
   useEffect(() => {
     const caret = pending.current
@@ -224,8 +252,9 @@ export function ChatComposer({
     }
     if (dismissed.current) return
 
-    const items = rankPlainMentions(chatMentions(), query.filter).slice(
-      0,
+    const items = rankPlainMentions(
+      chatMentions(attachRoot),
+      query.filter,
       MAX_ROWS
     )
     if (items.length === 0) {
@@ -287,8 +316,16 @@ export function ChatComposer({
     setMenu(null)
   }
 
+  /**
+   * Sends, whatever the chat is doing.
+   *
+   * `sending` used to be a reason not to: a turn was a process, and a second
+   * message had nowhere to go until it ended. A chat holds its CLI open now and
+   * queues what arrives mid-turn, so the only thing that stops an Enter is an
+   * empty field.
+   */
   function submit() {
-    if (!draft.trim() || sending) return
+    if (!draft.trim()) return
     onSend(draft)
     setDraft("")
     setMenu(null)
@@ -362,7 +399,7 @@ export function ChatComposer({
     refresh(next, caret + lead.length + 1)
   }
 
-  const segments = markMentions(draft, chatMentions())
+  const segments = markMentions(draft, chatMentions(attachRoot))
 
   return (
     <div className="relative">
@@ -498,7 +535,7 @@ export function ChatComposer({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={startMention}>
                   <AtSign />
-                  Mention…
+                  Mention a file…
                   <span className="ml-auto text-[0.65rem] text-muted-foreground">
                     @
                   </span>
@@ -506,20 +543,30 @@ export function ChatComposer({
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {sending ? (
+            {/*
+              Both, while a turn is running.
+
+              It used to be one or the other, and that was right while sending
+              mid-turn was impossible: Stop was the only thing left to do. Now
+              there are two things to do and they are not alternatives — stop
+              what is running, or add to it — so hiding either behind the state
+              of the field would be hiding the one somebody reached for. Stop
+              first, because it is the one that is about what is already on
+              screen.
+            */}
+            {sending && (
               <IconButton label="Stop" variant="outline" onClick={onStop}>
                 <Square />
               </IconButton>
-            ) : (
-              <IconButton
-                label="Send"
-                variant="outline"
-                disabled={!draft.trim()}
-                onClick={submit}
-              >
-                <ArrowUp />
-              </IconButton>
             )}
+            <IconButton
+              label={sending ? "Send next" : "Send"}
+              variant="outline"
+              disabled={!draft.trim()}
+              onClick={submit}
+            >
+              <ArrowUp />
+            </IconButton>
           </div>
         </div>
       </div>
@@ -981,9 +1028,14 @@ function Check() {
 }
 
 /**
- * A message's own text with its mentions tinted — the same marks the composer
+ * A message's own text with its paths tinted — the same marks the composer
  * showed while it was being typed, so a sent line still reads as pointing at a
- * table rather than mentioning one in passing.
+ * file rather than mentioning one in passing.
+ *
+ * Without a root, unlike the composer: a transcript row does not know which
+ * checkout it was typed in, and the index's own workspace-relative paths are
+ * the same string for a chat whose cwd is its folder — which is every chat that
+ * has not been pointed at a subdirectory.
  */
 export function MentionText({
   text,
@@ -1085,28 +1137,59 @@ function MentionMenu({
               index === selected && "bg-accent text-accent-foreground"
             )}
           >
-            <span className="flex items-baseline gap-2">
-              <span
-                aria-hidden
-                style={{ backgroundColor: KIND_HUE[mention.kind] }}
-                className="mt-1 size-1.5 shrink-0 rounded-full"
-              />
-              <span className="truncate font-mono font-medium">
-                {mention.label}
+            <span className="flex items-start gap-1.5">
+              <MentionIcon of={mention} />
+              {/* The icon sits beside both lines, so the path and the estimate
+                  under it share one left edge rather than each being padded to
+                  guess at the icon's width. */}
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  <span className="truncate font-mono font-medium">
+                    {mention.label}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">
+                    {PLAIN_LABELS[mention.kind]}
+                  </span>
+                </span>
+                {/* On its own line, and the reason the row has two: the path is
+                    what is inserted, and the estimate beside it would push one
+                    of the two out of sight in a narrow pane. */}
+                <span className="block truncate text-[0.7rem] text-muted-foreground">
+                  {mention.detail}
+                </span>
               </span>
-              <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">
-                {PLAIN_LABELS[mention.kind]}
-              </span>
-            </span>
-            {/* On its own line, and the reason the row has two: the name is what
-                is inserted, and a connection beside it would push one of the two
-                out of sight in a narrow pane. */}
-            <span className="block truncate pl-[0.875rem] text-[0.7rem] text-muted-foreground">
-              {mention.detail}
             </span>
           </button>
         </li>
       ))}
     </ul>
+  )
+}
+
+/**
+ * A row's icon: the file type's own where the studio has one, and a Lucide
+ * glyph otherwise.
+ *
+ * The same two-step the Explorer's tree and a tool row's chip make (`iconFor`
+ * in `lib/files/icons.ts`), and deliberately the same pictures: a `.ts` in this
+ * menu has to be the `.ts` of the tree it was walked out of, or the two lists
+ * are two vocabularies for one workspace. A dot in the panel's hue was here
+ * first and said only "this is a row".
+ *
+ * A folder keeps the plain glyph for the reason the tree gives: folders are the
+ * structure, and forty coloured folder icons would compete with the files they
+ * hold. `mt-px` is the optical nudge onto the first line — the icon is beside
+ * two lines of text, so it cannot be baseline-aligned to either.
+ */
+function MentionIcon({ of }: { of: PlainMention }) {
+  if (of.kind === "directory") {
+    return <Folder aria-hidden className="mt-px size-3.5 shrink-0 opacity-70" />
+  }
+
+  const url = iconFor(of.label)
+  return url ? (
+    <img src={url} alt="" aria-hidden className="mt-px size-3.5 shrink-0" />
+  ) : (
+    <File aria-hidden className="mt-px size-3.5 shrink-0 opacity-70" />
   )
 }

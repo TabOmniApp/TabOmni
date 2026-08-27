@@ -68,6 +68,9 @@ export function rank(entry: FileIndexEntry, query: string): number {
  * Empty for an empty query, which is not the same as "everything": a palette
  * that listed twenty thousand paths the moment it opened would bury the tables,
  * requests and notes that are the other reason it exists.
+ *
+ * Files only. The index holds the workspace's folders as well — a chat's `@`
+ * menu offers them — and a palette row opens a tab, which a folder is not.
  */
 export function shortlist(
   entries: FileIndexEntry[],
@@ -83,6 +86,7 @@ export function shortlist(
 
   const matched: { entry: FileIndexEntry; score: number }[] = []
   for (const entry of entries) {
+    if (entry.kind === "directory") continue
     const relative = entry.relative.toLowerCase()
     if (!matchesLoosely(relative.replace(/\//g, ""), loose)) continue
     matched.push({ entry, score: rank(entry, needle) })

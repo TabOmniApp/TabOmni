@@ -41,3 +41,31 @@ export function since(iso: string, now: number = Date.now()): string {
   if (ms < YEAR) return `${Math.floor(ms / WEEK)}w`
   return "1y+"
 }
+
+const SECOND = 1000
+
+/**
+ * How long the turn under the spinner has been going: `1s`, `45s`, `1m5s`,
+ * `1h1m6s`.
+ *
+ * Every unit down to the second rather than `since`'s single coarse one, and
+ * for the opposite reason: this label is watched while it moves, so what it has
+ * to show is that something is still happening — a `1m` sitting still for the
+ * next fifty-nine seconds is exactly the "is this stuck" it exists to answer.
+ * Which is also why the seconds stay once the minutes appear: they are the part
+ * that is moving.
+ *
+ * Units are dropped from the left only, never the middle — an hour in, `1h0m5s`
+ * rather than `1h5s`, which reads as five seconds at a glance.
+ *
+ * Clocks going backwards are floored at zero, as in `since`.
+ */
+export function elapsed(startedAt: number, now: number = Date.now()): string {
+  const total = Math.floor(Math.max(0, now - startedAt) / SECOND)
+  const seconds = total % 60
+  const minutes = Math.floor(total / 60) % 60
+  const hours = Math.floor(total / 3600)
+  if (hours > 0) return `${hours}h${minutes}m${seconds}s`
+  if (minutes > 0) return `${minutes}m${seconds}s`
+  return `${seconds}s`
+}

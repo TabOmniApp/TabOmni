@@ -5,6 +5,7 @@ import {
   type AssistantMessage,
   type ChatAskOption,
   type ChatAskQuestion,
+  type ChatEffort,
   type ChatPermission,
   type ChatPlace,
   type ClaudeProfile,
@@ -17,9 +18,9 @@ import {
 import {
   collapse,
   lineId,
-  runAgentTurn,
+  startAgentSession,
   summarise,
-  type AgentRun,
+  type AgentSession,
   type AskDecision,
   type AskRequest,
 } from "./claude-agent"
@@ -86,13 +87,54 @@ import { expandHome } from "./shell-env"
  * plan`.
  */
 
-/** One turn in flight, and the conversation it belongs to. */
+/**
+ * The CLI process holding one chat open.
+ *
+ * A **session** rather than a turn, which is the change the composer is built
+ * on: a message sent while one is answering is pushed into the same process and
+ * queued, instead of being refused with "that chat is still answering". Mutable
+ * on purpose — the toolbar moves under a session that is already running, and
+ * `permits` reads `options` off this record on every tool call.
+ */
 type Live = {
-  run: AgentRun | null
-  /** Set while spawning, so a second send cannot start a second process before
-   * the first has an `AgentRun` to kill. */
-  starting: boolean
+  session: AgentSession | null
+  /** Held while the CLI is coming up, so two sends in quick succession wait on
+   * one process rather than spawning a second. Null once it is up, or once it
+   * has failed. */
+  opening: Promise<AgentSession | null> | null
+  /** What the CLI was given as arguments — see `signatureOf`. A session whose
+   * signature no longer matches the chat is closed and opened again. */
+  signature: string
+  /** What the session is *currently* on, so `retune` can tell a real change
+   * from the same value being written back. Both start as whatever opened it. */
+  model: string | null
+  effort: ChatEffort | null
+  /** The chat's toolbar as it stands, read by `permits` and by the `onAsk`
+   * below at the moment of the call rather than when the session opened. */
+  options: WorktreeChatOptions
+  /** Whether the CLI is working on something — the same thing the renderer is
+   * told. Held here because `reap` must not close a session mid-turn. */
+  busy: boolean
+  /** Armed whenever the session goes quiet, cleared whenever it does not — see
+   * `IDLE_MS`. */
+  idle: ReturnType<typeof setTimeout> | null
 }
+
+/**
+ * How long a chat's CLI is kept alive with nothing to do.
+ *
+ * A session is a process, and this app now holds one open per chat that has been
+ * sent to rather than one per turn. Left alone that is a `claude` for every
+ * conversation somebody opened this morning, still resident this afternoon — the
+ * one real cost of the change, and not one the user asked to pay.
+ *
+ * Closing an idle one costs nothing that was not already being paid before
+ * sessions existed: the next message opens it again as a resume, which is
+ * exactly what every message used to do. So the window only has to be long
+ * enough to cover the gap it exists for — reading an answer and typing a reply —
+ * and five minutes is generous for that.
+ */
+const IDLE_MS = 5 * 60 * 1000
 
 export type WorktreeChatSource = {
   /** The file `--mcp-config` is pointed at for this app's own three servers,
@@ -457,8 +499,13 @@ export class WorktreeChats {
   }
 
   async delete(id: string): Promise<void> {
-    this.live.get(id)?.run?.kill()
+    const live = this.live.get(id)
+    // Out of the map before the close, so the `onExit` it causes reads as the
+    // expected end it is rather than as a chat whose CLI died.
     this.live.delete(id)
+    if (live?.idle) clearTimeout(live.idle)
+    live?.session?.close()
+
     this.messages.delete(id)
     this.started.delete(id)
 
@@ -468,12 +515,21 @@ export class WorktreeChats {
     await this.source.deleteChat(id)
   }
 
+  /**
+   * One message into a chat, whether or not it is already answering.
+   *
+   * **Nothing refuses a second message any more.** This used to throw while a
+   * turn was in flight, because a turn *was* a process and there was nothing
+   * left to say anything to once it had been given its prompt. A session takes
+   * the message either way: the CLI queues it and folds it into the next turn,
+   * which is what the interactive `claude` does with a line typed mid-answer.
+   *
+   * The order below is the part worth keeping. The user's line is written down
+   * before the session is touched, so a message survives a CLI that will not
+   * start — the chat reads back with the question in it and the reason under it,
+   * rather than with neither.
+   */
   async send(id: string, prompt: string): Promise<void> {
-    const existing = this.live.get(id)
-    if (existing?.starting || existing?.run) {
-      throw new Error("That chat is still answering.")
-    }
-
     const chats = await this.source.chats()
     const chat = chats.find((entry) => entry.id === id)
     if (!chat) throw new Error("That chat no longer exists.")
@@ -492,28 +548,177 @@ export class WorktreeChats {
     if (!cwd) {
       // The place has gone out from under the chat. The conversation is still
       // readable — it is on disk — but there is nowhere to run a turn.
-      this.finish(id, "That project is no longer in the workspace.")
+      //
+      // Both events, because this is the one refusal no process is involved in:
+      // the composer marks a chat busy the moment it sends, and every other way
+      // a message ends up going nowhere passes through a session that says so on
+      // its way out. Without this the chat spins for the rest of the run.
+      this.setBusy(id, false)
+      this.endTurn(id, "That project is no longer in the workspace.")
       return
     }
 
-    this.live.set(id, { run: null, starting: true })
+    // Read at send time rather than held: the toolbar writes to the record, and
+    // a message takes whatever it said when it was sent. Through `chatOptions`,
+    // which is where a record older than either field is brought up to date.
+    const options = chatOptions(chat.options)
+
     await this.append(id, { id: lineId(), role: "user", text: prompt })
+
+    /*
+     * The mode's own sentence at the head of the message, not in the system
+     * prompt.
+     *
+     * The reason it goes here is now doubled. It was the cached prefix: a
+     * per-mode system prompt cost a full re-write on every switch. It is also
+     * the only place it *can* go — one session serves every mode this chat is
+     * ever put in, and the prompt it was opened with cannot be rewritten for a
+     * message sent under a different one.
+     */
+    const permission = PERMISSIONS[options.permission] ?? PERMISSIONS.edits
+    await this.deliver(
+      id,
+      cwd,
+      options,
+      permission.prompt ? `${permission.prompt}\n\n${prompt}` : prompt
+    )
+  }
+
+  /**
+   * Gets one message into the chat's CLI, opening one if it has none.
+   *
+   * The one place a process is reached for, so the "is there one, is it the
+   * right one, is somebody else already opening it" question is asked once — and
+   * **it delivers**, rather than handing a session back for the caller to push
+   * into. That split is what deadlocked this: a session is opened *for* a
+   * message, and a caller that waited for the open before sending was waiting
+   * for a CLI that had nothing to answer. Both paths below end in the message
+   * being queued, and neither can be taken without it.
+   */
+  private async deliver(
+    id: string,
+    cwd: string,
+    options: WorktreeChatOptions,
+    message: string
+  ): Promise<void> {
+    // Asked per message rather than held, because Settings can be changed
+    // between two messages in the same chat — and unlike the model, this one is
+    // an argument the CLI was started with, so a change to it needs a new
+    // process. Same for the profile below.
+    const mcpConfig = await this.source.mcpConfig()
+
+    // Looked up by id rather than trusted whole: a profile named on the record
+    // can have been renamed or deleted since — see `WorktreeChatOptions.
+    // profileId`. A missing id reads as null, the same as never having picked
+    // one.
+    //
+    // Expanded again here rather than trusted from Settings' own save: a profile
+    // written before that expansion existed can still carry a literal `~`, and
+    // `CLAUDE_CONFIG_DIR` reaches `claude` with no shell in between to expand
+    // it — see `expandHome`.
+    const profileConfigDir = options.profileId
+      ? ((await this.source.claudeProfiles()).find(
+          (profile) => profile.id === options.profileId
+        )?.configDir ?? null)
+      : null
+    const configDir = profileConfigDir ? expandHome(profileConfigDir) : null
+
+    const signature = signatureOf(cwd, configDir, mcpConfig)
+
+    const live = this.live.get(id)
+    if (live) {
+      // The opening one, for a second message that arrived while the CLI was
+      // still coming up — which is exactly the case this whole change is for.
+      const open = live.opening ? await live.opening : live.session
+      if (open && live.signature === signature) {
+        this.retune(live, options)
+        // The CLI queues it behind whatever it is doing, which is the whole
+        // point: this is the path a message typed mid-answer takes.
+        open.send(message)
+        return
+      }
+      // Either it died, or something it was started with has moved. Neither is
+      // a session this message can go into. Out of the map first, so the `onExit`
+      // the close is about to cause reads it as the expected end it is.
+      this.live.delete(id)
+      if (live.idle) clearTimeout(live.idle)
+      open?.close()
+    }
+
+    const entry: Live = {
+      session: null,
+      opening: null,
+      signature,
+      model: options.model,
+      effort: options.effort,
+      options,
+      // Ahead of the CLI saying so: the message this is being opened for is
+      // about to go in, and a session that read as idle for the second it takes
+      // to come up is one `reap` could close under the message.
+      busy: true,
+      idle: null,
+    }
+    // In the map *before* the open, because the open reads `options` back off
+    // it: `permits` is consulted for the first tool call of the first turn, and
+    // an entry that only landed afterwards would be an entry that mode has to
+    // fall back for.
+    this.live.set(id, entry)
 
     // Off the record rather than off a `Set` in this process: the CLI's session
     // outlives the app's run, so a chat sent to before a restart has to come
     // back as `--resume`.
-    await this.run(
+    const resume =
+      this.started.has(id) ||
+      (await this.source.chats()).some(
+        (chat) => chat.id === id && chat.started === true
+      )
+
+    // The message goes with it: `open` hands it to the CLI as the work it is
+    // coming up to do, so there is no window in which a session exists with an
+    // empty queue and a caller waiting on it.
+    entry.opening = this.open(
       id,
       cwd,
-      prompt,
-      chat.started === true || this.started.has(id),
-      // Read at send time rather than held: the toolbar writes to the record,
-      // and a turn takes whatever it said when the message was sent. Through
-      // `chatOptions`, which is where a record older than either field is
-      // brought up to date.
-      chatOptions(chat.options),
-      SYSTEM_PROMPT
+      options,
+      mcpConfig,
+      configDir,
+      resume,
+      message
     )
+
+    await entry.opening
+    entry.opening = null
+    // `entry.session` is set by `open` rather than here, so that it is in place
+    // before anything can be awaited on it — see the `onExit` there, which tells
+    // its own session's death from a stale one by exactly that field.
+  }
+
+  /**
+   * Moves a running session onto the toolbar's current model and effort.
+   *
+   * Both go over as control requests rather than as a new process, which is the
+   * thing streaming input bought that is easiest to overlook: changing model
+   * used to mean the next message spawned a `claude` with a different argument
+   * list, and now it means the running one is told. Only what actually changed
+   * is sent — writing the same model back on every message would be a round
+   * trip per message for nothing.
+   *
+   * The permission is not here on purpose. It is not the CLI's to know: `permits`
+   * reads `options` off this record at the moment of each tool call, so putting
+   * the picker on `Plan` takes effect on the call after it and needs nothing
+   * sent anywhere.
+   */
+  private retune(live: Live, options: WorktreeChatOptions): void {
+    live.options = options
+
+    if (live.model !== options.model) {
+      live.model = options.model
+      live.session?.setModel(options.model)
+    }
+    if (live.effort !== options.effort) {
+      live.effort = options.effort
+      live.session?.setEffort(options.effort)
+    }
   }
 
   /**
@@ -620,8 +825,12 @@ export class WorktreeChats {
    * the listing like every other change to it — the store's own queue serialises
    * them, so this cannot interleave with the line a turn is appending.
    *
-   * A turn already in flight keeps the options it started with: they are the
-   * process's argument list, and there is nothing to change it to.
+   * **A running session is moved too**, which it never used to be: the options
+   * were the process's argument list, so a chat mid-turn kept whatever it had
+   * started with. Model and effort now go over as control requests and the
+   * permission is read per tool call — see `retune`. What still cannot move
+   * under a running session is the project, the profile and the MCP config;
+   * those are picked up by the next message, which opens a new one.
    */
   async setOptions(id: string, options: WorktreeChatOptions): Promise<void> {
     const chats = await this.source.chats()
@@ -630,81 +839,77 @@ export class WorktreeChats {
     await this.source.saveChats(
       chats.map((chat) => (chat.id === id ? { ...chat, options } : chat))
     )
+
+    const live = this.live.get(id)
+    if (live) this.retune(live, options)
   }
 
   /**
-   * One turn, with the user's line already written down.
+   * Opens the CLI on one chat, or reports that it could not be opened.
    *
-   * Apart from `send` because of the retry below: a turn that has to be started
-   * again must not append the prompt a second time.
+   * Apart from `deliver` because of the retry below, and apart from `send`
+   * because a session that has to be opened a second time must give the CLI the
+   * same message again without writing that message down a second time.
+   *
+   * Everything handed over that a mode could change is handed over as a
+   * **function**: `permits` and `onAsk` read the live record when they are
+   * called, so one process serves whatever the picker is set to at the time. The
+   * fixed half — the tool refusals, the permission mode, the system prompt — is
+   * the same on every session of every mode, which is what keeps one cached
+   * prefix serving all five.
    */
-  private async run(
+  private async open(
     id: string,
     cwd: string,
-    prompt: string,
-    resume: boolean,
     options: WorktreeChatOptions,
-    /** Which of `SYSTEM_PROMPTS` this place is. Handed in rather than read off
-     * the record again, so the retry below cannot pick the other one. */
-    system: string
-  ): Promise<void> {
-    // Falls back rather than trusting the record: options come off disk, and a
-    // chat written by a newer build naming a mode this one has never heard of
-    // would otherwise run with `undefined` for the whole argument list.
-    const permission = PERMISSIONS[options.permission] ?? PERMISSIONS.edits
+    mcpConfig: string | null,
+    configDir: string | null,
+    resume: boolean,
+    /** The message the session is being opened for, queued by
+     * `startAgentSession` before it waits for the CLI. */
+    message: string
+  ): Promise<AgentSession | null> {
+    /** Set once the session is this object's to report the death of. Until then
+     * the reporting is done below, which is what lets the retry swallow the
+     * failure it is retrying. */
+    let mine = false
+    let exited = false
+    let exitError: string | null = null
+    /** This session, once it exists, for telling its own death from that of one
+     * already replaced — see `onExit`. */
+    let opened: AgentSession | null = null
 
-    // Asked per turn rather than held, because Settings can be changed between
-    // two messages in the same chat.
-    const mcpConfig = await this.source.mcpConfig()
-
-    // Looked up by id rather than trusted whole: a profile named on the
-    // record can have been renamed or deleted since — see
-    // `WorktreeChatOptions.profileId`. A missing id reads as null, the same
-    // as never having picked one.
-    //
-    // Expanded again here rather than trusted from Settings' own save: a
-    // profile written before that expansion existed can still carry a literal
-    // `~`, and `CLAUDE_CONFIG_DIR` reaches `claude` with no shell in between
-    // to expand it — see `expandHome`.
-    const profileConfigDir = options.profileId
-      ? ((await this.source.claudeProfiles()).find(
-          (profile) => profile.id === options.profileId
-        )?.configDir ?? null)
-      : null
-    const configDir = profileConfigDir ? expandHome(profileConfigDir) : null
-
-    const run = await runAgentTurn(
+    const session = await startAgentSession(
       {
         cwd,
-        prompt: permission.prompt
-          ? `${permission.prompt}\n\n${prompt}`
-          : prompt,
         sessionId: id,
         resume,
         // Both null unless the toolbar says otherwise, which leaves the user's
-        // own `claude` deciding — see `AgentTurn`.
+        // own `claude` deciding — see `AgentSessionOptions`. What it is *now*
+        // rather than for ever: `retune` moves a running session.
         model: options.model,
         effort: options.effort,
         configDir,
-        // The mode's own policy, applied in this process. What goes to the
-        // CLI is identical on every turn of every mode, which is what keeps one
+        // The mode's own policy, applied in this process and read per call. What
+        // goes to the CLI is identical for every mode, which is what keeps one
         // cached prefix serving all five — see `permits` in `claude-agent.ts`.
-        permits: permitting(permission.allowed),
+        permits: (name) => permitting(this.permissionOf(id).allowed)(name),
         disallowedTools: DISALLOWED_TOOLS,
         permissionMode: "manual",
         // No `--strict-mcp-config` — see the class comment above. The CLI
         // merges this with whatever it would already find on its own.
         mcpConfig,
-        // The same sentence on every turn. What the mode is goes at the head
-        // of the message instead: this one is part of the cached prefix.
-        appendSystemPrompt: system,
+        // The same sentence for every mode. What the mode is goes at the head of
+        // each message instead: this one is part of the cached prefix, and one
+        // session answers messages sent under several modes.
+        appendSystemPrompt: SYSTEM_PROMPT,
         // Always handed over, unlike the tool list above: an `AskUserQuestion`
         // call is the model asking the user, not asking for permission, and
         // every mode puts it on screen. For anything else `permits` refused,
-        // only `permission.asks` says whether this asks or refuses outright —
-        // its absence is what stops the other four ever pausing on those.
+        // only the mode's own `asks` says whether this asks or refuses outright
+        // — its absence is what stops the other four ever pausing on those.
         onAsk: (request: AskRequest) =>
-          request.toolName === ASK_TOOL || permission.asks
+          request.toolName === ASK_TOOL || this.permissionOf(id).asks
             ? this.ask(id, request)
             : Promise.resolve({
                 allow: false,
@@ -720,75 +925,198 @@ export class WorktreeChats {
         // happened to be open when the turn ended.
         onUsage: (usage) =>
           void this.append(id, { id: lineId(), role: "usage", usage }),
-        onDone: (error) => {
+        // Forwarded and not kept, like `busy`: the same number is on the usage
+        // line this turn ends with, and this is only it arriving early enough
+        // to watch. A window that reloads mid-turn reads the last line instead.
+        onContext: (tokens) =>
+          this.emit({ chatId: id, type: "context", tokens }),
+        // Forwarded and kept: the renderer draws it, and `reap` needs it to know
+        // it is not closing a session mid-turn. Nothing is written down —
+        // whether a chat is working is true of a process rather than of a
+        // conversation, and a reload finds out by there being no session rather
+        // than by reading a stale flag.
+        onBusy: (busy) => this.setBusy(id, busy),
+        onTurn: (error) => this.endTurn(id, error),
+        onExit: (error) => {
+          exited = true
+          exitError = error
+          if (!mine) return
+
           /*
-           * The CLI already has this session — start the turn again as a
-           * resume.
+           * Only where this is still the chat's own session.
            *
-           * This is what a chat written before `started` was a field looks
-           * like: the id was used in an earlier run of the app, nothing on the
-           * record says so, and the turn that would have written it down is the
-           * one being refused. Guessing from the transcript instead would be
-           * guessing — a chat can hold lines from a turn that died before the
-           * CLI opened anything — so the answer is taken from the CLI, which is
-           * the only party that knows.
-           *
-           * Once, and only for a turn that did not already resume, so a genuine
-           * failure is still reported rather than run twice.
-           *
-           * This is the **only** error a turn is retried on, and the test for it
-           * is narrow for that reason. A model the CLI refused used to be
-           * retried too — silently, on the CLI's own default, with the toolbar
-           * rewritten underneath — which meant the error line said the model
-           * does not exist and an answer arrived anyway, from a model nobody
-           * picked, billed at whatever that one costs. A refused model is a
-           * failure the user has to see and decide about, so it stops here.
+           * A session that was reaped, or replaced because the project moved,
+           * was taken out of the map *before* it was closed, so what this finds
+           * is either nothing or somebody else's — and either way its death was
+           * asked for and is not news. Compared by identity rather than by the
+           * entry existing, because the chat can already have opened a second
+           * session by the time the first one's stream finishes closing.
            */
-          if (error !== null && !resume && isSessionTaken(error)) {
-            void this.run(id, cwd, prompt, true, options, system)
-            return
-          }
-          this.finish(id, error)
+          const live = this.live.get(id)
+          if (!live || live.session !== opened) return
+
+          // The process is gone, so the chat has no session — the next message
+          // opens one, as a resume.
+          if (live.idle) clearTimeout(live.idle)
+          this.live.delete(id)
+          this.endTurn(id, error)
         },
-      }
+      },
+      message
     )
 
-    // From here the CLI owns this id, so the next turn resumes it rather than
-    // asking for it again — including a turn that comes after a failed one, and
-    // including one after a restart, which is why this is written down.
-    //
-    // Only once the CLI is actually up: `runAgentTurn` hands back null when it
-    // could not be started at all, and a session the CLI never opened must not
-    // be resumed on the next try. It resolves on the CLI's first message rather
-    // than on the call returning, because `query()` is lazy — see its comment.
-    if (run) await this.markStarted(id)
+    if (session && !exited) {
+      const entry = this.live.get(id)
+      // Deleted while the CLI was coming up, which `delete` does without
+      // knowing there was a process on the way.
+      if (!entry) {
+        session.close()
+        return null
+      }
+
+      // Both before the first `await` below, and in this order: `onExit` reads
+      // `entry.session` to recognise its own death, and `mine` is what lets it
+      // read at all. A window between them is a real crash reported as a stale
+      // one, or worse, swallowed.
+      entry.session = session
+      opened = session
+      mine = true
+
+      // From here the CLI owns this id, so the next session resumes it rather
+      // than asking for it again — including one opened after a failure, and
+      // including one after a restart, which is why this is written down.
+      //
+      // Only once the CLI is actually up: `startAgentSession` hands back null
+      // when it could not be started at all, and a session the CLI never opened
+      // must not be resumed on the next try. It resolves on the CLI's first
+      // message rather than on the call returning, because `query()` is lazy —
+      // see its comment.
+      await this.markStarted(id)
+
+      // Awaiting a file write above means the process can have died in the
+      // meantime, in which case `onExit` has reported it and taken the entry
+      // out. Handing the session back anyway would hand back a corpse.
+      return this.live.get(id) === entry ? session : null
+    }
+
+    // It never came up, or it came up and died in the same breath.
+    session?.close()
 
     /*
-     * Only on success, and only while the turn is still running.
+     * The CLI already has this session — open it again as a resume.
      *
-     * A turn that could not be started has already been finished by `onDone`,
-     * and putting a dead entry back would leave the chat looking busy to the
-     * next `send` — for ever, since nothing else clears it. `finish` deletes the
-     * entry `send` put there, so its absence is the test.
+     * This is what a chat written before `started` was a field looks like: the
+     * id was used in an earlier run of the app, nothing on the record says so,
+     * and the session that would have written it down is the one being refused.
+     * Guessing from the transcript instead would be guessing — a chat can hold
+     * lines from a session that died before the CLI opened anything — so the
+     * answer is taken from the CLI, which is the only party that knows.
      *
-     * Both halves matter now in a way only the first used to: this resolves once
-     * the CLI is *talking*, and the `markStarted` above is a file write, so a
-     * short turn can reach its result while that write is in flight. Before the
-     * SDK this returned before the process had said anything, which made the
-     * same race a much narrower one.
+     * Once, and only where this attempt did not already resume, so a genuine
+     * failure is still reported rather than retried for ever.
+     *
+     * This is the **only** error an open is retried on, and the test for it is
+     * narrow for that reason. A model the CLI refused used to be retried too —
+     * silently, on the CLI's own default, with the toolbar rewritten underneath
+     * — which meant the error line said the model does not exist and an answer
+     * arrived anyway, from a model nobody picked, billed at whatever that one
+     * costs. A refused model is a failure the user has to see and decide about,
+     * so it stops here.
      */
-    if (run && this.live.has(id)) this.live.set(id, { run, starting: false })
+    if (!resume && exitError !== null && isSessionTaken(exitError)) {
+      // The same message, which the retry is *for* — it was never delivered, and
+      // it is already written down, so it must not be appended again.
+      return this.open(id, cwd, options, mcpConfig, configDir, true, message)
+    }
+
+    this.live.delete(id)
+    this.endTurn(id, exitError)
+    return null
   }
 
-  stop(id: string): void {
+  /**
+   * What the chat's picker is set to right now, for `permits` and `onAsk`.
+   *
+   * Two fallbacks, and they go opposite ways on purpose.
+   *
+   * A mode this build has never heard of — a chat written by a newer one — falls
+   * back to `edits`, because the record is a chat somebody is using and the
+   * alternative is `undefined`, which `permitting` reads as "everything".
+   *
+   * **No record at all falls back to nothing.** That state is only reachable
+   * while a session is being taken away — the chat deleted, the process
+   * closing — and a tool call arriving in that window is one nobody is watching.
+   * Widening it to `edits` there would be this app permitting a write on the way
+   * out; `allowed: []` refuses it with a sentence instead.
+   */
+  private permissionOf(id: string): (typeof PERMISSIONS)[ChatPermission] {
     const live = this.live.get(id)
-    if (!live?.run) return
-    live.run.kill()
+    if (!live) return { allowed: [] }
+    return PERMISSIONS[live.options.permission] ?? PERMISSIONS.edits
   }
 
-  /** Kills every turn in flight, for shutdown. */
+  /**
+   * The chat is working, or it is not — told to the renderer and to the clock.
+   *
+   * The clock half is what keeps this app from leaving a `claude` per
+   * conversation resident for the afternoon: a session that goes quiet is given
+   * `IDLE_MS` and then closed, and one that starts working again has the timer
+   * taken off it. Armed on the *transition* to quiet, and re-armed by every
+   * later `false`, which costs one `clearTimeout` per repeat and is worth it —
+   * the alternative is remembering which of two sources last spoke.
+   */
+  private setBusy(id: string, busy: boolean): void {
+    this.emit({ chatId: id, type: "busy", busy })
+
+    const live = this.live.get(id)
+    if (!live) return
+
+    live.busy = busy
+    if (live.idle) clearTimeout(live.idle)
+    live.idle = busy ? null : setTimeout(() => this.reap(id), IDLE_MS)
+    // Nothing in this app waits on the app: a chat quiet at quitting time must
+    // not be the reason Electron stays up for five more minutes.
+    live.idle?.unref?.()
+  }
+
+  /**
+   * Closes a session that has had nothing to do for `IDLE_MS`.
+   *
+   * Quietly, and that is the point: the entry comes out of the map *before* the
+   * close, so the `onExit` this causes reads as the expected end it is and
+   * writes no line. Nothing is lost — the conversation is on disk and the next
+   * message opens the session again as a resume, which is what every message
+   * used to do.
+   */
+  private reap(id: string): void {
+    const live = this.live.get(id)
+    // Busy is the race this is written against: a turn can start between the
+    // timer being armed and it firing.
+    if (!live || live.busy) return
+
+    this.live.delete(id)
+    live.session?.close()
+  }
+
+  /**
+   * Stops the running turn without ending the session.
+   *
+   * An interrupt rather than a kill, which is what the button meant all along:
+   * killing the process was only ever how a turn was stopped when a turn *was*
+   * the process, and it cost the chat its warm CLI as well. Whatever was queued
+   * behind the interrupted turn still runs — the CLI's own rule, and the same
+   * one the terminal follows.
+   */
+  stop(id: string): void {
+    this.live.get(id)?.session?.interrupt()
+  }
+
+  /** Closes every session, for shutdown. */
   dispose(): void {
-    for (const live of this.live.values()) live.run?.kill()
+    for (const live of this.live.values()) {
+      if (live.idle) clearTimeout(live.idle)
+      live.session?.close()
+    }
     this.live.clear()
     // Nothing is going to answer these now, and each one is a promise a turn is
     // still awaiting — see `asks`.
@@ -824,8 +1152,20 @@ export class WorktreeChats {
     }
   }
 
-  private finish(id: string, error: string | null): void {
-    this.live.delete(id)
+  /**
+   * One turn is over, whatever else the chat has queued.
+   *
+   * **It does not touch the session**, which is the whole of what changed here:
+   * this used to be `finish`, and dropping the `live` entry was how the next
+   * message knew to spawn a process. Now the entry is the process, a turn ending
+   * is not the process ending, and the two ends that *are* — a CLI that died, a
+   * chat with nowhere to run — delete it themselves before calling this.
+   *
+   * Nor does it say the chat is idle: a message queued behind this turn will run
+   * without anybody sending anything, and only the session knows whether one is.
+   * See `onBusy`.
+   */
+  private endTurn(id: string, error: string | null): void {
     /*
      * Any question this chat was holding goes with the turn.
      *
@@ -842,6 +1182,15 @@ export class WorktreeChats {
       pending.answered({ allow: false, message: "The turn ended." })
     }
 
+    /*
+     * The one place a failure becomes a line, and it says so once.
+     *
+     * `append` announces it as an `error` event; `done` below only ends the
+     * turn. They used to be the same event, which made every failure that
+     * reached a result line arrive twice — once from the agent's own error line
+     * and once from this one — and left two of them in the chat's file for the
+     * next open. The agent no longer draws its own; this is it.
+     */
     if (error) {
       void this.append(id, { id: lineId(), role: "error", text: error })
     }
@@ -933,7 +1282,7 @@ export class WorktreeChats {
               change: message.change,
             }
           : message.role === "error"
-            ? { chatId: id, type: "done", error: message.text }
+            ? { chatId: id, type: "error", text: message.text }
             : message.role === "ask"
               ? { chatId: id, type: "decision", text: message.text }
               : message.role === "thinking"
@@ -1130,6 +1479,32 @@ export function said(ask: WorktreeChatAsk, answer: WorktreeChatAnswer): string {
   return remembered
     ? `Allowed ${what}, and will not ask again`
     : `Allowed ${what}`
+}
+
+/**
+ * What a session cannot be changed out from under.
+ *
+ * The three things the CLI took as arguments and has no control request for: the
+ * directory it runs in, the account it runs as, and the MCP config file it was
+ * pointed at. A chat whose project moved, whose profile was switched or whose
+ * Settings › MCP changed is a chat the running process is answering *wrongly*,
+ * so the next message closes it and opens another rather than being queued into
+ * it. Model, effort and permission are deliberately absent — those move under a
+ * live session, which is the point of `retune`.
+ *
+ * A joined string rather than an object compared field by field, because it is
+ * only ever tested for equality and a null is a real value here: "no profile" is
+ * a state a session can be in, and it must not compare equal to a profile named
+ * `""`. `\0` is the separator because all three are paths and it is the one byte
+ * a path cannot hold — a separator that could turn up inside one is two
+ * different signatures comparing equal.
+ */
+function signatureOf(
+  cwd: string,
+  configDir: string | null,
+  mcpConfig: string | null
+): string {
+  return [cwd, configDir ?? "", mcpConfig ?? ""].join("\0")
 }
 
 /**

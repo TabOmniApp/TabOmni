@@ -79,6 +79,9 @@ export const IGNORED_DIRECTORIES = new Set([
  * tree is still the way to whatever was not reached. It is here because the
  * renderer scores what it holds on every keystroke — the walk itself would
  * happily run to a million.
+ *
+ * Folders are counted against it too, since they are indexed alongside the
+ * files: a cap on rows is what the renderer's cost actually follows.
  */
 export const MAX_INDEXED_FILES = 20_000
 
@@ -244,7 +247,7 @@ export async function renamePath(
 }
 
 /**
- * Every file under `root`, for the search palette.
+ * Every file and folder under `root`, for the search palette and a chat's `@`.
  *
  * The one thing in this module that walks rather than reads a level: the
  * palette answers "which file is called something like this" across the whole
@@ -263,6 +266,11 @@ export async function renamePath(
  * an infinite walk, and the files it points at are already indexed under their
  * real path — the tree still expands them, where the user asked for that one
  * directory rather than for everything under it.
+ *
+ * A file's size comes from a `stat`, one directory's worth at a time: the `@`
+ * menu shows what mentioning a path would cost a turn, and a size is the only
+ * thing cheap enough to have for every path in the workspace. A stat that fails
+ * is a 0 rather than a missing row — the path is still mentionable.
  */
 export async function indexFiles(
   root: string,
@@ -280,25 +288,57 @@ export async function indexFiles(
     // workspace.
     const dirents = await readdir(dir, { withFileTypes: true }).catch(() => [])
 
+    // Always with forward slashes, even where the path has backslashes: this is
+    // the string the user reads and types at, and nobody searching a repository
+    // types `src\lib`.
+    const relative = (target: string) =>
+      path.relative(root, target).split(path.sep).join("/")
+
+    /** The rows this level pushed for files, so the sizes below land on them
+     * without a search back through everything already found. */
+    const pending: FileIndexEntry[] = []
     for (const dirent of dirents) {
       if (found.length >= limit) break
 
       const target = path.join(dir, dirent.name)
       if (dirent.isDirectory()) {
-        if (!IGNORED_DIRECTORIES.has(dirent.name)) queue.push(target)
+        if (IGNORED_DIRECTORIES.has(dirent.name)) continue
+        queue.push(target)
+        found.push({
+          path: target,
+          folderId,
+          relative: relative(target),
+          kind: "directory",
+          bytes: 0,
+        })
         continue
       }
       if (dirent.isSymbolicLink()) continue
 
-      found.push({
+      // Counted against the budget as it is found rather than after the stats,
+      // so the cap still holds for a directory of a hundred thousand files.
+      const entry: FileIndexEntry = {
         path: target,
         folderId,
-        // Always with forward slashes, even where the path has backslashes:
-        // this is the string the user reads and types at, and nobody searching
-        // a repository types `src\lib`.
-        relative: path.relative(root, target).split(path.sep).join("/"),
-      })
+        relative: relative(target),
+        kind: "file",
+        bytes: 0,
+      }
+      found.push(entry)
+      pending.push(entry)
     }
+
+    // One directory's stats at once: sequentially this is a syscall per file
+    // with nothing overlapped, which on a twenty-thousand-file repository is
+    // the difference between the palette opening and the palette waiting.
+    const sizes = await Promise.all(
+      pending.map((entry) =>
+        stat(entry.path)
+          .then((info) => info.size)
+          .catch(() => 0)
+      )
+    )
+    for (const [at, entry] of pending.entries()) entry.bytes = sizes[at] ?? 0
   }
 
   return found

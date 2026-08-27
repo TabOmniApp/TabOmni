@@ -67,6 +67,13 @@ const api: DesktopApi = {
   gitBranch: (folderId) => ipcRenderer.invoke(IPC.gitBranch, folderId),
   gitStatus: (folderId) => ipcRenderer.invoke(IPC.gitStatus, folderId),
   gitChanges: (folderId) => ipcRenderer.invoke(IPC.gitChanges, folderId),
+  gitStage: (folderId, paths) =>
+    ipcRenderer.invoke(IPC.gitStage, folderId, paths),
+  gitUnstage: (folderId, paths) =>
+    ipcRenderer.invoke(IPC.gitUnstage, folderId, paths),
+  gitDiscard: (folderId, paths) =>
+    ipcRenderer.invoke(IPC.gitDiscard, folderId, paths),
+  gitDiscardAll: (folderId) => ipcRenderer.invoke(IPC.gitDiscardAll, folderId),
   fileAtHead: (filePath) => ipcRenderer.invoke(IPC.fileAtHead, filePath),
 
   listDirectory: (dirPath) => ipcRenderer.invoke(IPC.listDirectory, dirPath),

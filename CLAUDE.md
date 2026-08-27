@@ -106,8 +106,13 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   `ipc.ts` is main's one list of roots, feeding the gate, the watchers, the
   palette's walk and the tsservers at once.
 - **`git.ts`** — `workingTree` for the tree's colours, `changes()` for the
-  Changes tab (`git status` with the ignored dropped, plus `git diff --numstat
-HEAD`), `fileAtHead` for the diff's left side. No git panel exists.
+  Changes tab (`git status` with the ignored dropped, plus a `git diff
+--numstat` per side of the index), `fileAtHead` for the diff's left side, and
+  `stage` / `unstage` / `discard` for the list's menu. No git panel exists and
+  **nothing commits** — that line is deliberate, see `docs/design.md`. `discard`
+  answers with the paths it could not restore instead of deleting them: they go
+  to the trash in `ipc.ts`, because this module stays free of `electron` so the
+  tests can import it.
 - **`tsserver.ts`** — one per Explorer root, using _that root's own_
   `typescript`, and nothing if it has none.
 - **`mcp.ts`** — the Database, API and Notes panels served to a turn as three
@@ -118,7 +123,7 @@ HEAD`), `fileAtHead` for the diff's left side. No git panel exists.
 ### `worktree-chat.ts` + `claude-agent.ts` — the only `claude` in the app
 
 `worktree-chat.ts` is the policy, `claude-agent.ts` the SDK runner under it. A
-turn is `@anthropic-ai/claude-agent-sdk`, not a `spawn` of `claude -p`. Five
+chat is `@anthropic-ai/claude-agent-sdk`, not a `spawn` of `claude -p`. Five
 things are not visible from the option names:
 
 1. `pathToClaudeCodeExecutable` is the **user's own** `claude` (their login,
@@ -128,8 +133,10 @@ things are not visible from the option names:
    `mcpServers` option, which serialises the config — and this run's secret —
    onto a command line every process on the machine can read.
 3. `appendSystemPrompt` is an `initialize` frame on stdin, not a flag.
-4. The SDK **throws** an error result after delivering it as a message; the
-   `finished` guard is what stops one failure being reported twice.
+4. The SDK throws only when the **process** ends, not on an error result — that
+   is true of streaming input; with a string prompt it threw after delivering
+   the result as a message too. The `finished` guard on `onExit` is what keeps
+   one death being reported once.
 5. `main.cjs` gets its own esbuild build — the package is ESM and its
    `import.meta.url` becomes `{}` under a CJS bundle, so a `define`/banner
    points it at a real file URL. That banner must not go near the sandboxed
@@ -162,10 +169,33 @@ and a turn started that way spends itself trying to leave.
 
 `Ask` is the mode that stops: an unpermitted call comes back through
 `canUseTool` as a card above the composer, and the promise `WorktreeChats.ask`
-returns **is** the pause — nothing times it out. `finish` and `dispose` both
+returns **is** the pause — nothing times it out. `endTurn` and `dispose` both
 settle outstanding asks, or the CLI waits on a promise nobody will resolve.
 
-A chat's id **is** the CLI's session id, so whether the next turn is
+**A chat is one CLI held open, not a process per message.** `query()` is given
+an async iterable (`Inbox`), which is the SDK's streaming input mode, so a
+message sent while a turn is running is pushed to the same process and the CLI
+queues it — that is what makes the composer live mid-answer, and `Stop` an
+`interrupt()` rather than a kill. Four consequences to know before touching it:
+
+- `result` ends a **turn** (`onTurn`); the session ends when the stream does
+  (`onExit`). They were one `onDone`.
+- `modelUsage` and `total_cost_usd` are the **session's running total** on every
+  result. `usageOf` subtracts the previous result, per model, and reads a
+  backwards total as a reset rather than a refund.
+- Whether a chat is busy is main's to say — the `busy` event, off the CLI's
+  `session_state_changed` where there is one. A turn ending is not the chat
+  going quiet: another message may already be queued.
+- Model and effort move under a running session (`setModel`,
+  `applyFlagSettings`), and the permission never went to the CLI at all. `cwd`,
+  `CLAUDE_CONFIG_DIR` and the MCP config **cannot** — a change to one closes the
+  session and opens another (`signatureOf`).
+
+A session with nothing to do for `IDLE_MS` is closed, silently: the alternative
+is a `claude` per conversation resident all day, and reopening costs exactly
+what every message used to.
+
+A chat's id **is** the CLI's session id, so whether a session opens with
 `sessionId` or `resume` is `started` on the record rather than a `Set` in the
 process. A chat's lines are `workspace/worktree-chats/<id>.json`, listed in
 `workspace/worktree-chats.json`. The cwd resolve is deliberately **not** a
@@ -254,8 +284,8 @@ Logic worth testing is split out from the drawing: `lib/worktree-chat/activity.t
 (`test/chat-activity.ts`), `lib/worktree-chat/usage.ts` (`test/chat-usage.ts`),
 `lib/files/review.ts` (`test/review.ts`), `lib/tab-groups.ts`
 (`test/tab-groups.ts`), `lib/files/roots.ts` (`test/file-roots.ts`),
-`lib/files/block-doc.ts`, `lib/mention-text.ts` (`test/mentions.ts`). Put new
-logic on that side of the line.
+`lib/files/block-doc.ts`, `lib/worktree-chat/mention-text.ts`
+(`test/chat-mentions.ts`). Put new logic on that side of the line.
 
 ## Conventions
 
