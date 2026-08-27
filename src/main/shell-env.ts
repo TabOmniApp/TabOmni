@@ -8,9 +8,28 @@
  */
 
 import { execFile } from "node:child_process"
+import { homedir } from "node:os"
+import path from "node:path"
 import { promisify } from "node:util"
 
 const run = promisify(execFile)
+
+/**
+ * Resolves a path the user typed, expanding a leading `~`.
+ *
+ * Shared rather than local to one caller: `ipc.ts` needs it for a field that
+ * accepts typing (`addFolder`, `pickFiles`'s default directory, a
+ * `ClaudeProfile`'s `configDir`), and `worktree-chat.ts` needs it again at the
+ * point a profile's directory becomes `CLAUDE_CONFIG_DIR` — a env var handed
+ * to a process the SDK spawns directly, with no shell in between to expand a
+ * literal `~` the way one typed at a prompt would be.
+ */
+export function expandHome(target: string): string {
+  const trimmed = target.trim()
+  if (trimmed === "~") return homedir()
+  if (trimmed.startsWith("~/")) return path.join(homedir(), trimmed.slice(2))
+  return trimmed
+}
 
 /**
  * The user's own shell, started as a login shell — or that shell running

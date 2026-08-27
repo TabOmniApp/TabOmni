@@ -12,6 +12,7 @@ import path from "node:path"
 
 import type {
   AssistantMessage,
+  ClaudeProfile,
   DatabaseRecord,
   DbEngine,
   DbOrigin,
@@ -100,6 +101,9 @@ export const COOKIES_FILE = "cookies.json"
  * environment holds hostnames and tokens, which is not the same kind of thing
  * as the requests themselves. */
 export const ENVIRONMENTS_FILE = "environments.json"
+
+/** The workspace's `CLAUDE_CONFIG_DIR` profiles — see `ClaudeProfile`. */
+export const CLAUDE_PROFILES_FILE = "claude-profiles.json"
 
 /** The groups those requests are filed under. */
 export const FOLDERS_FILE = "folders.json"
@@ -558,6 +562,14 @@ export class Store {
 
   saveEnvironments(environments: HttpEnvironment[]): Promise<void> {
     return this.writeList(ENVIRONMENTS_FILE, environments)
+  }
+
+  listClaudeProfiles(): Promise<ClaudeProfile[]> {
+    return this.readList(CLAUDE_PROFILES_FILE)
+  }
+
+  saveClaudeProfiles(profiles: ClaudeProfile[]): Promise<void> {
+    return this.writeList(CLAUDE_PROFILES_FILE, profiles)
   }
 
   listRequestFolders(): Promise<HttpFolder[]> {

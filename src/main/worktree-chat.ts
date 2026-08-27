@@ -7,6 +7,7 @@ import {
   type ChatAskQuestion,
   type ChatPermission,
   type ChatPlace,
+  type ClaudeProfile,
   type WorktreeChat,
   type WorktreeChatAnswer,
   type WorktreeChatAsk,
@@ -22,6 +23,7 @@ import {
   type AskDecision,
   type AskRequest,
 } from "./claude-agent"
+import { expandHome } from "./shell-env"
 
 /**
  * A project's chats: one agent turn at a time, in that project's directory.
@@ -100,6 +102,9 @@ export type WorktreeChatSource = {
   /** The directory a project names, or null when it has left the workspace —
    * what a chat runs in. */
   folderDir: (folderId: string) => Promise<string | null>
+  /** The workspace's `CLAUDE_CONFIG_DIR` profiles, for resolving a chat's
+   * `options.profileId` at send time — see `ClaudeProfile`. */
+  claudeProfiles: () => Promise<ClaudeProfile[]>
 
   chats: () => Promise<WorktreeChat[]>
   saveChats: (chats: WorktreeChat[]) => Promise<void>
@@ -172,10 +177,12 @@ const DISALLOWED_TOOLS = [
  *
  * Not a permission but a delivery mechanism: it reaches this app by being on no
  * mode's `allowed`, so the request comes through `canUseTool` and the questions
- * arrive with it. In `ask` that reaches `onAsk` and becomes a card; in the other
- * four `deciding` refuses it with a sentence, which is what a mode with nobody
- * to ask needs — an unanswered question is a turn that stalls, and a model told
- * no writes something instead.
+ * arrive with it. Unlike everything else `canUseTool` sees, this is the model
+ * asking the *user* something rather than asking for permission, so every mode
+ * wires it to `onAsk` and it becomes a card regardless of what else that mode
+ * permits — see the `onAsk` passed to `runAgentTurn` below, and `permitting`,
+ * which keeps `full`'s "everything" from auto-answering it before `onAsk` is
+ * ever reached.
  */
 const ASK_TOOL = "AskUserQuestion"
 
@@ -277,9 +284,10 @@ const PERMISSIONS: Record<
      * full re-write on every switch: 42,345 tokens written and none read,
      * against 103 for a turn that changed nothing. */
     prompt?: string
-    /** Whether a turn may stop and put an arbitrary question on screen — the
-     * one mode where `onAsk` is handed to `runAgentTurn`. Without one, a call
-     * this mode does not permit is refused rather than asked about. */
+    /** Whether a turn may stop and put an *arbitrary* unpermitted call on
+     * screen rather than refusing it outright. `onAsk` is handed to
+     * `runAgentTurn` in every mode regardless — see `ASK_TOOL` — this only
+     * covers everything else `permits` refused. */
     asks?: boolean
   }
 > = {
@@ -298,7 +306,8 @@ const PERMISSIONS: Record<
   ask: { allowed: READ_TOOLS, prompt: ASK_PROMPT, asks: true },
   edits: { allowed: ALLOWED_TOOLS },
   /*
-   * Nothing is refused except `DISALLOWED_TOOLS`, and nothing is asked.
+   * Nothing is refused except `DISALLOWED_TOOLS` and `ASK_TOOL`, and nothing
+   * else is asked.
    *
    * This was `bypassPermissions`, and dropping it is what turned the two
    * `delete_*` refusals from a request into a guarantee: that mode
@@ -306,7 +315,10 @@ const PERMISSIONS: Record<
    * had named as refused was the CLI's business rather than this app's. With
    * every mode on one `permissionMode` the refusal is enforced here, and
    * `Full access` still means what its tooltip says — a turn reaching for a
-   * tool this app never listed runs rather than stalling.
+   * tool this app never listed runs rather than stalling. `AskUserQuestion`
+   * is the one exception `permitting` carves out of "everything": without it,
+   * `full`'s own `allowed: undefined` would auto-answer the model's question
+   * with its own unanswered input before `onAsk` ever saw it.
    */
   full: {},
 }
@@ -318,10 +330,16 @@ const PERMISSIONS: Record<
  * which is what `ALLOWED_TOOLS` has always meant by naming the three servers
  * rather than their nine tools — that reading was the CLI's before this moved
  * in-process, and it has to be kept or `edits` loses the workspace's writers.
+ *
+ * `ASK_TOOL` never comes back permitted, `full`'s `allowed: undefined`
+ * included: `deciding` in `claude-agent.ts` only reaches `onAsk` for a call
+ * `permits` refused, so letting "everything" cover it too would run the
+ * model's question as a no-op tool call instead of putting it on screen.
  */
 function permitting(allowed: string[] | undefined): (name: string) => boolean {
-  if (!allowed) return () => true
+  if (!allowed) return (name) => name !== ASK_TOOL
   return (name) =>
+    name !== ASK_TOOL &&
     allowed.some((entry) => name === entry || name.startsWith(`${entry}__`))
 }
 
@@ -639,6 +657,22 @@ export class WorktreeChats {
     // two messages in the same chat.
     const mcpConfig = await this.source.mcpConfig()
 
+    // Looked up by id rather than trusted whole: a profile named on the
+    // record can have been renamed or deleted since — see
+    // `WorktreeChatOptions.profileId`. A missing id reads as null, the same
+    // as never having picked one.
+    //
+    // Expanded again here rather than trusted from Settings' own save: a
+    // profile written before that expansion existed can still carry a literal
+    // `~`, and `CLAUDE_CONFIG_DIR` reaches `claude` with no shell in between
+    // to expand it — see `expandHome`.
+    const profileConfigDir = options.profileId
+      ? ((await this.source.claudeProfiles()).find(
+          (profile) => profile.id === options.profileId
+        )?.configDir ?? null)
+      : null
+    const configDir = profileConfigDir ? expandHome(profileConfigDir) : null
+
     const run = await runAgentTurn(
       {
         cwd,
@@ -651,6 +685,7 @@ export class WorktreeChats {
         // own `claude` deciding — see `AgentTurn`.
         model: options.model,
         effort: options.effort,
+        configDir,
         // The mode's own policy, applied in this process. What goes to the
         // CLI is identical on every turn of every mode, which is what keeps one
         // cached prefix serving all five — see `permits` in `claude-agent.ts`.
@@ -663,11 +698,18 @@ export class WorktreeChats {
         // The same sentence on every turn. What the mode is goes at the head
         // of the message instead: this one is part of the cached prefix.
         appendSystemPrompt: system,
-        // Only where the mode says so, and its absence is what stops the other
-        // four ever pausing: handing this over is what makes the CLI ask.
-        ...(permission.asks
-          ? { onAsk: (request: AskRequest) => this.ask(id, request) }
-          : {}),
+        // Always handed over, unlike the tool list above: an `AskUserQuestion`
+        // call is the model asking the user, not asking for permission, and
+        // every mode puts it on screen. For anything else `permits` refused,
+        // only `permission.asks` says whether this asks or refuses outright —
+        // its absence is what stops the other four ever pausing on those.
+        onAsk: (request: AskRequest) =>
+          request.toolName === ASK_TOOL || permission.asks
+            ? this.ask(id, request)
+            : Promise.resolve({
+                allow: false,
+                message: `${request.toolName} is not one of the tools this chat may use, and this mode has nobody to ask.`,
+              }),
       },
       {
         onMessage: (message) => void this.append(id, message),

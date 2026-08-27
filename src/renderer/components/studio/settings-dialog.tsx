@@ -1,23 +1,33 @@
-import { useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useTheme } from "next-themes"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import {
   Columns2,
+  KeyRound,
   MessagesSquare,
   Palette,
   Plug,
+  Plus,
+  Trash2,
   type LucideIcon,
 } from "lucide-react"
 
 import type { McpServerName } from "@shared/api"
 import { useSettings, type TabsPlacement } from "@/lib/settings"
+import {
+  nextProfileName,
+  useClaudeProfiles,
+} from "@/lib/worktree-chat/claude-profiles"
+import { IconButton } from "./icon-button"
 
 /**
  * The studio's preferences — **Settings…** in the application menu, ⌘,.
@@ -101,6 +111,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <TabsSection />
             ) : section === "chat" ? (
               <ChatSection />
+            ) : section === "claude" ? (
+              <ClaudeSection />
             ) : (
               <McpSection />
             )}
@@ -111,7 +123,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-type SectionId = "appearance" | "tabs" | "chat" | "mcp"
+type SectionId = "appearance" | "tabs" | "chat" | "claude" | "mcp"
 
 /** The sections, in the order they are listed. Each one is a heading, a line
  * saying what it covers, and the rows below — kept together so adding a
@@ -139,6 +151,12 @@ const SECTIONS: {
     label: "Chat",
     blurb: "How much of an agent's turn a conversation shows.",
     icon: MessagesSquare,
+  },
+  {
+    id: "claude",
+    label: "Claude",
+    blurb: "Separate `claude` identities a chat's turns can run under.",
+    icon: KeyRound,
   },
   {
     id: "mcp",
@@ -252,6 +270,95 @@ function ChatSection() {
       <p className="text-xs leading-relaxed text-muted-foreground">
         A turn shows its answer with everything it did on the way gathered into
         a single line above it. Click that line to open it.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Named `CLAUDE_CONFIG_DIR`s — separate logins, settings and history for the
+ * user's own `claude`, the way pointing that variable at a directory of its
+ * own already lets somebody run several identities from one install.
+ *
+ * Picked per chat, in its own toolbar (`ChatComposer`'s `ProfileMenu`), the way
+ * the model and the effort are — this section only holds the list, the same
+ * split `EnvironmentDialog` has from the environment picker in the API panel's
+ * own toolbar.
+ */
+function ClaudeSection() {
+  const profiles = useClaudeProfiles((state) => state.profiles)
+  const refresh = useClaudeProfiles((state) => state.refresh)
+  const create = useClaudeProfiles((state) => state.create)
+  const rename = useClaudeProfiles((state) => state.rename)
+  const setConfigDir = useClaudeProfiles((state) => state.setConfigDir)
+  const remove = useClaudeProfiles((state) => state.remove)
+
+  // The list is loaded once at launch (`studio.tsx`) for the composer's own
+  // picker; asked again here so a profile added, renamed or removed in another
+  // window of this run is not stale by the time somebody opens Settings.
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        {profiles.length === 0 ? (
+          <p className="p-4 text-xs text-muted-foreground">
+            No profiles yet. A chat with none picked runs under whichever
+            account your own <code className="font-mono">claude</code> is
+            already signed into.
+          </p>
+        ) : (
+          profiles.map((profile) => (
+            <div key={profile.id} className="flex items-center gap-2 p-4">
+              <Input
+                value={profile.name}
+                onChange={(event) => rename(profile.id, event.target.value)}
+                placeholder="Name"
+                aria-label="Profile name"
+                className="h-7 w-32 shrink-0 text-xs md:text-xs"
+              />
+              <Input
+                value={profile.configDir}
+                onChange={(event) =>
+                  setConfigDir(profile.id, event.target.value)
+                }
+                placeholder="~/.claude-group/hung"
+                spellCheck={false}
+                aria-label="CLAUDE_CONFIG_DIR"
+                className="h-7 flex-1 font-mono text-xs md:text-xs"
+              />
+              <IconButton
+                label="Remove profile"
+                className="hover:text-destructive"
+                onClick={() => remove(profile.id)}
+              >
+                <Trash2 />
+              </IconButton>
+            </div>
+          ))
+        )}
+      </Card>
+
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() => create(nextProfileName(profiles.length))}
+      >
+        <Plus data-icon="inline-start" />
+        Profile
+      </Button>
+
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Sets <code className="font-mono">CLAUDE_CONFIG_DIR</code> for the turn —
+        the same variable a terminal would export to point{" "}
+        <code className="font-mono">claude</code> at a login, its settings and
+        its conversation history kept apart from the default{" "}
+        <code className="font-mono">~/.claude</code>. Nothing here starts that
+        directory off: point a profile at one that already exists, or one a{" "}
+        <code className="font-mono">claude</code> run with that variable set
+        will create.
       </p>
     </div>
   )

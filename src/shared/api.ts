@@ -999,6 +999,30 @@ export const CHAT_PERMISSIONS = [
 export type ChatPermission = (typeof CHAT_PERMISSIONS)[number]
 
 /**
+ * A named `CLAUDE_CONFIG_DIR` — a separate login, settings and conversation
+ * history for the user's own `claude`, the way pointing that variable at a
+ * different directory already lets somebody run several identities from one
+ * install (`~/.claude-group/<name>`, say, instead of the default `~/.claude`).
+ *
+ * Kept as a workspace-wide list rather than a single setting because the point
+ * is *choosing between* identities per chat — see `WorktreeChatOptions.profileId`
+ * — the same reason `HttpEnvironment` is a list and not one active host.
+ */
+export type ClaudeProfile = {
+  id: string
+  name: string
+  /**
+   * The absolute path handed to `claude` as `CLAUDE_CONFIG_DIR`.
+   *
+   * Left exactly as typed rather than resolved here: main expands a leading
+   * `~` the same way `addFolder`'s path field does, and a turn that never
+   * started because the directory does not exist yet is the CLI's own refusal
+   * to report, not this app's to anticipate.
+   */
+  configDir: string
+}
+
+/**
  * What a chat's own toolbar decides, held per chat.
  *
  * Per chat rather than per workspace because that is the unit somebody thinks
@@ -1025,6 +1049,16 @@ export type WorktreeChatOptions = {
    * record, which is where the toggle this replaced is migrated.
    */
   permission: ChatPermission
+  /**
+   * Which `ClaudeProfile` this chat's turns run under, by id — or null for the
+   * account the user's own `claude` is already signed into.
+   *
+   * A profile named here that no longer exists (deleted in Settings since the
+   * chat last ran) reads the same as null: `worktree-chat.ts` looks it up by
+   * id at send time and falls back rather than failing a turn over a picker
+   * choice that outlived the thing it pointed at.
+   */
+  profileId?: string | null
   /**
    * The plan toggle this replaced, on records written before the picker.
    *
@@ -1054,6 +1088,7 @@ export const DEFAULT_CHAT_OPTIONS: WorktreeChatOptions = {
   model: "default",
   effort: null,
   permission: "edits",
+  profileId: null,
 }
 
 /**
@@ -1073,6 +1108,7 @@ export function chatOptions(
     model: options.model ?? null,
     effort: options.effort ?? null,
     permission: readPermission(options),
+    profileId: options.profileId ?? null,
   }
 }
 
@@ -1610,6 +1646,14 @@ export type DesktopApi = {
    * the picker's cue to draw `CHAT_MODEL_FALLBACK`.
    */
   agentModels: () => Promise<AgentModel[]>
+  /**
+   * The workspace's `CLAUDE_CONFIG_DIR` profiles, for the composer's picker
+   * and the Claude section of Settings — see `ClaudeProfile`.
+   */
+  listClaudeProfiles: () => Promise<ClaudeProfile[]>
+  /** Replaces the whole collection: the renderer owns the list, the same way
+   * it owns `HttpEnvironment`'s. */
+  saveClaudeProfiles: (profiles: ClaudeProfile[]) => Promise<void>
   /** Every chat in every project — the listing; the lines are read one chat
    * at a time. */
   listWorktreeChats: () => Promise<WorktreeChat[]>
@@ -1864,6 +1908,8 @@ export const IPC = {
   saveCookies: "http:save-cookies",
   httpSend: "http:send",
   agentModels: "agent:models",
+  listClaudeProfiles: "claude-profiles:list",
+  saveClaudeProfiles: "claude-profiles:save",
   listWorktreeChats: "worktree-chats:list",
   createWorktreeChat: "worktree-chats:create",
   readWorktreeChat: "worktree-chats:read",

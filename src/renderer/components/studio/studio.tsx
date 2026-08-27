@@ -20,6 +20,7 @@ import { useDock } from "@/lib/dock"
 import { useStudio, type Pane } from "@/lib/store"
 import { useRun } from "@/lib/run/store"
 import { useProjects } from "@/lib/projects"
+import { useClaudeProfiles } from "@/lib/worktree-chat/claude-profiles"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
 import { Dock } from "./dock"
 import { ProjectCrumbs } from "./project/project-crumbs"
@@ -92,6 +93,7 @@ export function Studio() {
     void useProjects.getState().restore()
     void useRun.getState().restore()
     void useWorktreeChats.getState().refresh()
+    void useClaudeProfiles.getState().refresh()
   }, [])
 
   // A run outlives the dock being closed and the tab being switched away from,
