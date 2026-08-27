@@ -124,3 +124,19 @@ function separatorOf(target: string): string {
 export function movedPath(target: string, from: string, to: string): string {
   return isInside(from, target) ? to + target.slice(from.length) : target
 }
+
+/**
+ * A path as a message should carry it: in double quotes where it holds a space,
+ * bare otherwise.
+ *
+ * Not shell quoting — a chat message is a sentence, not a command line — but the
+ * same problem. `Screenshot 2026-08-27 at 9.14.12 PM.png` is what macOS names
+ * every screenshot, and dropped into a draft bare it reads as six words, one of
+ * which happens to end in `.png`; two files dropped together make it worse,
+ * since nothing says where the first path ends. A path that is already quoted is
+ * left alone, or a second drop of the same file would double them.
+ */
+export function quotePath(target: string): string {
+  if (!/\s/.test(target)) return target
+  return target.startsWith('"') && target.endsWith('"') ? target : `"${target}"`
+}

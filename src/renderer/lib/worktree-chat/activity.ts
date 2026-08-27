@@ -3,12 +3,12 @@ import type { AssistantMessage } from "@shared/api"
 /**
  * A turn's working, folded away from its answer.
  *
- * **Why a fold rather than a switch.** `showToolCalls` hid the tool rows
- * outright, which answers the wrong question: the rows are noise while reading
- * the answer and are the entire point five minutes later, when what is being
- * asked is "what did it actually do to my branch". A fold is both — one line
- * saying how much happened, and the whole of it a click away — and it is what
- * the setting now means.
+ * **Why a fold rather than a switch.** A `showToolCalls` setting hid the tool
+ * rows outright, which answers the wrong question: the rows are noise while
+ * reading the answer and are the entire point five minutes later, when what is
+ * being asked is "what did it actually do to my branch". A fold is both — one
+ * line saying how much happened, and the whole of it a click away — so the
+ * switch was deleted and the rows are always drawn.
  *
  * **What counts as working.** Everything a turn produced except its last word:
  * the tool calls, the thinking, and the narration between them ("let me check

@@ -379,11 +379,17 @@ section("the line somebody reads")
     usageLine(warm).includes("100% cached"),
     usageLine(warm)
   )
-  // The two numbers this whole line exists to put next to each other.
+  // The estimate is the breakdown's, not the line's — the line is token counts.
+  check(
+    "the line carries no money",
+    !usageLine(warm).includes("$") && !usageLine(cold).includes("$"),
+    [usageLine(cold), usageLine(warm)]
+  )
   check(
     "and the estimate keeps its digits under a cent",
-    usageLine(warm).endsWith("$0.0054") && usageLine(cold).endsWith("$0.08"),
-    [usageLine(cold), usageLine(warm)]
+    usageDetail(warm).includes("$0.0054") &&
+      usageDetail(cold).includes("$0.08"),
+    [usageDetail(cold), usageDetail(warm)]
   )
   check(
     "the breakdown splits the prompt three ways",

@@ -1,5 +1,5 @@
 import { useState, type MouseEvent, type ReactNode } from "react"
-import { Copy, Folder, Minus, Plus, Undo2 } from "lucide-react"
+import { ChevronRight, Copy, Folder, Minus, Plus, Undo2 } from "lucide-react"
 
 import type { GitChange } from "@shared/api"
 import {
@@ -72,6 +72,12 @@ export function ChangesList({ root }: { root: FileRoot }) {
   const [target, setTarget] = useState<GitChange | null>(null)
   const [discarding, setDiscarding] = useState<GitChange | "all" | null>(null)
 
+  /** Both piles start folded, so a checkout arrives as two counts rather than as
+   * however many rows a turn happened to touch. The headings keep their own
+   * actions while folded — `Stage all` is the one thing somebody wants without
+   * reading the rows first. */
+  const [open, setOpen] = useState({ staged: false, unstaged: false })
+
   if (changes === undefined) {
     // Only before the first answer. A re-read behind a list already on screen
     // says nothing — the rows are still true until they are replaced.
@@ -116,7 +122,14 @@ export function ChangesList({ root }: { root: FileRoot }) {
          */}
         {staged.length > 0 && (
           <>
-            <Heading label="Staged" count={staged.length}>
+            <Heading
+              label="Staged"
+              count={staged.length}
+              open={open.staged}
+              onToggle={() =>
+                setOpen((state) => ({ ...state, staged: !state.staged }))
+              }
+            >
               <RowAction
                 label="Unstage everything"
                 onClick={() => {
@@ -129,23 +142,32 @@ export function ChangesList({ root }: { root: FileRoot }) {
                 <Minus />
               </RowAction>
             </Heading>
-            <ul>
-              {staged.map((change) => (
-                <ChangeRow
-                  key={`staged:${change.path}`}
-                  change={change}
-                  root={root}
-                  onMenu={setTarget}
-                  onDiscard={setDiscarding}
-                />
-              ))}
-            </ul>
+            {open.staged && (
+              <ul>
+                {staged.map((change) => (
+                  <ChangeRow
+                    key={`staged:${change.path}`}
+                    change={change}
+                    root={root}
+                    onMenu={setTarget}
+                    onDiscard={setDiscarding}
+                  />
+                ))}
+              </ul>
+            )}
           </>
         )}
 
         {unstaged.length > 0 && (
           <>
-            <Heading label="Changes" count={unstaged.length}>
+            <Heading
+              label="Changes"
+              count={unstaged.length}
+              open={open.unstaged}
+              onToggle={() =>
+                setOpen((state) => ({ ...state, unstaged: !state.unstaged }))
+              }
+            >
               <RowAction
                 label="Discard every change in this checkout"
                 onClick={() => setDiscarding("all")}
@@ -164,17 +186,19 @@ export function ChangesList({ root }: { root: FileRoot }) {
                 <Plus />
               </RowAction>
             </Heading>
-            <ul>
-              {unstaged.map((change) => (
-                <ChangeRow
-                  key={change.path}
-                  change={change}
-                  root={root}
-                  onMenu={setTarget}
-                  onDiscard={setDiscarding}
-                />
-              ))}
-            </ul>
+            {open.unstaged && (
+              <ul>
+                {unstaged.map((change) => (
+                  <ChangeRow
+                    key={change.path}
+                    change={change}
+                    root={root}
+                    onMenu={setTarget}
+                    onDiscard={setDiscarding}
+                  />
+                ))}
+              </ul>
+            )}
           </>
         )}
       </ContextMenuTrigger>
@@ -585,30 +609,54 @@ function Counts({ change }: { change: GitChange }) {
 }
 
 /**
- * A pile's name and how many are in it, with the pile's own actions at the end.
+ * A pile's name and how many are in it, with the pile's own actions at the end —
+ * and the control that folds the pile away.
  *
  * At the weight of a label rather than of a title: this divides a list, it does
  * not head a panel — the panel's heading is the two tabs above. The actions
  * follow the same rule as a row's and appear under the pointer, so a heading
  * somebody is not using is two words and a number.
+ *
+ * The whole heading is the toggle, not just the chevron — a 12px target is not
+ * one. It is a `<button>`, so the pile's actions stay a positioned **sibling**
+ * for the same reason a row's are: a button inside a button is dropped by the
+ * browser.
  */
 function Heading({
   label,
   count,
+  open,
+  onToggle,
   children,
 }: {
   label: string
   count: number
+  open: boolean
+  onToggle: () => void
   children: ReactNode
 }) {
   return (
-    <div className="group/row relative flex h-6 items-center gap-1.5 px-3 pt-1">
-      <p className="flex-1 text-[0.65rem] font-medium tracking-wide text-muted-foreground uppercase">
-        {label}
-      </p>
-      <span className="font-mono text-[0.65rem] text-muted-foreground tabular-nums group-focus-within/row:invisible group-hover/row:invisible">
-        {count}
-      </span>
+    <div className="group/row relative flex h-6 items-center px-3 pt-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+      >
+        <ChevronRight
+          aria-hidden
+          className={cn(
+            "size-3 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-90"
+          )}
+        />
+        <span className="flex-1 text-[0.65rem] font-medium tracking-wide text-muted-foreground uppercase">
+          {label}
+        </span>
+        <span className="font-mono text-[0.65rem] text-muted-foreground tabular-nums group-focus-within/row:invisible group-hover/row:invisible">
+          {count}
+        </span>
+      </button>
       {/* Over the count, on the same terms as a row's actions — see
           `RowActions` for why they are positioned rather than laid out. */}
       <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100 group-hover/row:pointer-events-auto group-hover/row:opacity-100">

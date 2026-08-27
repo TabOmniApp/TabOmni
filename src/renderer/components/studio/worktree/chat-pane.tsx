@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState, type DragEvent } from "react"
 
 import {
   chatOptions,
@@ -12,7 +12,7 @@ import { blocksOf } from "@/lib/worktree-chat/activity"
 import { placeOf, useWorktreeChats } from "@/lib/worktree-chat/store"
 import { chatLine, totalOf, usageDetail } from "@/lib/worktree-chat/usage"
 import { ChatAsk } from "./chat-ask"
-import { ChatComposer } from "./chat-composer"
+import { ChatComposer, type ChatComposerHandle } from "./chat-composer"
 import { ChatActivity } from "./chat-activity"
 import { ChatMessage } from "./chat-message"
 import { ChatSkeleton, ChatTranscriptSkeleton } from "./chat-skeleton"
@@ -102,7 +102,7 @@ const placeholderFor = (permission: ChatPermission, where: string): string =>
  * borrowing a reassurance. See `SYSTEM_PROMPT` in `main/worktree-chat.ts`,
  * which tells the model the same thing.
  */
-function captionFor(permission: ChatPermission): string {
+function captionFor(permission: ChatPermission): string | null {
   switch (permission) {
     case "plan":
       return "Plan mode: this turn reads and changes nothing"
@@ -110,8 +110,13 @@ function captionFor(permission: ChatPermission): string {
       return "Read only: this turn reads and changes nothing"
     case "ask":
       return "Reading runs freely; edits and commands will stop and ask you"
+    // Nothing for `edits`: it is the mode a chat is normally in, so its caption
+    // was under the composer of every chat all day saying what the toolbar
+    // above it already says. The modes that still speak are the ones somebody
+    // would be surprised by — the two that refuse, and the one that asks
+    // nothing at all.
     case "edits":
-      return "Edits and commands run without asking, in this project's own working tree"
+      return null
     case "full":
       return "Full access: nothing is asked, in this project's own working tree"
   }
@@ -165,6 +170,45 @@ function Conversation({
 
   const box = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
+  const composer = useRef<ChatComposerHandle>(null)
+
+  /**
+   * A file dropped anywhere over the conversation, typed in as its path.
+   *
+   * The same substitution the terminal makes (`terminal-view.tsx`) and for the
+   * same reason: what goes to the turn is a prompt, so a picture is *named* to
+   * it rather than uploaded — the agent runs here with `Read`, which is how it
+   * opens an image. Anywhere over the pane rather than on the field alone,
+   * because a screenshot is dragged at the conversation, not at a 60-pixel box.
+   *
+   * Any file, not only a picture, for the reason the `+` menu takes any: a path
+   * is a path, and a `.csv` dropped in is as good an instruction as a `.png`.
+   *
+   * `dragleave` fires on every crossing into a child as well as on the way out,
+   * so the depth is counted rather than trusted — read as a boolean the tint
+   * flickers off the moment the pointer moves over a message.
+   */
+  const [dropping, setDropping] = useState(false)
+  const depth = useRef(0)
+
+  const carriesFiles = (event: DragEvent) =>
+    [...event.dataTransfer.types].includes("Files")
+
+  function onDrop(event: DragEvent) {
+    if (!carriesFiles(event)) return
+    event.preventDefault()
+    depth.current = 0
+    setDropping(false)
+
+    // Empty for anything with no file behind it — an image dragged out of a
+    // web page is bytes Chromium is holding, and there is no path to type.
+    // Those are dropped rather than written out to the workspace: what the
+    // turn would then read is a copy nobody can find again.
+    const paths = [...event.dataTransfer.files]
+      .map((file) => window.desktop.getPathForFile(file))
+      .filter(Boolean)
+    composer.current?.insertPaths(paths)
+  }
   /**
    * Whether the view is following the end of the transcript. Deliberately not
    * "is scrolled to the bottom": a message rendering taller a frame later —
@@ -225,7 +269,38 @@ function Conversation({
     : undefined
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="relative flex h-full min-h-0 flex-col"
+      onDragEnter={(event) => {
+        if (!carriesFiles(event)) return
+        event.preventDefault()
+        depth.current += 1
+        setDropping(true)
+      }}
+      onDragOver={(event) => {
+        if (!carriesFiles(event)) return
+        // Without this the drop is refused and Chromium navigates the window to
+        // the file instead, which takes the whole studio with it.
+        event.preventDefault()
+        event.dataTransfer.dropEffect = "copy"
+      }}
+      onDragLeave={(event) => {
+        if (!carriesFiles(event)) return
+        depth.current = Math.max(0, depth.current - 1)
+        if (depth.current === 0) setDropping(false)
+      }}
+      onDrop={onDrop}
+    >
+      {/* Over the pane rather than around it: a border on the container would
+          move the transcript by a pixel as the pointer came in. */}
+      {dropping && (
+        <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-lg border-2 border-dashed border-ring bg-background/70">
+          <p className="text-xs text-muted-foreground">
+            Drop to write the path into your message
+          </p>
+        </div>
+      )}
+
       <div
         ref={box}
         onScroll={(event) => {
@@ -286,6 +361,7 @@ function Conversation({
             // One field per chat: its draft is that chat's, and a field kept
             // across a switch is one draft shared by every conversation.
             key={chatId}
+            ref={composer}
             initialDraft={seeded ?? ""}
             // The field on its way out — switching chats, or this panel being
             // taken down — hands back what was in it, and that is what makes

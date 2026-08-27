@@ -359,8 +359,8 @@ export type AssistantMessage =
    * Kept apart from `assistant` rather than run in with it: it is what the model
    * thought on the way to the answer, not the answer, and a chat that ran the
    * two together would be a reply nobody can find the end of. There was a
-   * `showThinking` setting for this and it was removed when nothing drew these;
-   * it is back with them.
+   * `showThinking` setting for this; the fold made it pointless and it is gone,
+   * so these are always drawn.
    */
   | { id: string; role: "thinking"; text: string }
   /**
@@ -721,40 +721,96 @@ export type WorktreeChatAnswer =
   | { kind: "answers"; answers: Record<string, string[]> }
 
 /**
- * The three MCP servers the studio can put in front of an agent: the
- * workspace's databases, its saved requests, and its notes.
- *
- * One per panel rather than one server with everything on it, because the
- * switch in Settings is per panel: somebody who wants an agent to read their
- * schema has not thereby agreed to let it send their saved requests. The names
- * are the URL's last segment and the server's name in the CLI's config, so a
- * tool the agent calls says which of the three it came from
- * (`mcp__tabomni-database__query`).
- */
-export type McpServerName = "database" | "api" | "notes"
-
-/**
  * Which environment the API panel has selected.
  *
- * Spelled out here rather than in either side's own file: the panel writes it
- * and the MCP server reads it, because a request an agent sends has to go to
- * the same host the panel would have sent it to.
+ * Spelled out here rather than in the renderer's own file because it is a
+ * workspace setting under a name both sides can say — the panel writes it, and
+ * anything in main that has to send a request the way the panel would reads it.
  */
 export const HTTP_ENVIRONMENT_KEY = "http.environment"
 
-export const MCP_SERVER_NAMES: McpServerName[] = ["database", "api", "notes"]
+/**
+ * How far along one MCP server's connection is, as the CLI reports it.
+ *
+ * The CLI's own five, plus `unknown` for a sixth it grows later: the value
+ * crosses into the renderer typed as this, and a word this app has no row style
+ * for is better drawn as "unknown" than trusted into a `switch` that has no arm
+ * for it. `pending` is the one worth knowing about — MCP startup is not blocking
+ * for the CLI, so a listing asked the moment a process comes up can legitimately
+ * be all pending, which is why the listing is asked more than once (see
+ * `main/mcp-servers.ts`).
+ */
+export type McpServerState =
+  "connected" | "failed" | "needs-auth" | "pending" | "disabled" | "unknown"
 
 /**
- * Where each server's switch is kept — written by the Settings dialog, read by
- * the main process both when a session starts and on every tool call.
+ * Which MCP tools a chat here may not call, as wire names.
  *
- * Absent means off. That is the whole of the default: a workspace that has
- * never been to Settings hands an agent nothing.
+ * A workspace setting of this app's rather than anything written into the user's
+ * own `claude` config: turning a tool off here must not change what their
+ * terminal can do. The entries are the names a turn's tool call actually carries
+ * (`mcp__figma__get_metadata`), or a server prefix (`mcp__figma`) standing for
+ * everything on it, which is the form the CLI's own `disallowedTools` already
+ * understands — so this setting is handed straight over rather than expanded
+ * here. A **wire** name, note, not the configured one: the CLI normalises a
+ * server's name into it (`claude.ai ClickUp` → `claude_ai_ClickUp`), which is
+ * `wireServer` in `lib/worktree-chat/mcp-servers.ts`.
+ *
+ * Stored as a JSON array under one key rather than a key per tool: a connector
+ * has fifty of them, and the list is read whole on every turn anyway.
  */
-export const MCP_SETTING_KEYS: Record<McpServerName, string> = {
-  database: "mcp.database",
-  api: "mcp.api",
-  notes: "mcp.notes",
+export const MCP_DISABLED_TOOLS_KEY = "mcp.disabledTools"
+
+/** One tool a server offers, as a row of the Settings listing draws it. */
+export type McpToolInfo = {
+  /** The tool's own name, without the `mcp__<server>__` the CLI prefixes it
+   * with when a turn calls it. */
+  name: string
+  description: string | null
+}
+
+/**
+ * One MCP server the user's own `claude` has, the way `/mcp` lists them.
+ *
+ * Read from the CLI rather than from the config files this app could parse
+ * itself, because the interesting half is not in any of them: whether the
+ * server actually connected, what it failed with, and which tools it turned out
+ * to offer. A listing assembled from `~/.claude.json` and a repository's
+ * `.mcp.json` would say a server exists and nothing about whether it works.
+ */
+export type McpServerInfo = {
+  /** As configured — the same name a tool call carries (`mcp__linear__…`). */
+  name: string
+  state: McpServerState
+  /** Where it is configured (`user`, `project`, `local`, `claudeai`,
+   * `managed`, …), or null for a CLI that did not say. */
+  scope: string | null
+  /** How it is reached — `stdio`, `http`, `sse`, `sdk` — for a row that says
+   * more than a name. */
+  transport: string | null
+  /** The command or URL behind it, when there is one worth showing. */
+  address: string | null
+  /** Why it failed, when `state` is `failed`. */
+  error: string | null
+  /** Empty until it connects: the CLI only knows a server's tools once it has
+   * asked it. */
+  tools: McpToolInfo[]
+}
+
+/**
+ * The answer to one ask, and why there is nothing in it when there is nothing.
+ *
+ * `error` rather than an empty list standing in for both: a workspace with no
+ * servers configured and a `claude` that could not be run are the same array and
+ * very different things to be told, and the second one is the one somebody needs
+ * to act on.
+ */
+export type McpListing = {
+  /** The directory the CLI was asked in — an MCP config is per directory (a
+   * repository's own `.mcp.json`), so the listing is only true of one. */
+  cwd: string
+  servers: McpServerInfo[]
+  error: string | null
 }
 
 export type TerminalOutput = {
@@ -1492,28 +1548,6 @@ export type DesktopApi = {
   /** Subscribes to the File menu. Returns an unsubscribe function. */
   onMenuCommand: (listener: (command: MenuCommand) => void) => () => void
 
-  /**
-   * Fires when the notes on disk changed underneath the panel — which so far
-   * means the MCP server wrote one for an agent (`main/mcp.ts`).
-   *
-   * A listing the renderer read at launch cannot notice that; without this a
-   * note an agent had just written would not appear until the next run.
-   */
-  onNotesChanged: (listener: () => void) => () => void
-
-  /**
-   * The same, for the saved requests and the folders they are filed under: an
-   * agent can write, move or delete one through the MCP server, and the API
-   * panel is holding the collection it read at launch.
-   *
-   * It matters more here than for the notes, because the panel saves the whole
-   * collection at once: a panel that never re-read would write its stale list
-   * back over the agent's request the next time anything in it was edited. A
-   * deletion is the other half — a tab onto a record that is gone can draw
-   * nothing.
-   */
-  onRequestsChanged: (listener: () => void) => () => void
-
   /** Whether Docker is available, and why not when it is not — used when
    * creating a Docker-managed database. */
   dockerStatus: () => Promise<DockerStatus>
@@ -1773,6 +1807,42 @@ export type DesktopApi = {
    */
   agentModels: () => Promise<AgentModel[]>
   /**
+   * The MCP servers the user's own `claude` has in a project's directory, for
+   * the MCP section of Settings — what `/mcp` in the CLI lists.
+   *
+   * Asked of the CLI over the same control channel as `agentModels`, and for the
+   * same reason: this app configures none of these and so has no list of its own
+   * to draw. `folderId` is the project whose directory to ask in, because an MCP
+   * config is per directory — a repository's own `.mcp.json` is only there. Null,
+   * or a project that has left the workspace, asks in the user's home directory,
+   * which is the user-scope half of the answer and nothing repository-specific.
+   *
+   * **Not held for the run**, unlike `agentModels`: somebody looking at this
+   * listing is often looking at it because they have just run `claude mcp add`,
+   * and a cached answer would be the one thing they opened it to see change. Two
+   * asks for the same directory at once share the one process.
+   */
+  installedMcpServers: (folderId: string | null) => Promise<McpListing>
+  /**
+   * Removes one of those servers from the user's own `claude` config — the
+   * **Remove** button on a row in Settings › MCP.
+   *
+   * Run as `claude mcp remove`, the CLI's own command, rather than by editing
+   * `~/.claude.json` or a repository's `.mcp.json` from here: the config is the
+   * CLI's, its shape moves between releases, and a hand-written edit is how two
+   * writers of one file corrupt it. `scope` is passed when the listing knew one
+   * (`local` / `user` / `project`) and omitted otherwise, which tells the CLI to
+   * remove it from wherever it is. `folderId` is the project whose directory to
+   * run in, since a `project`-scope server lives in that repository's own file.
+   *
+   * **There is no undo.** The caller confirms first; this does it.
+   */
+  removeMcpServer: (input: {
+    name: string
+    scope: string | null
+    folderId: string | null
+  }) => Promise<void>
+  /**
    * The workspace's `CLAUDE_CONFIG_DIR` profiles, for the composer's picker
    * and the Claude section of Settings — see `ClaudeProfile`.
    */
@@ -1989,8 +2059,6 @@ export const IPC = {
   readImageDataUrl: "files:read-image-data-url",
   clipboardImagePath: "files:clipboard-image-path",
   menuCommand: "menu:command",
-  notesChanged: "notes:changed",
-  requestsChanged: "http:changed",
   dockerStatus: "docker:status",
   listDatabases: "databases:list",
   createDatabase: "databases:create",
@@ -2038,6 +2106,8 @@ export const IPC = {
   saveCookies: "http:save-cookies",
   httpSend: "http:send",
   agentModels: "agent:models",
+  installedMcpServers: "mcp:installed",
+  removeMcpServer: "mcp:remove",
   listClaudeProfiles: "claude-profiles:list",
   saveClaudeProfiles: "claude-profiles:save",
   listWorktreeChats: "worktree-chats:list",

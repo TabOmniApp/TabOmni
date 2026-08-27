@@ -1,30 +1,11 @@
 import { create } from "zustand"
 
-import {
-  MCP_SERVER_NAMES,
-  MCP_SETTING_KEYS,
-  type McpServerName,
-} from "@shared/api"
+import { MCP_DISABLED_TOOLS_KEY } from "@shared/api"
 import { recall, remember } from "./tab-memory"
 import { getSetting, setSetting } from "./workspace"
 
 /** Where the studio's own preferences live, beside the strip's arrangement. */
 const SETTINGS_KEY = "workbench.settings"
-
-/**
- * Under the keys a chat view that no longer exists wrote them to — the choice
- * somebody already made is theirs, and renaming a key would quietly hand it
- * back to the default.
- *
- * `showThinking` was gone for a while: a turn was read for its messages and its
- * tool calls and nothing else, so there were no reasoning blocks to draw and a
- * switch over nothing is worse than no switch. The rows are back
- * (`main/claude-agent.ts` reads the `thinking` blocks), so the key is read
- * again — and it is read from where it was left, which is the point of never
- * having deleted it.
- */
-const SHOW_TOOL_CALLS_KEY = "claudeGui.showToolCalls"
-const SHOW_THINKING_KEY = "claudeGui.showThinking"
 
 /**
  * Where the workbench's one tab strip sits.
@@ -69,46 +50,56 @@ function isStored(value: unknown): value is Stored {
   )
 }
 
-/** Every MCP server's switch, by name. */
-export type McpEnabled = Record<McpServerName, boolean>
-
 type SettingsState = Stored & {
   /** Read from disk yet. The dialog waits on it rather than showing the
    * default for a frame and correcting itself. */
   loaded: boolean
 
-  /** Whether a turn's tool calls are drawn in a project's chat
-   * (`ChatMessage`). */
-  showToolCalls: boolean
-  /** Whether the model's reasoning is drawn beside them. Its own switch rather
-   * than part of `showToolCalls`: what a turn *did* and what it was thinking
-   * are two different things to want on screen. */
-  showThinking: boolean
-
   /**
-   * Which of the workspace's panels an agent session may reach as MCP tools.
+   * MCP tools a chat here may not call, as the wire names a turn's tool call
+   * carries — see `MCP_DISABLED_TOOLS_KEY`.
    *
-   * Off unless somebody turned it on, and stored under the keys in
-   * `@shared/api` because the main process reads the same three — it writes
-   * the config a starting session is pointed at, and answers every tool call
-   * against them.
+   * Not in `Stored` with the rest, and not in `workbench.settings`: the main
+   * process reads this one too, on every message, to hand the CLI its
+   * `disallowedTools`. So it lives under its own settings key, which is a thing
+   * both sides can name, rather than inside a bag only the renderer parses.
+   *
+   * Empty by default, and empty is a decision the other way from the switches
+   * that used to be here: what the user's own `claude` offers is theirs, and
+   * this app hiding some of it until somebody found a dialog would be this app
+   * deciding.
    */
-  mcp: McpEnabled
+  mcpDisabledTools: string[]
 
   setTabsPlacement: (placement: TabsPlacement) => void
   setGroupTabs: (group: boolean) => void
   setDiffSideBySide: (sideBySide: boolean) => void
   setDiffWhitespace: (show: boolean) => void
-  setMcpEnabled: (server: McpServerName, enabled: boolean) => void
-  setShowToolCalls: (show: boolean) => void
-  setShowThinking: (show: boolean) => void
+  /** Replaces the whole list — the pure `with*` helpers in
+   * `lib/worktree-chat/mcp-servers.ts` work out what it should be. */
+  setMcpDisabledTools: (tools: string[]) => void
   /** Reads the stored preferences. Called once, at launch. */
   restore: () => Promise<void>
 }
 
-/** A stored `"true"`/`"false"`, or the default when nothing is stored. */
-function storedFlag(raw: string | null, fallback: boolean): boolean {
-  return raw === null ? fallback : raw === "true"
+/**
+ * The switched-off tools as stored, or none.
+ *
+ * Anything that is not an array of strings reads as none rather than throwing —
+ * the same call main makes on every message, and for the same reason: a setting
+ * this app cannot parse must not take the user's MCP tools away, nor leave the
+ * dialog unable to open.
+ */
+function storedTools(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : []
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -118,12 +109,6 @@ function storedFlag(raw: string | null, fallback: boolean): boolean {
  * the pane on screen, the folders, the strip's order. What is here is what the
  * user asked the studio to be like, which outlives any of that and is the list
  * the dialog is built from.
- *
- * The chat view's two switches are here rather than in a hook of their own for
- * the reason they were moved out of one: the same two settings are now shown in
- * two places at once — the chat view's header and the dialog — and a `useState`
- * per component read the file once at mount, so one of the two would have gone
- * on drawing the value it started with.
  */
 export const useSettings = create<SettingsState>((set, get) => {
   /** Strict Mode mounts effects twice, so restoring has to be idempotent. */
@@ -154,12 +139,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     // toolbar is one click away for a pane too narrow to hold them.
     diffSideBySide: true,
     diffWhitespace: false,
-    showToolCalls: true,
-    // On, like the tool calls: the rows are folded into one line by default
-    // (`lib/worktree-chat/activity.ts`), so what this costs an unopened fold is
-    // a word in its summary rather than a screen of reasoning.
-    showThinking: true,
-    mcp: { database: false, api: false, notes: false },
+    mcpDisabledTools: [],
     loaded: false,
 
     setTabsPlacement(tabsPlacement) {
@@ -182,47 +162,25 @@ export const useSettings = create<SettingsState>((set, get) => {
       save()
     },
 
-    setMcpEnabled(server, enabled) {
-      set((state) => ({ mcp: { ...state.mcp, [server]: enabled } }))
-      void setSetting(MCP_SETTING_KEYS[server], String(enabled))
-    },
-
-    setShowToolCalls(showToolCalls) {
-      set({ showToolCalls })
-      void setSetting(SHOW_TOOL_CALLS_KEY, String(showToolCalls))
-    },
-
-    setShowThinking(showThinking) {
-      set({ showThinking })
-      void setSetting(SHOW_THINKING_KEY, String(showThinking))
+    setMcpDisabledTools(mcpDisabledTools) {
+      set({ mcpDisabledTools })
+      // Its own key rather than `save()`'s bag, because main reads it — and
+      // written as it stands rather than merged, since the caller was handed the
+      // whole list to work from.
+      void setSetting(MCP_DISABLED_TOOLS_KEY, JSON.stringify(mcpDisabledTools))
     },
 
     restore() {
       restorePromise ??= (async () => {
-        const [stored, toolCalls, thinking, ...servers] = await Promise.all([
+        const [stored, disabled] = await Promise.all([
           recall(SETTINGS_KEY, isStored),
-          getSetting(SHOW_TOOL_CALLS_KEY).catch(() => null),
-          getSetting(SHOW_THINKING_KEY).catch(() => null),
-          ...MCP_SERVER_NAMES.map((server) =>
-            getSetting(MCP_SETTING_KEYS[server]).catch(() => null)
-          ),
+          getSetting(MCP_DISABLED_TOOLS_KEY).catch(() => null),
         ])
-
         set({
           // Nothing stored is the default, not a failure: the spread of a null
           // leaves the initial state as it stands.
           ...stored,
-          showToolCalls: storedFlag(toolCalls, true),
-          showThinking: storedFlag(thinking, true),
-          // Off unless it says otherwise — the one default here that is a
-          // decision rather than an obvious value: what an agent can reach is
-          // something somebody has to have said yes to.
-          mcp: Object.fromEntries(
-            MCP_SERVER_NAMES.map((server, index) => [
-              server,
-              storedFlag(servers[index] ?? null, false),
-            ])
-          ) as McpEnabled,
+          mcpDisabledTools: storedTools(disabled),
           loaded: true,
         })
       })()

@@ -10,7 +10,6 @@ import { PanelBottom, PanelLeft } from "lucide-react"
 
 import { useDatabases } from "@/lib/db/databases-store"
 import { useFiles } from "@/lib/files/store"
-import { useApi } from "@/lib/http/store"
 import { watchExpandedDirectories } from "@/lib/files/watch"
 import { useNotes } from "@/lib/note/store"
 import { reconcileScope, useActiveTabId, useHasOpenTabs } from "@/lib/panels"
@@ -216,25 +215,6 @@ function Workbench() {
         if (command === "toggle-sidebar") toggleSidebar()
       }),
     [toggleSidebar]
-  )
-
-  // A note written by an agent through the MCP server lands in `notes.json`
-  // underneath the panel, which is holding the listing it read at launch. The
-  // main process says so; this is the panel finding out.
-  useEffect(
-    () =>
-      window.desktop.onNotesChanged(() => void useNotes.getState().refresh()),
-    []
-  )
-
-  // The same for a request an agent wrote or changed — and it matters more
-  // there, because the API panel saves the whole collection at once. `reread`
-  // rather than `refresh`: a panel that has never read it has nothing stale to
-  // put back.
-  useEffect(
-    () =>
-      window.desktop.onRequestsChanged(() => void useApi.getState().reread()),
-    []
   )
 
   // The tree follows the disk for as long as the workbench is up — here rather

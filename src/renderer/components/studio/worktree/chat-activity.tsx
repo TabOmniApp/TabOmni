@@ -64,7 +64,18 @@ export function ChatActivity({
         )}
       </button>
 
-      {open && of.lines.map((line) => <ChatMessage key={line.id} of={line} />)}
+      {/* A rule dropping from the chevron, with the turn's rows pushed off it.
+          `ml-2.5` puts it under the glyph's centre (the button's `px-1` plus
+          half of `size-3`), so an open fold reads as the working *belonging to*
+          that line — which is the only thing saying where a long turn's rows
+          end and the next block begins. */}
+      {open && (
+        <div className="ml-2.5 space-y-3 border-l pl-2.5">
+          {of.lines.map((line) => (
+            <ChatMessage key={line.id} of={line} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

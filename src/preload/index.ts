@@ -50,9 +50,6 @@ const api: DesktopApi = {
 
   onMenuCommand: (listener) =>
     subscribe<MenuCommand>(IPC.menuCommand, listener),
-  onNotesChanged: (listener) => subscribe<null>(IPC.notesChanged, listener),
-  onRequestsChanged: (listener) =>
-    subscribe<null>(IPC.requestsChanged, listener),
 
   dockerStatus: () => ipcRenderer.invoke(IPC.dockerStatus),
 
@@ -127,6 +124,9 @@ const api: DesktopApi = {
   httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
 
   agentModels: () => ipcRenderer.invoke(IPC.agentModels),
+  installedMcpServers: (folderId) =>
+    ipcRenderer.invoke(IPC.installedMcpServers, folderId),
+  removeMcpServer: (input) => ipcRenderer.invoke(IPC.removeMcpServer, input),
   listClaudeProfiles: () => ipcRenderer.invoke(IPC.listClaudeProfiles),
   saveClaudeProfiles: (profiles) =>
     ipcRenderer.invoke(IPC.saveClaudeProfiles, profiles),

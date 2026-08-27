@@ -34,9 +34,9 @@ import { environment, locate } from "./shell-env"
  *    the previous result and subtracts.
  * 3. Model, effort and permission can now change *without* a new process —
  *    `setModel`, `applyFlagSettings` and `permits`, which is consulted per call.
- *    What still cannot is `cwd`, `CLAUDE_CONFIG_DIR` and the MCP config file:
- *    those are the CLI's own argument list, and `worktree-chat.ts` opens a new
- *    session when one of them moves.
+ *    What still cannot is `cwd` and `CLAUDE_CONFIG_DIR`: those are the CLI's own
+ *    argument list, and `worktree-chat.ts` opens a new session when one of them
+ *    moves.
  *
  * Apart from `worktree-chat.ts`, its one caller, because the part worth having
  * on its own is the **driving**: what the SDK hands back moves between
@@ -115,8 +115,18 @@ export type AgentSessionOptions = {
    * worked.
    */
   permits: (toolName: string) => boolean
-  /** Refused outright, before the model is offered it. Constant across every
-   * mode, for the reason `permits` exists. */
+  /**
+   * MCP tools the workspace has switched off, as wire names or server prefixes
+   * — `MCP_DISABLED_TOOLS_KEY`.
+   *
+   * The one thing this app still says about the CLI's tool list, and it goes
+   * over as `disallowedTools` rather than being refused in-process like a mode's
+   * policy: refusing per call would leave the tool in the model's prompt, paid
+   * for and offered, only to fail when used. This takes it out. It is part of
+   * the cached prefix, which is why it is a **workspace** setting that changes
+   * rarely rather than anything per mode or per message — see `permits` and
+   * `signatureOf` in `worktree-chat.ts`.
+   */
   disallowedTools?: string[]
   /**
    * How much the turn may do without being asked.
@@ -126,10 +136,6 @@ export type AgentSessionOptions = {
    * CLI's modes are paired with one and what each is for.
    */
   permissionMode?: string
-  /** The MCP config **file** this app wrote, as a path rather than the servers
-   * themselves — see `mcpArgs`. No `--strict-mcp-config` goes with it, so the
-   * CLI merges it with whatever it would already have found on its own. */
-  mcpConfig?: string | null
   /**
    * `CLAUDE_CONFIG_DIR`, for a turn running under one of the workspace's
    * `ClaudeProfile`s rather than the default `~/.claude`.
@@ -427,14 +433,17 @@ export async function startAgentSession(
       ...(session.effort
         ? { effort: session.effort as Options["effort"] }
         : {}),
-      // No `allowedTools`. Every call falls through to `canUseTool`, which is
-      // both what lets one cached prefix serve all five modes and what makes
-      // the callback reachable at all — see `permits`.
+      // No `allowedTools`: every call falls through to `canUseTool`, which is
+      // both what lets one cached prefix serve all five modes and what makes the
+      // callback reachable at all — see `permits`. `disallowedTools` is the one
+      // exception and is not a mode's business either; it is the workspace's
+      // switched-off MCP tools, the same on every turn until somebody changes
+      // the setting. There is no `--mcp-config`: this app configures no MCP
+      // server of its own, so a turn gets what the CLI finds for itself here.
       ...(session.disallowedTools?.length
         ? { disallowedTools: session.disallowedTools }
         : {}),
       ...permissionArgs(session.permissionMode),
-      ...mcpArgs(session.mcpConfig),
       ...(session.addDirs?.length
         ? { additionalDirectories: session.addDirs }
         : {}),
@@ -744,30 +753,6 @@ function permissionArgs(mode: string | undefined): Options {
       ? { allowDangerouslySkipPermissions: true }
       : {}),
   }
-}
-
-/**
- * The MCP servers, named by the **file** they are written in.
- *
- * Deliberately not the SDK's own `mcpServers` option, which looks like the
- * obvious way to do this: it serialises the config onto the CLI's command line
- * (`--mcp-config <json>`), and these server URLs carry this run's secret. A
- * command line is readable by every process on the machine; the file
- * `mcp.ts` writes is `0600` in `~/.tabomni`. So the path goes through
- * `extraArgs`, which is the same flag with the same file the spawned CLI was
- * given before.
- *
- * No `--strict-mcp-config` alongside it: that flag is what would make this the
- * *only* config a turn sees, and the point now is the opposite — the CLI
- * merges this file with whatever it would already have found running plain
- * `claude` in this directory (`~/.claude.json`, a repository's own
- * `.mcp.json`, enabled plugins). A turn started with no file at all — every
- * server switched off in Settings › MCP — gets no `--mcp-config` flag either,
- * which is exactly what running the bare CLI does.
- */
-function mcpArgs(config: string | null | undefined): Options {
-  if (!config) return {}
-  return { extraArgs: { "mcp-config": config } }
 }
 
 function failure(error: unknown, stderr: string): string {

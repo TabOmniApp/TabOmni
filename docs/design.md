@@ -302,10 +302,9 @@ Four things fall out of that, and each cost something to get right:
   control requests (`setModel`, `applyFlagSettings`) instead of being an argument
   list a new process is spawned with, and the permission never was the CLI's —
   `permits` is consulted per tool call, so putting the picker on `Plan` takes
-  effect on the next call. What still cannot move is the cwd, the
-  `CLAUDE_CONFIG_DIR` profile and the MCP config file: those _are_ the argument
-  list, so a change to one closes the session and the next message opens another
-  (`signatureOf`).
+  effect on the next call. What still cannot move is the cwd and the
+  `CLAUDE_CONFIG_DIR` profile: those _are_ the argument list, so a change to one
+  closes the session and the next message opens another (`signatureOf`).
 
 `Stop` became an **interrupt** rather than a kill. Killing the process was only
 ever how a turn was stopped when a turn _was_ the process, and it cost the chat
@@ -323,10 +322,11 @@ window only has to cover reading an answer and typing a reply.
 
 **A turn's working is folded, and its answer is not.** A finished turn is read
 for what it concluded; the seven tool calls under it are read when something
-looks wrong, which is a different visit five minutes later. `showToolCalls` used
-to answer that by hiding the rows outright, which serves neither: the switch has
-to be found and flipped between the two readings, and nothing on screen says
-there is anything behind it. So the pane draws one line — `7 tool calls, 13
+looks wrong, which is a different visit five minutes later. A `showToolCalls`
+setting used to answer that by hiding the rows outright, which serves neither:
+the switch has to be found and flipped between the two readings, and nothing on
+screen says there is anything behind it — it is why that setting is gone. So the
+pane draws one line — `7 tool calls, 13
 messages, 1 subagent`, with a mark per _kind_ of tool that ran — and the whole of
 it opens on a click.
 
@@ -411,9 +411,9 @@ is in `Changes`** — because those two answers drift apart the moment anything
 else touches the file, and a popover captioned "diff" showing the first while
 somebody read it as the second would be worse than no popover at all.
 
-**Thinking is back**, as one folded line each (`showThinking`, under the key it
-was always written to). It was dropped when a turn was read for its messages and
-its tool calls and nothing else; `read` takes the `thinking` blocks now. Only a
+**Thinking is back**, as one folded line each, always drawn. It was dropped when
+a turn was read for its messages and its tool calls and nothing else; `read`
+takes the `thinking` blocks now. Only a
 turn that was actually thinking has any, which is the effort picked on the
 composer's toolbar — so a chat on Haiku at `low` draws none rather than drawing
 empty ones.
@@ -543,12 +543,12 @@ from the option names:
   login rather than a second copy of the CLI with an authentication story of its
   own. A path that does not end in a JS extension is spawned directly, so both
   the npm and the native installs work.
-- **The MCP servers go over as a file, not as the SDK's `mcpServers` option.**
-  That option looks like the obvious way to do it and it serialises the config
-  onto the CLI's command line — and these URLs carry the run's secret, which a
-  command line publishes to every process on the machine. The path goes through
-  `extraArgs` instead, which is the same flag pointing at the same `0600` file
-  `mcp.ts` already wrote.
+- **No MCP config goes over at all.** There used to be one — this app served its
+  own panels as three servers and pointed a turn at the file naming them, through
+  `extraArgs` rather than the SDK's `mcpServers` option, because that option
+  serialises the config onto a command line every process on the machine can
+  read. Both the servers and the flag are gone; a turn now gets exactly the
+  servers the CLI finds for itself in that directory.
 - **`bypassPermissions` needs a second opt-in.** The SDK refuses the mode unless
   `allowDangerouslySkipPermissions` is set beside it, so `Full access` passes
   both.
@@ -666,9 +666,10 @@ repository against a 43k prompt: a switch cost **42,345 tokens written and none
 read**, where the turn before it wrote 103 and read the lot — eighteen times the
 price for the same question, and the user had done nothing but move a picker.
 
-So what the CLI is handed is byte-identical on every turn of every mode: one
-fixed `disallowedTools` (the workspace's two `delete_*`), one `permissionMode`
-(`manual`), one system prompt. The mode is applied in this process instead, by
+So what the CLI is handed is byte-identical on every turn of every mode: no
+`allowedTools` and no `disallowedTools` at all, one `permissionMode` (`manual`),
+one system prompt. (There was a fixed `disallowedTools` — the workspace's two
+`delete_*` — and it went with the servers those tools were on.) The mode is applied in this process instead, by
 `permits` on the turn, which `deciding` in `main/claude-agent.ts` consults for
 every call. `permissionMode` was measured too and is free to vary — switching it
 between `acceptEdits`, `manual` and `bypassPermissions` cost ~85 tokens — but it
@@ -798,28 +799,21 @@ chain reads like a path in this project and is not one (`relativeTo` in
 `lib/files/paths.ts`, `test/attach-paths.ts`). **Mention a file…** types the `@`,
 which is all it has to do — the menu that follows is the one a typed `@` opens.
 
-The workspace's MCP servers are handed over, which is the thing an agent in an
-editor cannot have: the databases, the saved requests and the notes, in the same
-conversation as the code: the config, the three `tabomni-*` servers pre-approved
-by name, `--strict-mcp-config` so the user's own `claude` servers are not pulled
-into a conversation this app is hosting, and two `delete_*` tools refused.
+**The MCP servers a turn gets are the user's own**, and this app hands over none
+of its own. It used to: the databases, the saved requests and the notes went over
+as three `tabomni-*` servers pre-approved by name, with two `delete_*` tools
+refused, and that whole feature has been removed — see MCP below for the argument
+and for what replaced the section in Settings. What is left needs no flag at all.
+The CLI reads `~/.claude.json`, the repository's own `.mcp.json`, the enabled
+plugins and the account's claude.ai connectors exactly as it would running plain
+`claude` in that directory, and a chat here is handed all of it.
 
-Passing `--mcp-config` alone was not enough and looked like it was. That flag
-says the tools exist; `--allowed-tools` says they may be used without asking,
-and a print turn that meets a permission prompt has nobody to answer it. So the
-chat was being handed the workspace and quietly could not call it. A server is
-named rather than its tools, so one added to it later is covered, and
-`ToolSearch` is on the list because a CLI configured to defer tools reaches an
-MCP tool through it, and being asked to approve a search for a tool is another
-prompt nobody can answer.
-
-The two refusals are there for a reason of their own. A project is a
-repository; a saved request is not in any repository. Deleting one — and
-`delete_folder` cascades — is a change to the workspace that no commit contains,
-that no `git checkout`
-undoes, and that there is no trash to fetch back from. `Bash` in the same turn
-could do worse to the files in the project, and that is precisely the
-distinction: those files are a branch, and the workspace's records are not.
+`ToolSearch` is on `ALLOWED_TOOLS` because of them: a CLI configured to defer
+tools reaches an MCP tool through it, and being asked to approve a search for a
+tool is a prompt nobody can answer. The tools themselves are on no mode's list —
+this app configures no server and so has no name to name — so a call to one is
+decided by the mode, which for four of the five means refused with a message
+rather than left to stall.
 
 **A chat's id is the CLI's session id, and that outlives the app's run.** So
 whether the next turn is `--session-id` or `--resume` is written on the chat's
@@ -838,9 +832,11 @@ because a chat can hold lines from a turn that died before anything was opened.
 The retry does not write the prompt down twice, which is why running a turn is a
 method of its own.
 
-An `--append-system-prompt` says where the turn is. Short, because the CLI can
-see the working directory for itself. What it cannot see is that the `tabomni-*`
-tools are the whole workspace's rather than this project's.
+An `--append-system-prompt` says where the turn is, and nothing else. Short,
+because the CLI can see the working directory for itself. It was two sentences
+while there were `tabomni-*` tools to explain — a tool list says what a tool does,
+not that the databases behind it belong to the workspace rather than to this
+directory — and it is one now that there are none.
 
 **Several at once.** `WorktreeChats` keys everything by chat id — a turn per
 chat, lines per chat — because a question about one project while another is
@@ -1418,17 +1414,22 @@ There are four sections: **Appearance** (the theme, which the `d` key still
 toggles — the header's moon button was removed when this row took its place, and
 with it the last clickable thing in the title bar), **Tabs** (the placement
 above, and whether tabs are gathered under the folder each belongs to — see
-Grouped tabs), **Chat** (whether a turn's tool calls and its thinking are drawn)
-and **MCP** (what an agent turn may reach, below). Both switches were already
-settings, written by a chat view's own header under `claudeGui.showToolCalls`
-and `claudeGui.showThinking`, and both keys are unchanged, because a rename
-would quietly hand somebody's choice back to the default. `showThinking` spent a
-while written and unread — a turn was taken for its messages and its tool calls
-and nothing else, so there were no reasoning blocks to draw and a switch over
-nothing is worse than no switch — and reading it again from where it was left is
-the whole point of never having deleted it. See The chat view below for what the
-two now decide, which is what is _inside_ the fold rather than how much of the
-pane a turn takes.
+Grouped tabs), **Claude** (the named `CLAUDE_CONFIG_DIR` profiles a chat's turns
+can run under) and **MCP** (which MCP servers the user's own `claude` has,
+below).
+
+**There was a Chat section, and it is gone**: two switches, `showToolCalls` and
+`showThinking`, inherited from a chat view's own header under
+`claudeGui.showToolCalls` and `claudeGui.showThinking`. **A chat now always
+draws both.** The switches were written against a pane that laid a turn's
+working out in full, where hiding it was the only way to read the answer; the
+fold answered that better (see The chat view below), and once everything the two
+governed was already one line deep behind a click, what they turned off was not
+noise but the record of what the agent actually did — the thing the pane is for
+when something looks wrong. A preference nobody has a reason to set is a
+preference to delete. The store's fields, its setters and the two settings keys
+are deleted with the rows; the keys already on somebody's disk are left where
+they are, unread, the way `workspace/mail.json` is.
 
 The dialog has no Save. A preference applies as it is picked, which makes the
 studio behind the dialog its own preview — picking Vertical tabs moves the strip
@@ -1436,158 +1437,185 @@ while the dialog is still open. `lib/settings.ts` is the store and writes each
 change to the workspace's own settings, so it survives a relaunch by the same
 route as the strip's arrangement.
 
-## MCP: the workspace as tools
+## MCP: what the user's own `claude` has
 
-An agent turn started here is already inside the workspace — so the databases
-it is pointed at, the requests saved against them and the notes written about
-them are things it should be able to read without being told how, and without a
-second copy of the credentials in some other config file. That is the same
-premise as the tab strip, one level down: `src/main/mcp.ts` serves the panels as
-**three MCP servers**, one per panel, and a turn is started pointed at whichever
-of them are switched on.
+**There were three MCP servers here, and they are gone.** `src/main/mcp.ts`
+served the workspace's panels to a turn as `tabomni-database`, `tabomni-api` and
+`tabomni-notes` — streamable HTTP on loopback, an OS-picked port, a per-run
+secret in the path, one switch per server in Settings › MCP under
+`mcp.database` / `mcp.api` / `mcp.notes`, a `0600` config file written at the
+moment a turn started and pointed at with `--mcp-config`, and every tool call
+rechecked against the setting so switching a server off stopped a turn already
+in flight from using it. Between them they offered eleven tools: the databases
+and their tables and a capped `query`; the saved requests, the folders they
+inherit from, and `send_request` resolving `{{variables}}` through
+`@shared/http-request` exactly as the panel would; the notes as markdown, and a
+`create_note` that never overwrote. `test/mcp.ts` spoke the protocol over a real
+socket, including every way in that should be refused — a wrong secret, a longer
+path, a `GET`, an `Origin`, half a JSON body.
 
-**Off unless somebody said otherwise**, and one switch per panel rather than one
-for the lot: letting an agent read a schema is not the same as agreeing that it
-may send the saved requests. The switches are in **Settings › MCP**, written to
-the workspace's own settings under `mcp.database` / `mcp.api` / `mcp.notes` —
-keys in `@shared/api` because both sides read them, the dialog to draw the
-switch and the main process to answer with.
+All of it is deleted: the module, the tests, the three setting keys, the config
+file, the `--mcp-config` flag, the `tabomni-*` entries on every tool list, the
+two `delete_*` refusals, the sentence in the system prompt naming the tools, and
+the `notes:changed` / `http:changed` channels that existed only so a panel could
+notice what an agent had written underneath it (with `reread` on the API store,
+which had no other caller). `signatureOf` is down to two fields, because the MCP
+config was the third thing a session could not be changed out from under.
 
-What each server offers — three tools apiece, except the API panel, which has
-two more that write:
+**The argument for removing it.** The premise was good — a turn started inside
+the workspace should be able to read the workspace — and it is not what the
+feature turned into. Configuring MCP is something the user's own `claude` already
+owns, thoroughly: `claude mcp add`, a repository's `.mcp.json`, plugins, claude.ai
+connectors, and a real Postgres or HTTP server for any of it that is worth
+having. This app was a second place to configure MCP, with its own switches, its
+own config file, its own security surface (a loopback port and a secret to keep
+out of a command line) and its own answer to "why can the agent not see my
+database" — and the switches were off by default, which they had to be, so the
+common case was a feature that did nothing until somebody found it. Against that,
+the part it was uniquely good at is narrow: an agent reading a table the Database
+panel is already pointed at. What it cost was a whole subsystem in the middle of
+this app's only `claude`.
 
-- **database** — `list_databases`, `list_tables`, `query`. Introspection beyond
-  the table list is a query against `information_schema`, which is a thing models
-  are good at and would otherwise be a per-engine adapter's worth of code
-  duplicated out of the renderer. Rows are capped at 200: a tool result is read
-  by a model with a context window.
-- **api** — `list_requests`, `get_request`, `send_request`, plus
-  `create_request`, `update_request`, `delete_request` and the same three for
-  the folders they are filed under. A request goes out exactly as the panel
-  would send it, which is why the resolution moved to `@shared/http-request`: the
-  `{{variables}}` of the active environment, the ancestor folders' headers and
-  params, one implementation for both readers. What it does _not_ carry is the
-  panel's cookie jar or a request's post-response script — both live in the
-  renderer, one of them in a worker sandbox.
+**What it costs, said plainly.** A turn can no longer read the workspace's
+databases, saved requests or notes at all. Somebody who wants that installs an
+MCP server for it the way they would for any other tool — and it then works in
+the dock's Terminal and in a chat here alike, which the app's own servers never
+did.
 
-  The writing tools save the collection an agent has just been reading:
-  somebody who asked for an endpoint to be tried generally wants it kept, and
-  dictating a URL, six headers and a JSON body back for the user to retype is
-  the opposite of the premise. A request is written **as typed** —
-  `{{baseUrl}}/users` is stored with its variables intact, since substitution
-  belongs to the moment it is sent — and a method is refused unless it is one of
-  `METHODS`, which moved to `@shared/http-request` for this: the panel's picker
-  can only draw those, so a request saved as `PURGE` would be a row the user can
-  neither read nor correct. `update_request` touches only the fields it was
-  given, `headers` replaces the list rather than merging into it (a merge would
-  need a rule for a header sent twice, which the panel allows), and a `folder` of
-  `null` moves a request to the top level. `postResponseScript` is not writable
-  at all: it runs in the renderer's sandbox, and a script is not what "save this
-  request" means. Nothing is sent — `send_request` is still the only tool that
-  makes a request, which is what keeps "write it down" and "run it" two separate
-  agreements. It is the same switch, though: `mcp.api` on now means an agent may
-  write as well as read, which is one more reason it starts off. The two
-  deletions are the exception, refused to a turn that has everything else:
-  the panel has no trash, `delete_folder` takes the requests inside with it,
-  and a print-mode turn has nobody to ask. A request is deleted by hand in the
-  panel.
+**What the section is now: a listing.** Settings › MCP shows the servers the
+user's own `claude` has, the way `/mcp` in the CLI does — name, scope, transport,
+the URL or command behind it, whether it connected, the error if it did not, and
+its tools behind a disclosure. Read-only on purpose: the whole point of removing
+the servers was to stop being a second place to configure this, and a listing
+that could also edit would be exactly that again. Installing is `claude mcp add`;
+signing a connector in is claude.ai.
 
-  **The folders are writable too**, by `create_folder`, `update_folder` and
-  `delete_folder`, because a folder is where the collection's `Authorization`
-  and its `?trace=1` live — an agent that can save requests but not the folder
-  they inherit from would copy that header into every one of them. A reparent is
-  **refused** rather than ignored when it would make a folder its own
-  descendant: the sidebar's drag guard can be a silent no-op because the folder
-  visibly stays where it was, and a tool call has nothing to look at. Deleting
-  cascades the way the panel's own delete does — the folder, the folders under
-  it and their requests — from the same `descendantFolderIds`, which moved to
-  `@shared/tree` for this: two implementations of a cascade is two answers to
-  "what did I just delete". The counts come back so the agent can say. And
-  `list_requests` lists the folders beside the requests, since an empty folder
-  is invisible in the requests alone and naming a parent means having seen it.
+`main/mcp-servers.ts` asks for it, and it is `agent-models.ts` with a different
+control request: `mcpServerStatus()` over the SDK's own stdin channel, a `claude`
+process and no tokens, a prompt that never yields so the process comes up,
+answers and is closed without a turn. Three things about it are decisions rather
+than plumbing:
 
-  What is written is announced to the renderer (`http:changed` → `reread` on the
-  API store, which also closes a tab whose request or folder has gone — the
-  strip draws nothing for an id that resolves to neither, so leaving it there is
-  a tab-shaped hole), and that is not only about a panel looking out of date: the
-  panel saves the **whole collection** at once, so a window still holding the
-  list it read at launch would put it back over the agent's request the next
-  time anything in it was edited. A panel that has never read the collection
-  does nothing — it has nothing stale to write back, and refreshing would
-  restore its tabs into the shared strip before anybody opened it. What is left
-  is a genuinely concurrent write: an edit already inside the panel's save
-  debounce when the agent writes still wins. The alternative was per-record
-  files, which is a change to how the panel saves rather than to this.
+- **Asked, not parsed.** This app could read `~/.claude.json` and a
+  repository's `.mcp.json` itself and would still not know the interesting half —
+  whether a server connected, what it failed with, which tools it turned out to
+  have. Only the process that connected knows that.
+- **Asked in a project's directory**, because an MCP config is per directory: the
+  listing is true of the active project and says which one it is. With no project
+  open it is the user's home directory, which is the user-scope half of the answer
+  and nothing repository-specific.
+- **Not cached**, unlike the model list, which main holds for the whole run. The
+  model list changes when somebody installs a different CLI; this one changes the
+  moment they run `claude mcp add`, which is generally why they are looking at it.
+  What is shared is only an ask already in flight for the same directory — Strict
+  Mode mounts an effect twice, and Refresh is a button.
 
-- **notes** — `list_notes`, `read_note`, `create_note`. A note is read as
-  markdown (`noteMarkdown` in `main/note-blocks.ts`) rather than as BlockNote's
-  JSON, and a written one is stored _as_ markdown: converting markdown into
-  blocks needs the parser only the renderer has, and the store already hands a
-  markdown body over as it found it — the editor converts on first open, the same
-  path a note written by an older build takes. It only ever creates, never
-  overwrites, because a note may hold drawings and pictures that markdown cannot
-  carry. A new note is announced to the renderer (`notes:changed`), which is
-  otherwise holding the listing it read at launch.
+Two shapes of the CLI's answer are handled rather than trusted, and
+`test/mcp-servers.ts` is about exactly them. A `status` word this app has no row
+style for becomes `unknown` rather than a row that draws nothing. And a listing
+asked the instant the process came up can legitimately be all `pending`, since
+MCP startup is not blocking for the CLI — so it is asked again until nothing is
+pending or a budget runs out.
 
-**Streamable HTTP on loopback**, bound the way the note preview binds its own:
-127.0.0.1, a port the OS picks, a secret this run generated in the first path
-segment, and a request carrying an `Origin` refused outright — that last one is
-the DNS-rebinding guard the spec asks a local server for. The alternative was a
-stdio server, which would be a script spawned once per turn, each needing its
-own way back to this app's state; one HTTP server in the process that already
-holds the state is less of everything. The responses are plain JSON rather than
-an event stream, which the spec allows for a server that never pushes.
+**That budget was measured, and the first guess was wrong.** Two seconds looked
+generous and was not: against this install a local stdio server settles by
+~1.4s, a plugin's HTTP server by ~2.4s, and an account's **claude.ai connectors**
+take **~4.4s**, each being a proxy that has to reach out. So a ClickUp and a
+Figma sat drawn as _Connecting_ for ever, while `/mcp` in a terminal — a session
+up for minutes — showed both connected with their tools. The budget is eight
+seconds now, which puts a full listing at ~6.6s here and gets the same answer the
+CLI gives. It is still a ceiling rather than "until they all settle": a server
+that never connects must not hold the listing, so what is past it stays
+_Connecting_ and **Refresh** asks again.
 
-A starting turn is handed `--mcp-config ~/.tabomni/mcp.json`, written at that
-moment with the servers that are on and mode `0600` — a file rather than the JSON
-inline, because the URL carries this run's secret and a command line is readable
-by every process on the machine.
+Trouble sorts to the top (`orderedServers`): a failed server eight rows down a
+list of twelve is a failure somebody has to go looking for. A remote server's
+headers are deliberately not drawn — that is where its token is.
 
-**Every call is checked against the setting**, not only the ones that were on
-when the turn started. Turning a server off has to mean the agent cannot use
-it, and a turn in flight is not something to have to wait out to be listened to —
-so a switched-off server answers `tools/list` with an empty list and a
-`tools/call` with an error naming the dialog. The other direction is not
-symmetric: switching one _on_ only reaches turns started afterwards, since the
-config was written when the turn began. That is what the line under the switches
-says.
+**Two things here are not a listing**, and the line between them is the point.
 
-`test/mcp.ts` speaks the protocol over a real socket — the handshake, the tool
-lists, a request resolved through its folders, a request written, changed and
-deleted, a folder made, refused a move into its own subtree and then deleted
-with what it held, a note read as markdown, and every way in that should be
-refused: a wrong secret, a longer path, a `GET`, an
-`Origin`, half a JSON body. Calling into the class would have proved none of
-those, and each one is a place where a server that "works" is one the CLI
-silently declines to use.
+**The switches** — one per server, one per tool behind the fold — are _this
+app's_ refusal and not a change to anything of the user's. The list of what is
+off lives in this app's own settings (`MCP_DISABLED_TOOLS_KEY`, a JSON array
+under one key because a connector has fifty tools and the list is read whole
+anyway), and it reaches a turn as the CLI's `disallowedTools`. So a server
+switched off here is still installed, and their terminal still has every tool of
+it.
 
-### The user's own servers
+Three decisions inside that:
 
-There was a fence here: `--strict-mcp-config` meant a turn saw the file this
-app wrote and nothing else — not the servers in `~/.claude.json`, not a
-`.mcp.json` in the repository — and a server had to be copied into that file by
-name, one switch each under **Your own servers** in Settings › MCP, before a
-chat could reach it. `main/user-mcp.ts` did the reading, `mcp.userServers` held
-the names, and `withUserServers` in `main/worktree-chat.ts` decided what a
-switched-on server was to each permission mode.
+- **`disallowedTools`, not `permits`.** A mode's policy is applied in this
+  process, per call, precisely so it stays out of the cached prefix. This one
+  goes the other way on purpose: refusing per call would leave the tool in the
+  model's prompt — offered, paid for, and failing only when used — and the reason
+  to switch a tool off is usually that you do not want it in the prompt.
+  Verified against the CLI's own `init` frame: two tools named on
+  `--disallowed-tools` are two tools **absent** from the list the model is given,
+  not two tools refused on use.
+- **So it is a _workspace_ setting, not per chat or per mode.** It is inside the
+  cached prefix, which is the one thing the five modes were carefully arranged
+  not to touch. A list that varied per message would rebuild a 43k prefix per
+  message; one that changes when somebody opens Settings costs that once. It is
+  in `signatureOf` for the same reason the cwd is — a running session was started
+  with it, so changing it closes that session and the next message opens another.
+- **The entries are _wire_ names.** The CLI normalises a server's configured name
+  into the one a tool call carries — everything outside `[a-zA-Z0-9_-]` becomes
+  `_` — so `claude.ai ClickUp` is `mcp__claude_ai_ClickUp__…` and
+  `plugin:context7:context7` is `mcp__plugin_context7_context7__…`, both real
+  examples off this machine. An entry built from the pretty name matches nothing
+  at all and fails **silently**, which is why `wireServer` exists and is tested.
+  A server-wide entry is the bare prefix, which the CLI reads as all of it — so
+  one entry covers a tool added to that server later, and switching a server back
+  on clears every entry beneath it rather than leaving three tools quietly
+  refused. That last case is `withServerOff`, and it is what the tests are for.
 
-**All of that is gone.** A turn is started with `--mcp-config` naming this
-app's own three servers and no `--strict-mcp-config` beside it, which is what
-that flag was for in the first place: without it, the CLI **merges** the given
-file with whatever it would already have found running plain `claude` in that
-directory — `~/.claude.json`, a repository's own `.mcp.json`, enabled plugins,
-a claude.ai connector, all of it. A server that works from the dock's Terminal
-now works from a chat here, with nothing to switch on for it and nothing to
-find in Settings — install and inspect it with `claude mcp add` / `claude mcp
-list` the way it always was.
+**Remove** is the opposite of a switch and says so before it runs: it is
+`claude mcp remove` against the user's own config, so the server goes from their
+terminal too, and there is no undo. It runs the CLI's own command rather than
+editing `~/.claude.json` or a repository's `.mcp.json` from here — that file is
+the CLI's, its shape moves between releases, and two writers of one JSON file is
+how it gets corrupted. `execFile` with an argument array, because a server's name
+comes out of a config file and a config file is not a thing to hand to a shell.
+The button is only drawn where the CLI's `--scope` could take the scope
+(`local` / `user` / `project`, `isRemovable`): a claude.ai connector lives on the
+account and a plugin's server inside the plugin, and neither is a config entry to
+remove. The confirmation stays open on failure so the CLI's own sentence — "no
+such server", "that scope is read-only" — lands somewhere the user is still
+looking, and the listing is **re-asked** afterwards rather than spliced, since a
+server can be configured in two scopes and what is left is the CLI's answer
+rather than this app's arithmetic.
 
-The cost is symmetric with the benefit it used to buy: the read-only modes
-(`Plan`, `Read only`) can no longer refuse an inherited server _by name_, since
-this app no longer copies one in and so has no name for it. They still refuse
-every tool they know about — the writers, the shell — and an unlisted tool from
-a server the CLI picked up on its own is refused too, now with an explicit
-message rather than a silent stall (see `deciding` below). That is a deliberate trade for parity with the plain
-CLI over the earlier, narrower guarantee.
+**A `needs-auth` row carries the way to fix it**, which is the one place this
+listing does more than list. No authorize URL comes back in the status, so the
+destination is derived rather than reported (`signIn`), and only where there is
+an honest one: a **claude.ai connector** — `claudeai` scope, `claudeai-proxy`
+transport — is signed in on the account rather than on this machine, so the row
+links straight to `claude.ai/settings/connectors`, a plain anchor that
+`main.ts`'s `will-navigate` hands to the user's browser. Any _other_ remote
+server needing auth is the CLI's own OAuth dance, with a callback listener and a
+browser round trip this app has no part in, so that row says `/mcp` in a `claude`
+session instead. The alternative was linking the server's own URL, which in a
+browser is a protocol error rather than a sign-in page.
+
+### The fence that used to be here
+
+Before the servers went, there was an argument about the user's own: a turn ran
+with `--strict-mcp-config`, so it saw the file this app wrote and nothing else,
+and a server of the user's had to be copied into it by name — one switch each
+under **Your own servers** in Settings › MCP — before a chat could reach it.
+`main/user-mcp.ts` did the reading and `withUserServers` in `main/worktree-chat.ts`
+decided what a switched-on server meant to each permission mode. That went first,
+and for the reason that eventually took the servers with it: an issue tracker
+already set up in the terminal was invisible from the chat editing the branch the
+issue is about, for no reason on screen.
+
+The cost of dropping the fence is still the cost today: the read-only modes
+(`Plan`, `Read only`) cannot refuse an inherited server _by name_, because this
+app does not configure one and so has no name for it. They still refuse every
+tool they know about — the writers, the shell — and a tool from a server the CLI
+found on its own is on no mode's list, so `deciding` refuses it with a message
+rather than leaving it to stall. That is a deliberate trade for parity with the
+plain CLI over a narrower guarantee.
 
 **One exception cuts across all five modes: `matchedAskRule`.** A connector an
 account has set to require approval — a claude.ai ClickUp, say — forces
@@ -1631,10 +1659,11 @@ stayed: they name the assistant _role_ in a turn, which a project's chat still
 produces.
 
 What replaces it is the chat in a project, which is where the argument landed.
-The panel existed because the MCP servers are about the _workspace_ and a chat
+The panel existed because the MCP servers were about the _workspace_ and a chat
 with one repository under it is a conversation about that repository — but a
-project's chat is handed the same three servers on the same terms, so the tools
-were never the thing only this panel could reach. What it had that no other surface has is a
+project's chat was handed the same three servers on the same terms, so the tools
+were never the thing only this panel could reach. (Those servers are gone
+altogether now; see MCP above.) What it had that no other surface has is a
 turn that cannot change anything, and that is a smaller thing than a second chat
 UI, a second store, a second `claude -p` policy and a second denylist to re-read
 every time the CLI grows a tool.
@@ -1666,11 +1695,13 @@ database this project talks to or the note saying what the payload has to look
 like, and here they are in stores the composer can read. That is still true and it
 was still the wrong menu. What somebody reaches for mid-sentence is a file, tens
 of times for every time they mean a table, and a menu of two dozen table names is
-a menu without the thing they meant in it. The three panels are not lost by
-losing the rows: a chat is started with whichever of the Database, API and Notes
-MCP servers are switched on, and each of those tools takes a thing by _name_, so
-`list_tables` and `read_note` answer from a name the agent can also simply be
-told in words. Deleted rather than kept beside the paths, and deleted the way
+a menu without the thing they meant in it. The three panels were not lost by
+losing the rows: a chat was started with whichever of the Database, API and Notes
+MCP servers were switched on, and each of those tools took a thing by _name_, so
+`list_tables` and `read_note` answered from a name the agent could also simply be
+told in words. Those servers have since gone too (see MCP above), which does not
+bring the rows back — a menu of two dozen table names was the wrong menu on its
+own terms. Deleted rather than kept beside the paths, and deleted the way
 this repository deletes things: `lib/mentions.ts`, `lib/mention-text.ts` and
 `test/mentions.ts` are gone, along with the `Mention` type's `resolve` and the
 `database` kind.
@@ -1940,6 +1971,15 @@ so the headings were drawn only once something was staged — until they became
 where `Stage all` lives, at which point a heading that appears in some states is
 an action that appears in some states. Both are drawn whenever their pile has
 rows.
+
+**Both piles fold, and both arrive folded.** A checkout opens as two counts —
+`STAGED 3`, `CHANGES 12` — and a pile's rows are drawn once its heading is
+clicked. The whole heading is the toggle rather than the chevron alone, since a
+12px target is not one; that makes it a `<button>`, which keeps the pile's own
+actions a positioned sibling for the same reason a row's are. Those actions stay
+reachable while folded — `Stage all` is the one thing wanted without reading the
+rows first. The state is the list's own and per pile, not remembered across a tab
+switch: there are two piles, so re-opening one is one click.
 
 **Discard means back to `HEAD`, both sides.** Not "the working tree back to the
 index", which is a second, similar thing to explain and would leave a staged

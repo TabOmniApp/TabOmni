@@ -115,10 +115,13 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   tests can import it.
 - **`tsserver.ts`** — one per Explorer root, using _that root's own_
   `typescript`, and nothing if it has none.
-- **`mcp.ts`** — the Database, API and Notes panels served to a turn as three
-  MCP servers (streamable HTTP on loopback, per-run secret). Each is off until
-  switched on in Settings › MCP, and **every call rechecks the setting**, so
-  turning one off stops a turn already in flight from using it.
+- **`mcp-servers.ts`** — which MCP servers the user's own `claude` has, asked of
+  it over the SDK's control channel (`mcpServerStatus()`) in a project's own
+  directory, for the listing in Settings › MCP, plus `removeMcpServer`, which
+  runs the CLI's own `claude mcp remove`. **This app serves no MCP server of its
+  own**: the three that served the Database, API and Notes panels are deleted —
+  see `docs/design.md`. What it does still say about MCP is which _tools_ a chat
+  may call, from `MCP_DISABLED_TOOLS_KEY`, handed over as `disallowedTools`.
 
 ### `worktree-chat.ts` + `claude-agent.ts` — the only `claude` in the app
 
@@ -129,9 +132,10 @@ things are not visible from the option names:
 1. `pathToClaudeCodeExecutable` is the **user's own** `claude` (their login,
    their `CLAUDE_BIN`), located through their login shell — a GUI app inherits
    almost none of their `PATH`.
-2. The MCP config goes over as a **path** through `extraArgs`, not the SDK's
-   `mcpServers` option, which serialises the config — and this run's secret —
-   onto a command line every process on the machine can read.
+2. No `--mcp-config` goes over at all, so a turn gets exactly the servers the
+   CLI finds for itself in that directory. There used to be one, through
+   `extraArgs` rather than the SDK's `mcpServers` option, which serialises a
+   config onto a command line every process on the machine can read.
 3. `appendSystemPrompt` is an `initialize` frame on stdin, not a flag.
 4. The SDK throws only when the **process** ends, not on an error result — that
    is true of streaming input; with a string prompt it threw after delivering
@@ -148,8 +152,10 @@ per-mode `appendSystemPrompt` are all part of the request's **cached prefix** �
 tool definitions sit ahead of the system prompt — so expressing a mode in them
 meant changing mode mid-chat threw the prefix away. Measured here against a 43k
 prompt: **42,345 tokens re-written and none read**, against 103 for a turn that
-changed nothing. So one fixed `disallowedTools`, one `permissionMode`
-(`manual`), one system prompt; the mode is applied in-process by `permits`,
+changed nothing. So no `allowedTools` at all, one `permissionMode` (`manual`),
+one system prompt, and a `disallowedTools` that is **not** a mode's business —
+the workspace's switched-off MCP tools, identical on every turn until somebody
+changes the setting; the mode is applied in-process by `permits`,
 which `deciding` in `claude-agent.ts` consults, and the mode's own sentence goes
 at the head of the **message**. A switch now costs 100–170 tokens.
 
@@ -188,8 +194,8 @@ queues it — that is what makes the composer live mid-answer, and `Stop` an
   going quiet: another message may already be queued.
 - Model and effort move under a running session (`setModel`,
   `applyFlagSettings`), and the permission never went to the CLI at all. `cwd`,
-  `CLAUDE_CONFIG_DIR` and the MCP config **cannot** — a change to one closes the
-  session and opens another (`signatureOf`).
+  `CLAUDE_CONFIG_DIR` and the switched-off MCP tools **cannot** — a change to any
+  of them closes the session and opens another (`signatureOf`).
 
 A session with nothing to do for `IDLE_MS` is closed, silently: the alternative
 is a `claude` per conversation resident all day, and reopening costs exactly
@@ -202,12 +208,20 @@ process. A chat's lines are `workspace/worktree-chats/<id>.json`, listed in
 fallback chain: a chat whose folder has left the workspace finishes with a line
 saying so rather than running its next turn in whichever directory is readable.
 
-No `--strict-mcp-config` goes with the config, so whatever the user's own
-`claude` is configured with — `~/.claude.json`, a repository's `.mcp.json`,
-enabled plugins, claude.ai connectors — is merged the way it would be running
-plain `claude` in that directory. The cost is that `Plan` and `Read only` cannot
-refuse an inherited server _by name_; an unlisted tool is still refused by
+No MCP config is passed, so whatever the user's own `claude` is configured with —
+`~/.claude.json`, a repository's `.mcp.json`, enabled plugins, claude.ai
+connectors — reaches a turn the way it would running plain `claude` in that
+directory, minus whatever Settings › MCP has switched off. The cost is that
+`Plan` and `Read only` cannot refuse a server _by name_, since this app
+configures none and so has no name for one; an unlisted tool is still refused by
 `deciding`.
+
+A switched-off tool is a **wire** name (`mcp__claude_ai_ClickUp__clickup_search`),
+not the name the listing shows: the CLI normalises a server's configured name
+into it, so `wireServer` in `lib/worktree-chat/mcp-servers.ts` is what an entry
+has to be built through or it matches nothing. Verified against the CLI's `init`
+frame: two named tools disallowed are two tools **absent from the model's list**,
+not refused on use.
 
 ## Renderer (`src/renderer/`)
 
@@ -264,8 +278,10 @@ because a pty taken out of the tree ends. A project's rows are its **chats**.
   what may be read, which tabs survive, which project a path belongs to.
 - **`lib/files/paths.ts` is the one place a file path is split.** It accepts both
   separators, unlike `lib/runtime/tree.ts`, which is for paths this app made up.
-- **`@shared/tree`** holds `descendantFolderIds` and `isDescendant`, because main
-  deletes a request folder too (`main/mcp.ts`). `lib/tree.ts` re-exports them.
+- **`@shared/tree`** holds `descendantFolderIds` and `isDescendant`. They are
+  shared because main used to delete a request folder too (through the MCP server
+  that is now gone); the renderer is the only reader left, through
+  `lib/tree.ts`, which re-exports them.
 - **Excalidraw fonts are served by this app**, not from a CDN — see the
   `excalidraw-fonts` plugin in `vite.config.ts`. A drawing's scene is its own
   `workspace/drawings/<id>.excalidraw` file and the note holds only the id, in a
@@ -285,7 +301,8 @@ Logic worth testing is split out from the drawing: `lib/worktree-chat/activity.t
 `lib/files/review.ts` (`test/review.ts`), `lib/tab-groups.ts`
 (`test/tab-groups.ts`), `lib/files/roots.ts` (`test/file-roots.ts`),
 `lib/files/block-doc.ts`, `lib/worktree-chat/mention-text.ts`
-(`test/chat-mentions.ts`). Put new logic on that side of the line.
+(`test/chat-mentions.ts`), `lib/worktree-chat/mcp-servers.ts` with
+`main/mcp-servers.ts`'s own `readServer` (`test/mcp-servers.ts`). Put new logic on that side of the line.
 
 ## Conventions
 

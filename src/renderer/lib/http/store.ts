@@ -110,25 +110,6 @@ type ApiState = {
   folders: HttpFolder[]
 
   refresh: () => Promise<void>
-  /**
-   * Re-reads the collection because something outside this window wrote it —
-   * so far an agent, through the MCP server's `create_request`,
-   * `update_request` and `delete_request`, or the three the folders have
-   * (`onRequestsChanged`). It matters
-   * because this panel saves the whole collection at once: a window holding the
-   * list it read at launch would put it back over the agent's request the next
-   * time anything was edited.
-   *
-   * Does nothing before the panel has read the collection once. A window that
-   * never read it cannot be holding a stale list, and refreshing anyway would
-   * restore this panel's tabs into the shared strip before anybody had opened
-   * it.
-   *
-   * A tab whose request was the one deleted is closed, the way `remove` closes
-   * its own: the strip draws nothing for an id that resolves to neither a
-   * request nor a folder, so leaving it there is a tab-shaped hole.
-   */
-  reread: () => Promise<void>
   create: (folderId?: string | null) => Promise<void>
   update: (id: string, patch: Partial<HttpRequestRecord>) => void
   remove: (id: string) => void
@@ -437,20 +418,6 @@ export const useApi = create<ApiState>((set, get) => {
         restored = true
         restoreTabs(requests, folders)
       }
-    },
-
-    async reread() {
-      if (!restored) return
-      await get().refresh()
-
-      const { requests, folders, openIds } = get()
-      const gone = openIds.filter(
-        (id) =>
-          id !== SETTINGS_TAB_ID &&
-          !requests.some((request) => request.id === id) &&
-          !folders.some((folder) => folder.id === id)
-      )
-      for (const id of gone) get().close(id)
     },
 
     async create(folderId = null) {
