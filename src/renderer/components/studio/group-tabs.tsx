@@ -28,6 +28,9 @@ const LABELS: Record<Pane, string> = {
   api: "Requests in this folder",
   note: "Notes in this folder",
   worktree: "Chats in this project",
+  // Never drawn either, for the same reason `changes` is not: one board per
+  // project, so a board tab has no group to fold into.
+  board: "Boards",
 }
 
 /** The Database panel's one group that is not a schema: the console's own

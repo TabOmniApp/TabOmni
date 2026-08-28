@@ -15,6 +15,8 @@ import {
 import {
   IPC,
   MCP_DISABLED_TOOLS_KEY,
+  type BoardCard,
+  type BoardColumn,
   type ChatPlace,
   type ClaudeProfile,
   type DatabaseConnectionInput,
@@ -887,6 +889,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.httpSend, (_event, input: HttpSendInput) =>
     sendHttp(input)
+  )
+
+  ipcMain.handle(IPC.listBoardCards, () => store.listBoardCards())
+
+  ipcMain.handle(IPC.saveBoardCards, (_event, cards: BoardCard[]) =>
+    store.saveBoardCards(cards)
+  )
+
+  ipcMain.handle(IPC.listBoardColumns, () => store.listBoardColumns())
+
+  ipcMain.handle(IPC.saveBoardColumns, (_event, columns: BoardColumn[]) =>
+    store.saveBoardColumns(columns)
   )
 
   ipcMain.handle(IPC.listNotes, () => store.listNotes())

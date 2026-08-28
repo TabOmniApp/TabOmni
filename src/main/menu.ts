@@ -163,6 +163,20 @@ export function installMenu(getWindow: () => BrowserWindow | null): void {
             registerAccelerator: false,
             click: () => send("toggle-sidebar"),
           },
+          {
+            label: "Terminal",
+            // `Ctrl` on macOS too, not `Cmd`: the editors' key for this panel,
+            // and `Cmd+\`` is already the system's "next window" there. Hence
+            // the literal rather than `CmdOrCtrl`.
+            accelerator: "Ctrl+`",
+            // Shown but not claimed, like the two above. Whether the key shows
+            // the tab or hides the dock depends on which tab the dock is on,
+            // which only the renderer knows — and this one is meant to work
+            // while the focus is inside the terminal, so the page has to be
+            // what answers it.
+            registerAccelerator: false,
+            click: () => send("toggle-terminal"),
+          },
           { type: "separator" },
           { role: "reload" },
           { role: "forceReload" },

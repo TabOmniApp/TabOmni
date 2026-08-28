@@ -12,6 +12,8 @@ import path from "node:path"
 
 import type {
   AssistantMessage,
+  BoardCard,
+  BoardColumn,
   ClaudeProfile,
   DatabaseRecord,
   DbEngine,
@@ -120,6 +122,20 @@ export const WORKTREE_CHATS_FILE = "worktree-chats.json"
 
 /** Where each of those chats' lines live, one `<id>.json` per chat. */
 export const WORKTREE_CHATS_DIR = "worktree-chats"
+
+/**
+ * Every project's board cards, in one file.
+ *
+ * Not split per project, unlike the chats' lines: a card is a title and a line,
+ * so the whole workspace's boards are one small list, and one file is one read
+ * at startup rather than one per folder. Its order is the order within each
+ * column — see `BoardCard`.
+ */
+export const BOARD_FILE = "board.json"
+
+/** The columns those cards are filed in, per project — renamed, recoloured and
+ * reordered without a card changing, which is why they are not on one. */
+export const BOARD_COLUMNS_FILE = "board-columns.json"
 
 /** The workspace's notes — their listing; each body is a file of its own. */
 export const NOTES_FILE = "notes.json"
@@ -623,6 +639,22 @@ export class Store {
 
   private worktreeChatPath(id: string): string {
     return path.join(this.workspaceDir, WORKTREE_CHATS_DIR, `${ownId(id)}.json`)
+  }
+
+  listBoardCards(): Promise<BoardCard[]> {
+    return this.readList(BOARD_FILE)
+  }
+
+  saveBoardCards(cards: BoardCard[]): Promise<void> {
+    return this.writeList(BOARD_FILE, cards)
+  }
+
+  listBoardColumns(): Promise<BoardColumn[]> {
+    return this.readList(BOARD_COLUMNS_FILE)
+  }
+
+  saveBoardColumns(columns: BoardColumn[]): Promise<void> {
+    return this.writeList(BOARD_COLUMNS_FILE, columns)
   }
 
   listNotes(): Promise<NoteRecord[]> {

@@ -7,20 +7,7 @@ import { getSetting, setSetting } from "./workspace"
 /** Where the studio's own preferences live, beside the strip's arrangement. */
 const SETTINGS_KEY = "workbench.settings"
 
-/**
- * Where the workbench's one tab strip sits.
- *
- * `top` is the row above the pane the studio has always drawn. `right` is the
- * same tabs as a column beside it, which is the arrangement that pays off when
- * a strip holds more tabs than a window is wide: a label has a whole row to
- * itself, so a dozen files are read down a list rather than scrolled through.
- * Right rather than left because the rail and the sidebar already own the left
- * edge, and a second list against them would read as part of the sidebar.
- */
-export type TabsPlacement = "top" | "right"
-
 type Stored = {
-  tabsPlacement: TabsPlacement
   groupTabs: boolean
   /**
    * The diff view's two: the committed side beside the working one or the two
@@ -36,9 +23,14 @@ type Stored = {
 }
 
 function isStored(value: unknown): value is Stored {
-  const record = value as Partial<Stored> | null
+  // Every field is optional since `tabsPlacement` went, so this is the whole of
+  // what tells a bag from a stored `null` — which would otherwise pass and be
+  // spread over the defaults as though it had parsed. A leftover
+  // `tabsPlacement` key is ignored rather than rejected: what is on disk is
+  // left alone, and the next `save()` stops writing it.
+  if (typeof value !== "object" || value === null) return false
+  const record = value as Partial<Stored>
   return (
-    (record?.tabsPlacement === "top" || record?.tabsPlacement === "right") &&
     // Absent from anything written before grouping existed, which is read as
     // off — the arrangement somebody already has is the one they chose. The two
     // diff flags are the same story, one feature later.
@@ -71,7 +63,6 @@ type SettingsState = Stored & {
    */
   mcpDisabledTools: string[]
 
-  setTabsPlacement: (placement: TabsPlacement) => void
   setGroupTabs: (group: boolean) => void
   setDiffSideBySide: (sideBySide: boolean) => void
   setDiffWhitespace: (show: boolean) => void
@@ -117,23 +108,17 @@ export const useSettings = create<SettingsState>((set, get) => {
   /**
    * Writes the whole bag, from whatever the store now holds.
    *
-   * One writer rather than each setter naming its neighbours: they shared a key,
-   * so a setter that listed two of what are now four fields would have written
-   * the other two back as absent — and absent reads as the default, which is a
+   * One writer rather than each setter naming its neighbours: they share a key,
+   * so a setter that listed two of the three fields would have written the
+   * third back as absent — and absent reads as the default, which is a
    * preference silently undone by changing an unrelated one.
    */
   const save = () => {
-    const { tabsPlacement, groupTabs, diffSideBySide, diffWhitespace } = get()
-    remember(SETTINGS_KEY, {
-      tabsPlacement,
-      groupTabs,
-      diffSideBySide,
-      diffWhitespace,
-    })
+    const { groupTabs, diffSideBySide, diffWhitespace } = get()
+    remember(SETTINGS_KEY, { groupTabs, diffSideBySide, diffWhitespace })
   }
 
   return {
-    tabsPlacement: "top",
     groupTabs: false,
     // Side by side is what a diff is for — two columns to compare — and the
     // toolbar is one click away for a pane too narrow to hold them.
@@ -141,11 +126,6 @@ export const useSettings = create<SettingsState>((set, get) => {
     diffWhitespace: false,
     mcpDisabledTools: [],
     loaded: false,
-
-    setTabsPlacement(tabsPlacement) {
-      set({ tabsPlacement })
-      save()
-    },
 
     setGroupTabs(groupTabs) {
       set({ groupTabs })

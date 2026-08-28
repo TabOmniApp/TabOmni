@@ -14,7 +14,7 @@ import { TerminalView, type TerminalHandle } from "./terminal-view"
  * Conductor's `Setup / Run / Terminal` strip, and this is the third of them — a
  * plain shell beside the work rather than a surface of its own. The agent side
  * of what the Terminal *panel* used to be is a worktree's chat now, which is
- * why a shell can live in a corner of the column without demoting anything: it
+ * why a shell can live in a strip under the pane without demoting anything: it
  * is somewhere to run `git log`, not somewhere work happens.
  *
  * Every shell stays mounted, hidden rather than unmounted — a pty taken out of

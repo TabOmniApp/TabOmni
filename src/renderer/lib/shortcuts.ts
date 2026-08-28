@@ -43,6 +43,30 @@ function inTerminal(target: EventTarget | null): boolean {
 }
 
 /**
+ * `⌃\`` — the dock's Terminal tab, which is the key the editors bind it to.
+ *
+ * `Ctrl` on **every** platform, macOS included, which is what VS Code does too:
+ * the key is the editor's convention rather than the platform's, and `⌘\`` on
+ * macOS is already the system's "next window".
+ *
+ * Read off `event.code`, not `event.key`: the binding is the physical key beside
+ * `1`, and what `key` reports for it with `Ctrl` held varies by layout. Shift is
+ * refused rather than accepted, so the key sometimes written `⌃~` is not this
+ * one — that leaves `⌃⇧\`` free, which is where those editors put "new
+ * terminal" if this ever grows one.
+ *
+ * **Not refused inside a terminal**, unlike the letters above. A pty has nothing
+ * bound to `⌃\``, and hiding the panel from inside the shell — having just run
+ * something in it — is most of what the key is for.
+ */
+export function isTerminalShortcut(event: KeyboardEvent): boolean {
+  if (event.repeat) return false
+  if (event.code !== "Backquote") return false
+  if (event.altKey || event.shiftKey || event.metaKey) return false
+  return event.ctrlKey
+}
+
+/**
  * Whether the caret is in a rich-text editor, where `⌘B` is bold.
  *
  * The one shortcut that has to ask. `⌘P`, `⌘W` and `⌘S` mean nothing to

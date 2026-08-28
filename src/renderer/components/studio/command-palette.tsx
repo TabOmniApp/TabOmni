@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { defaultFilter } from "cmdk"
-import { File, FileText, MessageSquare } from "lucide-react"
+import { Columns3, File, FileText, MessageSquare } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import {
@@ -13,6 +13,8 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
+import { unfinishedCount } from "@/lib/board/cards"
+import { useBoard } from "@/lib/board/store"
 import { useDatabases } from "@/lib/db/databases-store"
 import { useDbTree } from "@/lib/db/tree-store"
 import { useFiles } from "@/lib/files/store"
@@ -271,6 +273,8 @@ function useEntries(query: string): Group[] {
   const apiFolders = useApi((state) => state.folders)
 
   const chats = useWorktreeChats((state) => state.chats)
+  const boardCards = useBoard((state) => state.cards)
+  const boardColumns = useBoard((state) => state.columns)
   const folders = useStudio((state) => state.folders)
 
   const notes = useNotes((state) => state.notes)
@@ -378,6 +382,30 @@ function useEntries(query: string): Group[] {
       }
     })
 
+    /*
+     * One board per project — a thing to open, which is what this palette is
+     * for, rather than an action.
+     *
+     * Labelled by the project, because that is what a board *is* here: there is
+     * one per project and it has no name of its own to search for. The count of
+     * what is waiting rides along as the hint, so the row answers "is there
+     * anything on it" without being opened.
+     */
+    const boardEntries: Entry[] = folders.map((folder) => {
+      const waiting = unfinishedCount(boardCards, boardColumns, folder.id)
+      return {
+        value: PREFIX.board + folder.id,
+        label: folder.name,
+        hint: waiting ? `${waiting} waiting` : "Board",
+        keywords: [folder.name, "board", "kanban"],
+        icon: <Columns3 className="size-3.5 shrink-0" />,
+        open: async () => {
+          useBoard.getState().open(folder.id)
+          return null
+        },
+      }
+    })
+
     const noteEntries: Entry[] = notes.map((note) => {
       const folder = noteFolders.find(
         (candidate) => candidate.id === note.folderId
@@ -402,6 +430,7 @@ function useEntries(query: string): Group[] {
       { heading: "Database", entries: tables },
       { heading: "API", entries: apiEntries },
       { heading: "Chats", entries: chatEntries },
+      { heading: "Boards", entries: boardEntries },
       { heading: "Notes", entries: noteEntries },
       // A heading with nothing under it reads as something having failed to
       // load; cmdk hides a group whose rows are all filtered out, but not one
@@ -416,6 +445,8 @@ function useEntries(query: string): Group[] {
     apiFolders,
     chats,
     folders,
+    boardCards,
+    boardColumns,
     notes,
     noteFolders,
   ])

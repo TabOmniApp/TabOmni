@@ -17,6 +17,7 @@ export const PANES: Pane[] = [
   "api",
   "worktree",
   "note",
+  "board",
 ]
 
 /**
@@ -61,11 +62,12 @@ function isRememberedStrip(value: unknown): value is RememberedStrip {
  * drag along with it, back when one box on the right held four lists; the lists
  * are all on screen at once now, so this is only about the pane.
  *
- * A `Section` and two more, and neither of the two has a sidebar of its own:
- * `worktree` draws a project's chats and is opened from the left column, and
+ * A `Section` and three more, and none of the three has a sidebar of its own:
+ * `worktree` draws a project's chats and is opened from the left column,
  * `changes` draws the diff of whichever changed file the Explorer's `Changes`
- * tab has picked, one tab per project. `showPane` leaves the sections alone
- * for both, since a click in somebody else's list must not move the section the
+ * tab has picked, one tab per project, and `board` draws that project's kanban
+ * cards, also one tab per project. `showPane` leaves the sections alone for all
+ * three, since a click in somebody else's list must not move the section the
  * panel is on.
  *
  * There was a `terminal` pane beside them — a session with a tab, a chat view
@@ -73,7 +75,7 @@ function isRememberedStrip(value: unknown): value is RememberedStrip {
  * (`lib/shell/store.ts`), and the agent half of what it was is a project's
  * chat.
  */
-export type Pane = Section | "worktree" | "changes"
+export type Pane = Section | "worktree" | "changes" | "board"
 
 /**
  * Which of the Explorer's two lists is showing: the project's files, or the

@@ -1,5 +1,6 @@
 import { useState } from "react"
 import {
+  Columns3,
   Folder,
   FolderOpen,
   Loader2,
@@ -17,6 +18,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import { cn } from "@/lib/utils"
+import { useBoard } from "@/lib/board/store"
 import { useProjects } from "@/lib/projects"
 import { useStudio } from "@/lib/store"
 import { IconButton } from "../icon-button"
@@ -94,6 +96,7 @@ export function ProjectsSection() {
                     .getState()
                     .create({ folderId: folder.id })
                 }
+                onOpenBoard={() => useBoard.getState().open(folder.id)}
                 onToggle={() => {
                   toggleFolder(folder.id)
                   // And the dock's shell follows: a project row is the one
@@ -121,9 +124,10 @@ export function ProjectsSection() {
             <ProjectRow
               name="Ungrouped"
               shut={ungroupedShut}
-              // No `+`: a chat needs a directory to run in, and this row names
+              // No `+` and no board: both need a project, and this row names
               // the absence of one.
               onNewChat={null}
+              onOpenBoard={null}
               onToggle={() => toggleFolder(UNGROUPED_ID)}
             />
             {!ungroupedShut && <ProjectChats folderId={null} />}
@@ -180,11 +184,14 @@ function ProjectRow({
   shut,
   onToggle,
   onNewChat,
+  onOpenBoard,
 }: {
   name: string
   shut: boolean
   onToggle: () => void
   onNewChat: (() => void) | null
+  /** Opens this project's board. Nullable for the same row `onNewChat` is. */
+  onOpenBoard: (() => void) | null
 }) {
   // Open and shut rather than one mark rotated: a folder is the thing being
   // drawn, and its two states are two glyphs rather than two angles.
@@ -216,13 +223,26 @@ function ProjectRow({
         permanent `+` is a column of plus signs.
       */}
       {onNewChat && (
-        <IconButton
-          label={`New chat in ${name}`}
-          onClick={onNewChat}
-          className="absolute right-1 size-5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-visible:opacity-100"
-        >
-          <Plus className="size-3" />
-        </IconButton>
+        <div className="absolute right-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-within:opacity-100">
+          {/* Left of the `+`, in the order the two are reached for: a board is
+              where the work is decided and a chat is where it is done. */}
+          {onOpenBoard && (
+            <IconButton
+              label={`Board for ${name}`}
+              onClick={onOpenBoard}
+              className="size-5"
+            >
+              <Columns3 className="size-3" />
+            </IconButton>
+          )}
+          <IconButton
+            label={`New chat in ${name}`}
+            onClick={onNewChat}
+            className="size-5"
+          >
+            <Plus className="size-3" />
+          </IconButton>
+        </div>
       )}
     </div>
   )
@@ -239,6 +259,12 @@ function ProjectRow({
           <MessageSquare className="text-muted-foreground" />
           New chat here
         </ContextMenuItem>
+        {onOpenBoard && (
+          <ContextMenuItem onClick={onOpenBoard}>
+            <Columns3 className="text-muted-foreground" />
+            Open board
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )

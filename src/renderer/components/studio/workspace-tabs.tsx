@@ -20,8 +20,7 @@ import { useTabItems } from "./tab-items"
 import { TabStrip } from "./tab-strip"
 
 /**
- * One strip of tabs for the whole workbench — above whichever panel is showing,
- * or beside it, which is the Settings dialog's `tabsPlacement`.
+ * One strip of tabs for the whole workbench, above whichever panel is showing.
  *
  * The panels each used to draw their own, which meant that leaving Database
  * for API took the tables off the screen — they were still open, but nothing
@@ -46,17 +45,7 @@ import { TabStrip } from "./tab-strip"
  * that leaves is `tabIds` in `lib/panels.ts`; what each of them looks like is
  * `useTabItems`, shared with the strip inside.
  */
-export function WorkspaceTabs({
-  pane,
-  orientation,
-}: {
-  pane: Pane
-  /** A row above the pane or a column beside it. Handed in rather than read
-   * from the settings store here, because the box the strip goes in is the
-   * workbench's to draw — `studio.tsx` is what puts a column in a resizable
-   * panel, and what falls back to the row when there is nothing to list. */
-  orientation: "horizontal" | "vertical"
-}) {
+export function WorkspaceTabs({ pane }: { pane: Pane }) {
   // Read for the subscription: the strip is `tabIds` reconciled against this,
   // and both are computed rather than held, so this is what tells the component
   // that a drag has changed the answer.
@@ -115,7 +104,6 @@ export function WorkspaceTabs({
       label="Open tabs"
       items={items}
       activeId={activeId}
-      orientation={orientation}
       trailing={
         // Only the query tab: a new session and a new request are both
         // buttons in their own sidebar already, and a query tab has nowhere

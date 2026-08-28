@@ -95,10 +95,11 @@ arranging. What survives both bars is the _kind_: `lib/sections.ts` holds the
 ids and `section-marks.tsx` the label, icon and hue, because a hue that means
 "table" has to mean it wherever a table is listed.
 
-**The right column stacks** the Explorer over the dock, the way Conductor stacks
-its file list over its `Setup / Run / Terminal`. `⌘B` closes it, and the left
-column closes on its own button in the title bar. Two keys for two columns,
+**The right column is the Explorer**, its whole height. `⌘B` closes it, and the
+left column closes on its own button in the title bar. Two keys for two columns,
 deliberately: one that took both would leave the workbench with no edges at all.
+The dock — `Run` and `Terminal` — is under the **pane**, spanning its width; it
+used to be the lower half of this column, and see The dock for why it moved.
 
 **A project's rows are its chats**, and clicking one opens it — see Chats
 below. A project row carries a `+` that starts another, shown on hover, because
@@ -141,6 +142,173 @@ A workspace that used the feature still has its `workspace/tasks.json` on disk.
 Nothing reads it and nothing deletes it, for the reason `mail.json` survives its
 own panel: removing a feature is not a reason to throw away what somebody wrote
 with it.
+
+The **Board** below is not that layer coming back, and the difference is the
+reason it was worth building where the other was worth deleting — see the
+section for which of the two claims each makes.
+
+## Board
+
+A project's kanban board: columns it names itself — starting at `Todo`, `Doing`,
+`Done` — and cards that can each name the chat their work is happening in. Opened
+from the project's own row in the left column, a board mark beside the `+`, from
+that row's menu, or by name in `⌘P`, which lists one board per project.
+
+**It is a project's, not the workspace's.** The thing a card is about is work in
+one repository, and the chat a card links to runs in one directory; a board
+holding both projects' cards would be a board whose every card had to say which
+repository it meant, and a link that could cross between them. So `folderId` is
+on the card, and the board is **one tab per project whose id is the project's** —
+the shape the `Changes` tab already has, which is what puts it in the strip
+exactly while that project is the one being worked in and takes it out again on
+a switch. `rootOf` in `lib/panels.ts` is the identity function for both.
+
+### What it is not
+
+The **task** above (see Tasks, removed) was a container of members drawn from
+every panel — a request, a table, a file, a note — with a crumb across the title
+bar, a `Home` dashboard of cards, and `Add what is open`. What was wrong with it
+was not the kanban idea, which it did not have: it was that a task was a second
+place every other panel's contents were filed, so every panel had to know about
+it, and what it bought over simply having those things open was a name.
+
+A card here holds a **title, a line, a column and at most one chat**. Nothing
+else in the app is filed under it, and nothing outside the board and that chat's
+own header knows a card exists. That is the whole difference, and it is why this
+one is not on the path to being that one.
+
+### The columns are the project's own
+
+`Todo` / `Doing` / `Done` are what a board **starts** as — `DEFAULT_BOARD_COLUMNS`,
+seeded the first time one is opened — and from there they are added, renamed,
+recoloured and dragged.
+
+They were **fixed**, and the argument for that was that a board answers one
+question and every added column asks a second one. That was wrong about how a
+board is actually kept: `Blocked` and `Review` are the two every real one grows,
+and a board that cannot say "waiting on someone else" gets that said in card
+titles instead. So the reversal, and what it cost is what was predicted — a
+record type (`BoardColumn`), a file (`board-columns.json`), a rename, a reorder,
+and a rule for the cards in a column being deleted.
+
+**That rule is: nothing rewrites the cards.** Deleting a column leaves its cards
+naming a column that has gone, and `columnOf` draws such a card in the **first**
+column — visible, and one drag from wherever it belongs. A delete that silently
+moved eight cards somewhere else would be a delete that lost track of work, so
+the menu item says how many will turn up in the first column before it is
+picked. The last column standing cannot be deleted at all: a board with no
+columns has nowhere to draw a card and nowhere to put the button that would add
+one back.
+
+The seeded ids **are the words** — `todo`, `doing`, `done` — and that is
+load-bearing rather than tidy: cards written while the columns were a fixed union
+hold exactly those strings, so seeding them means a board written by the previous
+build needs no migration pass.
+
+One consequence worth naming: the tab's badge counts the cards **not in the last
+column**, since there is no longer a column called `Done` to ask about. Every
+board is read left to right and work ends at the right-hand end of it, whatever
+that column has been called.
+
+### Colour
+
+A column carries one of six hues (`BoardTone`), picked from its own menu, and the
+neutral is first because a column with nothing to say about itself should be able
+to say nothing. The record holds the **id** and `lib/board/tones.ts` holds what
+that is worth in pixels — the split `GitFileState` has from `GIT_TONES`, so a
+change of palette touches nothing that was saved.
+
+Four strengths per hue, and deliberately not one colour at four opacities: the
+dot in the header is the hue at full strength because it is the thing being read;
+the header tint behind it is faint, because a column is furniture and a card is
+content; the card's **left border** is what carries the hue down the column, so a
+card dragged into the wrong one reads as wrong without the header being in view;
+and the insertion line while dragging takes the hue of the column it is in, so
+the gap being aimed at says which column it is in.
+
+### Dragging
+
+Both a card and a column, with the platform's own `draggable` / `dragover` /
+`drop` rather than a library: a board moves one thing at a time to one insertion
+point. A column is dragged **by its header**, which is why cards are draggable
+separately — a column that could be picked up anywhere in its own body would
+swallow every attempt to pick up a card.
+
+The arithmetic is `moveCard` and `moveColumn`, and it is the one part of this
+panel worth a test (`test/board-cards.ts`). Two things there are easy to get
+wrong and invisible when wrong: the gaps on screen are counted against the column
+**as drawn**, which still holds the thing being carried, while the move counts
+against it taken out — one off, one direction only — and the file holds every
+project's records, so a drag on one board must not reorder another's.
+
+`membership` in `cards.ts` exists because of a third: the drawing filed an
+orphaned card into the first column and the drop did not, so a card let go beside
+an orphan landed a row off. One rule, read by both.
+
+The board scrolls **sideways**, with a fixed column width, rather than dividing
+the pane by however many columns there are: a tenth column that made the other
+nine unreadable would be a board that punished being used.
+
+### The link to a chat, in both directions
+
+Four things, and none of them is a fifth panel knowing about the board:
+
+- A card's **footer line** is its chat — the title, whether it is answering
+  right now (the `busy` event, the same one the projects column's spinner reads)
+  and how long ago it last did. The line is the click: it opens the chat. That is
+  a line of text per card rather than a control per card, because what somebody
+  wants off a glance at a board is which cards have an agent on them.
+- **Start chat from this card** creates a chat in the card's project and links
+  it, with the card's title and body as the composer's **draft** — `create`
+  already takes one, which is how `Ask AI to fix` seeds a message from the
+  `Changes` pane. Not sent: the first turn is still the user's to phrase and to
+  read before it runs, and a card that sent itself would be a board that starts
+  agents.
+- The chat's own pane carries a **chip** above the transcript naming its card,
+  with the column changeable from there — somebody finishes reading a turn and
+  knows the card is done, and the alternative is switching to the board to drag
+  a card whose chat they were just in. It draws nothing at all for a chat no
+  card names, which is most chats.
+- A card whose chat has been **deleted** says so and offers to start another.
+  `linkedChat` resolves the link at read time and is null for exactly that, the
+  way `chatRootId` is null for a chat whose project has gone. Deleting a chat
+  therefore needs no write to the board, and there is no state in which the two
+  disagree about what exists.
+
+### The agent cannot move a card
+
+This app serves no MCP server of its own (see MCP), so there is no tool to hand
+a turn that would let it write to the board — and adding one would be reversing
+that decision for a panel that does not need it. The consequence to be clear
+about: a board is **the user's** account of what is being worked on, not a place
+the model keeps state, and it does not update itself when a turn finishes. What
+the model does know is whatever the chat was seeded with, which is the card's own
+text.
+
+### On disk, and what is not remembered
+
+Two files, both the whole workspace's and both read once at launch:
+`workspace/board.json` for the cards and `workspace/board-columns.json` for the
+columns — `board:list` / `board:save` and `board:list-columns` /
+`board:save-columns`, each replacing the whole collection the way the notes'
+listing is replaced. Two files rather than one, and the columns not a field on a
+card, for the reason a note folder is not a field on a note: a column is renamed,
+recoloured and reordered without any card changing.
+
+**Order in each list is order on the board** — within a column for a card, left
+to right for a column — so a drag of either is one write and there is no second
+ordering to keep in agreement. `moveCard` and `moveColumn` in
+`lib/board/cards.ts` are the only code that knows it, and `test/board-cards.ts`
+is why.
+
+The cards of a project that has **left the workspace** stay in that file. The
+board simply does not draw them, the way a chat whose folder has gone is dropped
+from the listing rather than deleted — see the `tasks.json` argument above.
+
+Which boards were open is **not** remembered across launches, unlike the notes'
+tabs and like the `Changes` tab this copies: a board is one click from the
+project it belongs to, and restoring one would mean restoring a tab for every
+project somebody had glanced at.
 
 ## Chats
 
@@ -870,24 +1038,81 @@ working tree you have checked out, and an edit here is an edit to your work.
 
 ## The dock
 
-The lower half of the right-hand column: `Run` and `Terminal` — the tail of
-Conductor's own `Setup / Run / Terminal` under its file list.
+The strip under the pane, spanning its whole width: `Run` and `Terminal` — the
+tail of Conductor's own `Setup / Run / Terminal`.
 `components/studio/dock.tsx` is the strip, `lib/dock.ts` is whether it is open
 and which tab it holds, and the chevron in its corner collapses it — a close
 button would be wrong, because this is one of two halves a column is split into
 and collapsing gives the other the whole of it.
 
+**It was the lower half of the Explorer column**, stacked under the tree exactly
+as Conductor stacks its own strip under its file list. That was the wrong thing
+to inherit, because the geometry is not Conductor's: its file list is on the left
+and as wide as somebody drags it, while the Explorer here is on the right and
+capped at 520px. So the shell got roughly 60 columns — under the 80 that
+virtually every CLI's output is written for, which is the width `git diff`, a
+stack trace and a build log all assume — and `Run` was no better off, since what
+it prints is compiler and test output, wide for the same reason. The second cost
+was the stacking itself: opening the dock took the tree's height, so the two
+things somebody wants _together_ after running a command — the output, and
+`Changes` — were competing for one column.
+
+Under the pane rather than across the whole window, which was the other
+candidate. Full width would give the shell more room still, but it puts the
+Explorer back in the same trade the move was made to end: the tree is what gets
+consulted while the dock is open, and a dock that shortened it to gain a few
+columns would be the same coupling pointed the other way. Within the pane's
+column the two are independent — the tree keeps its height, the dock gets
+whatever the editor area is wide, which is most of the window.
+
+The move also fixed something the old position hid. The dock was a panel inside
+the Explorer column, and that column is `collapsible` with a `collapsedSize` of
+0 — so `⌘B` took the dock with it, and the title bar's own dock button then
+expanded a panel inside a column that was zero pixels wide, showing nothing.
+Nothing was lost while it was gone, since collapsing does not unmount and the
+pty went on running; there was simply no way to see it without bringing the
+Explorer back. `⌘B` and the dock's toggle now govern one thing each.
+
 The two tabs are what this app actually has to put there: the things that are
 _about_ what is on screen rather than things that were opened. There was an
 `Assistant` tab in front of them, and the button at the right of the title bar
-opened the dock on it; that button is the dock's own toggle now, because the
-chevron is otherwise a one-way door (see The assistant, removed).
+opened the dock on it (see The assistant, removed).
 
 The dock is **collapsed rather than unmounted**, and the shell is the reason. A
 pty taken out of the React tree ends; it does not hide. While the dock held only
 a conversation the main process owned and a log, unmounting it cost nothing — the
 moment it held a terminal, closing the dock would have killed whatever was
 running in it.
+
+### Closing it leaves the strip
+
+**It collapses to its own tab row**, not to nothing: `collapsedSize` is
+`DOCK_STRIP_HEIGHT` from `lib/dock.ts`, the 36px that row is tall. So what is on
+screen with the dock shut is the chevron — pointing up now — and `Run` and
+`Terminal`, each of which opens the dock on itself. Neither tab is drawn as
+selected while it is shut, because a lit tab would be pointing at a panel that
+is not there.
+
+**This is what replaced the button in the title bar.** The dock used to collapse
+to nothing, which made its chevron a one-way door and meant the way back had to
+live somewhere else; that somewhere was a `PanelBottom` button in the top-right
+corner, inherited from the `Assistant` tab that used to open the same dock. The
+objection is that it is three regions away from the thing it acts on — a
+window's title bar is for what the window is, and the button was there for a
+reason to do with the dock's history rather than with where anyone would look for
+it. A row that stays where the chevron left it answers the question at the place
+it is asked, so the button is deleted, `toggle` is the chevron's, and that corner
+of the title bar is empty.
+
+One number for the strip's height rather than an `h-9` in the component and a
+`36` in `studio.tsx`: the two have to agree or the dock closes to a sliver of its
+own tabs, and nothing in the build would catch the drift.
+
+**Dragging the dock shut is the same as clicking the chevron.** The panel has an
+`onResize` that compares against `DOCK_STRIP_HEIGHT` and flips the store, which
+is the two-way binding the Explorer column already had — without it the store
+would still say open after a drag, leaving a chevron pointing down at a dock that
+is already down and one press of `⌃\`` doing nothing.
 
 ### Terminal
 
@@ -1205,37 +1430,38 @@ doing something else. Closing the last member still takes the folder's tab with
 it, which is the only way that tab was ever going to go. `closePanelTab` in
 `lib/panels.ts` is the one way in for all three.
 
-### Vertical tabs
+### Vertical tabs, removed
 
-The strip is a row above the pane by default and can be a column beside it
-instead — **Settings › Tab strip › Vertical tabs**. What pays for the switch is
-the label: a row gives every tab the same narrow box and truncates the names in
-it, which is fine for a handful and useless for the fifteen a morning in a
-repository produces, while a column gives each one a whole line and reads as a
-list of what is open. It sits between the pane and the sections'
-panel, so it reads as the pane's own tabs rather than as part of either
-column.
+The strip could be a column beside the pane instead of a row above it —
+**Settings › Tab strip › Vertical tabs**, a `tabsPlacement` of `top` or `right`,
+in a resizable panel of its own so how much of a file name fit was the user's
+drag. What paid for it was the label: a row gives every tab the same narrow box
+and truncates the name in it, while a column gave each one a whole line and read
+as a list of what is open.
 
-Both are one `TabStrip` with an `orientation`, not two components: the drag, the
-middle-click, the context menu, the dirty dot and scrolling the active tab back
-into view are the same either way, and only the axis differs — which edge the
-drop line is drawn on, which way the tabs stack, and the scrolling. A row scrolls
-sideways, which Chromium will not do under a wheel on a box that cannot also
-scroll down, so it keeps the native wheel listener and the drawn thumb; a column
-is scrolled by the wheel already and keeps the scrollbar the platform draws.
+It is deleted: the `orientation` prop on `TabStrip` and `WorkspaceTabs`, every
+axis branch inside the strip, the nested `ResizablePanelGroup` in `studio.tsx`,
+the `tabsPlacement` field and its setter in `lib/settings.ts`, the `TabsPlacement`
+type, and the `PlacementOption` cards with their miniatures in the Settings
+dialog.
 
-**The column is resizable**, because how much of a file name fits is the whole
-point of it. `studio.tsx` puts the pane and the strip in a nested
-`ResizablePanelGroup` and the strip takes its width from its own panel — the
-drag, the keyboard-reachable handle and the minimum all come with it, as they do
-for the sidebar. Like the sidebar's, that width is the panel's for the run and is
-not written down; what is remembered is the placement.
+What it cost was paid on every read of the strip's code. Nine `vertical`
+branches ran through one component — the drop line's edge, the stacking, the
+active tab's accent border, the thumb, the wheel listener, the drag's axis, the
+empty state — so every question about how a tab behaves had to be answered twice,
+and the column's own arrangement had a further wrinkle behind it: the strip fell
+back to the row when nothing was open, because a row with no tabs takes no
+height while a column would have been a blank band down the side of an empty
+workbench. That is a preference whose layout the workbench, the strip and the
+settings store all had to agree about. Against that, the pane is what the window
+is mostly for, and a column of tabs takes its width from the thing being worked
+on — which is the same argument that moved the dock out of the Explorer column.
 
-The strip falls back to the row when nothing is open. A row with no tabs takes no
-height, and a preference for tabs on the right should not turn that into a blank
-band down the side of an empty workbench — so `orientation` is handed to
-`WorkspaceTabs` by the workbench rather than read from the settings store there,
-since the box the strip goes in is what decides.
+A workspace that had picked `right` still has `tabsPlacement` in its
+`workbench.settings` bag on disk. Nothing reads it and nothing rewrites the bag
+to remove it — `isStored` ignores the key and the next `save()` simply stops
+writing it, for the reason `workspace/mail.json` survives its own panel. Its
+strip comes back as the row.
 
 ## Search
 
@@ -1312,9 +1538,10 @@ and says why, the tree's "unreachable" dialog being the tree's.
 ## The window shortcuts
 
 `⌘P` opens the search above, `⌘W` closes the tab the pane is showing, `⌘S` writes
-the Explorer's open file and `⌘B` shows or hides the sidebar — each answered by a
-`keydown` listener in the renderer rather than by an accelerator in the
-application menu. `lib/shortcuts.ts` is the predicate they share.
+the Explorer's open file, `⌘B` shows or hides the sidebar and `⌃\`` shows or hides
+the dock's Terminal — each answered by a `keydown`listener in the renderer
+rather than by an accelerator in the application menu.`lib/shortcuts.ts` holds
+the predicates.
 
 They are the page's rather than the menu's because a registered accelerator is
 handled in the main process, before the page sees the key at all, and each of
@@ -1322,8 +1549,9 @@ these needs what only the renderer knows: the palette owns its own dialog, which
 tab is the current one is worked out in `workspace-tabs.tsx` from whichever panel
 is on screen — no store holds it — and whether `⌘B` is the sidebar or a bold
 word depends on where the caret is. The File menu still lists **Close tab ⌘W**
-and the View menu **Sidebar ⌘B**, both with `registerAccelerator: false`, so the
-key is displayed and the item works without the menu taking the keystroke.
+and the View menu **Sidebar ⌘B** and **Terminal ⌃\``**, all with
+`registerAccelerator: false`, so the key is displayed and the item works without
+the menu taking the keystroke.
 Closing the _window_ moved to `⇧⌘W`, the move an editor makes and for the same
 reason: a window holds every panel's tabs, and losing it to a keystroke aimed at
 one of them takes everything running in it too.
@@ -1370,14 +1598,36 @@ width as a drag and open it. Which sidebar it _would_ show is still `section`, s
 hiding and showing comes back to the same list, and the state is remembered with
 the strip: a workbench that forgets hands the space back every launch.
 
+**`⌃\`` is the one bound with `Ctrl`on every platform**, macOS included, because
+the key belongs to the editors rather than to the platform — and`⌘\``on macOS is
+already the system's "next window". It is read off`event.code === "Backquote"`rather than`event.key`: the binding is the physical key beside `1`, and what
+`key`reports for it with`Ctrl`held varies by layout.`Shift`is refused, so
+the chord sometimes written`⌃~`is not this one and`⌃⇧\`` stays free for a "new
+terminal" if one is ever wanted.
+
+It is also **the one shortcut that is deliberately not refused inside the
+terminal**, which is the opposite of the rule `⌘P` and `⌘W` follow off macOS.
+Nothing in a pty is bound to `⌃\``, so there is no editing key being taken — and
+hiding the panel from inside the shell, having just run something in it, is most
+of what the key is for. That is also why it is claimed on the capture phase:
+xterm would otherwise hand the key to the process before the page saw it.
+
+What it toggles is the **Terminal tab**, not the dock: `toggleTab` shows that tab
+when it is not the one on screen and hides the dock when it is, so the key
+reaches a terminal from the `Run` tab in one press rather than two. **View ›
+Terminal** lists it with `registerAccelerator: false`, the same arrangement
+**Close tab** and **Sidebar** have and for the sharper version of the same
+reason: whether the key shows or hides depends on which tab the dock is on, which
+is the renderer's answer alone.
+
 ## Settings
 
 **Settings…** in the application menu — ⌘, — opens a dialog, and there is
 nothing else to it: no settings tab in the strip, no section, no page.
 What is in it is about the workbench rather than about anything in the
-workspace, so it has nothing to be a tab _of_ — and two of the settings there
-are about the tab strip itself, which a tab would be a poor place to hold the
-switch for.
+workspace, so it has nothing to be a tab _of_ — and one of the settings there is
+about the tab strip itself, which a tab would be a poor place to hold the switch
+for.
 
 The item carries a gear, which the standard items around it get from the system
 and a custom one has to be handed. **Drawn as an outline, not a solid**: the
@@ -1406,17 +1656,17 @@ what keeps the dialog the same size as the list grows. A single scrolling column
 is fine for the four settings there are today and stops being fine at ten, and
 the list of sections is also the only thing that says what _kinds_ of preference
 exist without reading all of them. A row is a name, a sentence and its control at
-the far end of the line; a control too big for the end of a line — the tab
-strip's two pictures — takes the line below instead, which is the same row rather
-than a second kind of row.
+the far end of the line. There was a `stacked` row for a control too big for the
+end of a line — the tab strip's two placement pictures, the only one there ever
+was — and it is deleted along with them, rather than left as a shape with no
+caller.
 
 There are four sections: **Appearance** (the theme, which the `d` key still
 toggles — the header's moon button was removed when this row took its place, and
-with it the last clickable thing in the title bar), **Tabs** (the placement
-above, and whether tabs are gathered under the folder each belongs to — see
-Grouped tabs), **Claude** (the named `CLAUDE_CONFIG_DIR` profiles a chat's turns
-can run under) and **MCP** (which MCP servers the user's own `claude` has,
-below).
+with it the last clickable thing in the title bar), **Tabs** (whether tabs are
+gathered under the folder each belongs to — see Grouped tabs), **Claude** (the
+named `CLAUDE_CONFIG_DIR` profiles a chat's turns can run under) and **MCP**
+(which MCP servers the user's own `claude` has, below).
 
 **There was a Chat section, and it is gone**: two switches, `showToolCalls` and
 `showThinking`, inherited from a chat view's own header under
@@ -1432,10 +1682,10 @@ are deleted with the rows; the keys already on somebody's disk are left where
 they are, unread, the way `workspace/mail.json` is.
 
 The dialog has no Save. A preference applies as it is picked, which makes the
-studio behind the dialog its own preview — picking Vertical tabs moves the strip
-while the dialog is still open. `lib/settings.ts` is the store and writes each
-change to the workspace's own settings, so it survives a relaunch by the same
-route as the strip's arrangement.
+studio behind the dialog its own preview — switching Group tabs on regathers the
+strip while the dialog is still open. `lib/settings.ts` is the store and writes
+each change to the workspace's own settings, so it survives a relaunch by the
+same route as the strip's arrangement.
 
 ## MCP: what the user's own `claude` has
 
@@ -1672,9 +1922,11 @@ Two things moved rather than went. Its rows and its composer are the project
 chat's now (`ChatMessage` and `ChatComposer` in
 `components/studio/worktree/`, with `lib/worktree-chat/mention-text.ts` and
 `mentions.ts` under them) — they were always shared, and there is one caller
-left. And the title bar's button is the **dock's** toggle: the dock's chevron
-hides it, and with the tab that used to reopen it gone that corner was a one-way
-door.
+left. And the title bar's button became the **dock's** toggle for a while: the
+dock's chevron hid it, and with the tab that used to reopen it gone that corner
+was the only way back. It is deleted now — the dock keeps its tab row on screen
+when it is shut, so the way back is the row itself; see Closing it leaves the
+strip.
 
 What is left on disk is left there, as the Mail panel's `mail.json` was: a
 workspace that ran the old build still has `workspace/chats.json`, its
@@ -1930,7 +2182,7 @@ pointing at.
 
 Committing stays out, and the line is not arbitrary: staging and discarding are
 answered by pointing at rows, and a commit is a sentence somebody writes. The
-dock has a shell in the same folder two panels down, so stopping here is
+dock has a shell in the same folder one click away, so stopping here is
 stopping exactly where the shell is better — rather than growing a message box,
 then an amend, then a log, then a second and worse git client.
 

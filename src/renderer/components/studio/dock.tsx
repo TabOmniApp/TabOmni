@@ -1,24 +1,36 @@
-import { ChevronDown, Play, SquareTerminal } from "lucide-react"
+import { ChevronDown, ChevronUp, Play, SquareTerminal } from "lucide-react"
 import type { ComponentType } from "react"
 
 import { cn } from "@/lib/utils"
-import { useDock, type DockTab } from "@/lib/dock"
+import { useDock, DOCK_STRIP_HEIGHT, type DockTab } from "@/lib/dock"
 import { anyRunning, useRun } from "@/lib/run/store"
 import { IconButton } from "./icon-button"
 import { RunPanel } from "./run-panel"
 import { DockTerminal } from "./dock-terminal"
 
 /**
- * The lower half of the right-hand column: a run script, and a shell.
+ * The strip under the pane: a run script, and a shell in whichever project was
+ * last clicked.
  *
- * Conductor stacks `Setup / Run / Terminal` under its file list, and this is
- * that strip: a run script, and a shell in whichever project was last clicked.
  * Both are *about* what is on screen rather than things that were opened, which
  * is what makes them tabs of a dock instead of panes.
  *
- * The chevron collapses it rather than a close button, which is what Conductor
- * puts in the same corner: this half is one of two the column is split into,
- * and collapsing it gives the sections above the whole column back.
+ * It spans the pane's whole width, and that is the point of where it sits. It
+ * was a panel inside the Explorer column — Conductor's `Setup / Run / Terminal`
+ * under its file list — but Conductor's list is on the left and this one is a
+ * capped 520px on the right, so the shell got 60-odd columns and the tree lost
+ * its height whenever the dock opened. See `studio.tsx`.
+ *
+ * The chevron collapses it rather than a close button: the dock is one of two
+ * halves the pane's column is split into, and collapsing it gives the editor
+ * the whole column back.
+ *
+ * **The strip itself never goes.** Closing the dock collapses the panel to
+ * `DOCK_STRIP_HEIGHT`, so what is left on screen is this row — the chevron
+ * pointing the other way, and two tabs that each open the dock on themselves.
+ * A dock that closed to nothing needed somewhere else to hold the way back, and
+ * that was a button at the right of the title bar, three regions away from the
+ * thing it showed. The row that closed it is the obvious place to reopen it.
  */
 const TABS: {
   id: DockTab
@@ -30,9 +42,10 @@ const TABS: {
 ]
 
 export function Dock() {
+  const open = useDock((state) => state.open)
   const tab = useDock((state) => state.tab)
   const openOn = useDock((state) => state.openOn)
-  const close = useDock((state) => state.close)
+  const toggle = useDock((state) => state.toggle)
 
   // Derived outside the selector: one handing back a new object would re-render
   // on every line of output a run prints.
@@ -44,14 +57,28 @@ export function Dock() {
       <div
         role="tablist"
         aria-label="Dock"
-        className="flex h-9 shrink-0 items-center gap-0.5 border-b px-1.5"
+        // The height is the panel's `collapsedSize`, so this row is exactly what
+        // is left when the dock is shut.
+        style={{ height: DOCK_STRIP_HEIGHT }}
+        className="flex shrink-0 items-center gap-0.5 border-b px-1.5"
       >
-        <IconButton label="Hide" onClick={close} className="size-6 shrink-0">
-          <ChevronDown className="size-3.5" />
+        <IconButton
+          label={open ? "Hide the panel" : "Show the panel"}
+          onClick={toggle}
+          className="size-6 shrink-0"
+        >
+          {open ? (
+            <ChevronDown className="size-3.5" />
+          ) : (
+            <ChevronUp className="size-3.5" />
+          )}
         </IconButton>
 
         {TABS.map(({ id, label, Icon }) => {
-          const active = tab === id
+          // Nothing is "selected" while the dock is shut: the strip is all
+          // there is, and a lit tab would be pointing at a panel that is not
+          // on screen.
+          const active = open && tab === id
           return (
             <button
               key={id}

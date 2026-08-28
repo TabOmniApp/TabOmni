@@ -1355,6 +1355,122 @@ export type WorktreeChat = {
 export type WorktreeChatEvent = AssistantEvent & { chatId: string }
 
 /**
+ * The hues a board column can be marked with.
+ *
+ * Ids and not classes: what a record on disk holds is which of a fixed set was
+ * picked, and the two class strings that draws as belong to the renderer
+ * (`lib/board/tones.ts`) — the same split `GitFileState` has from `GIT_TONES`. A
+ * fixed set rather than a colour picker, so that every board in the app is drawn
+ * from one palette that has been checked in both themes.
+ */
+export type BoardTone =
+  "slate" | "blue" | "violet" | "amber" | "emerald" | "rose"
+
+/** Them in the order the picker offers them. */
+export const BOARD_TONE_IDS: BoardTone[] = [
+  "slate",
+  "blue",
+  "violet",
+  "amber",
+  "emerald",
+  "rose",
+]
+
+/**
+ * One column of one project's board.
+ *
+ * **A record rather than a union**, which is what it was: `Todo` / `Doing` /
+ * `Done` were fixed and not the user's to name, on the argument that a board
+ * answers one question and every added column asks a second. That was wrong for
+ * the way people actually keep a board — `Blocked` and `Review` are the two
+ * every real one grows — so columns are the project's own to add, rename,
+ * recolour and reorder. `docs/design.md` § Board carries the reversal.
+ *
+ * Per project, like the cards: two projects have nothing to say to each other
+ * about what their stages are called.
+ *
+ * Order is **order in the list**, the way a card's is — one write for a
+ * reordering, and no `order` field to keep dense.
+ */
+export type BoardColumn = {
+  id: string
+  folderId: string
+  name: string
+  tone: BoardTone
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * What a project's board starts as, seeded the first time one is opened.
+ *
+ * The **ids are the words**, and that is load-bearing rather than tidy: a card
+ * written while the columns were a union holds `"todo"`, `"doing"` or `"done"`
+ * in its `column`, and seeding these ids means such a card points at a real
+ * column without a migration pass over the file.
+ */
+export const DEFAULT_BOARD_COLUMNS: {
+  id: string
+  name: string
+  tone: BoardTone
+}[] = [
+  { id: "todo", name: "Todo", tone: "slate" },
+  { id: "doing", name: "Doing", tone: "blue" },
+  { id: "done", name: "Done", tone: "emerald" },
+]
+
+/**
+ * One card on a project's board.
+ *
+ * A **project's**, like a chat and unlike a note: the thing a card is about is
+ * work in one repository, and a card whose chat ran in a different one is a
+ * link across two working trees that nothing in this app could draw honestly.
+ * `folderId` is what makes it per project, and it is the same id a chat's
+ * `folderId`, a `FileRoot.id` and the dock's shell key all are.
+ *
+ * Deliberately **not** the task this app used to have (see `docs/design.md`
+ * § Tasks, removed): that was a container of members drawn from every panel,
+ * with a crumb across the title bar and a dashboard of its own. This holds a
+ * title, a line, a column and at most one chat, and nothing outside the board
+ * and that chat's own header knows it exists.
+ *
+ * The whole collection is one file and one save, the shape `NoteRecord`'s
+ * listing has — a card is small and bounded, so there is no body to keep out of
+ * the list, and **order within the list is order within the column**, which is
+ * what makes a drag one write.
+ */
+export type BoardCard = {
+  id: string
+  /** The project it belongs to. */
+  folderId: string
+  /**
+   * Which column it is in — a `BoardColumn.id`, and a plain string here.
+   *
+   * Not narrowed to the ids that exist, because they are the user's now: a card
+   * can name a column that has been deleted from under it (nothing rewrites
+   * cards on a delete), and `cardsOf` in `lib/board/cards.ts` files such a card
+   * into the first column rather than losing it. Cards written while the columns
+   * were a fixed union hold `"todo"`, `"doing"` or `"done"`, which are exactly
+   * the ids `DEFAULT_BOARD_COLUMNS` seeds.
+   */
+  column: string
+  title: string
+  /** One line about it, or empty. */
+  body: string
+  /**
+   * The chat this card's work is happening in, or null.
+   *
+   * Never trusted to still name one: a chat can be deleted from under it, and
+   * the card is not the place that owns the conversation. Read it through
+   * `linkedChat` in `lib/board/cards.ts`, which is null for a chat that has
+   * gone — the `chatRootId` idiom, and for the same reason.
+   */
+  chatId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/**
  * A group of notes, nested arbitrarily deep.
  *
  * Shaped like `HttpFolder` minus the cascading headers and params, because a
@@ -1896,6 +2012,24 @@ export type DesktopApi = {
     listener: (event: WorktreeChatEvent) => void
   ) => () => void
 
+  /**
+   * Every board card in every project.
+   *
+   * One call for the whole workspace rather than per project, the way the chat
+   * listing is: the boards together are a few hundred short records, and the
+   * strip has to know a project has cards before its board has ever been
+   * opened.
+   */
+  listBoardCards: () => Promise<BoardCard[]>
+  /** Replaces the whole collection — the renderer owns the list and its order,
+   * the same way it owns the notes'. */
+  saveBoardCards: (cards: BoardCard[]) => Promise<void>
+  /** Every project's columns. Their own file rather than a field on a card, for
+   * the reason a note folder is not a field on a note: they are renamed,
+   * recoloured and reordered without any card changing. */
+  listBoardColumns: () => Promise<BoardColumn[]>
+  saveBoardColumns: (columns: BoardColumn[]) => Promise<void>
+
   /** Every note in the workspace, and the folders they are filed under —
    * their listings only; a body is read one at a time. */
   listNotes: () => Promise<NoteRecord[]>
@@ -2045,7 +2179,11 @@ export type DesktopApi = {
  * have closed, or shows the sidebar ⌘B would have shown.
  */
 export type MenuCommand =
-  "add-folder" | "close-tab" | "toggle-sidebar" | "open-settings"
+  | "add-folder"
+  | "close-tab"
+  | "toggle-sidebar"
+  | "toggle-terminal"
+  | "open-settings"
 
 /** IPC channel names, shared so main and preload cannot drift apart. */
 export const IPC = {
@@ -2120,6 +2258,10 @@ export const IPC = {
   sendWorktreeChat: "worktree-chats:send",
   stopWorktreeChat: "worktree-chats:stop",
   worktreeChatEvent: "worktree-chats:event",
+  listBoardCards: "board:list",
+  saveBoardCards: "board:save",
+  listBoardColumns: "board:list-columns",
+  saveBoardColumns: "board:save-columns",
   listNotes: "notes:list",
   saveNotes: "notes:save",
   listNoteFolders: "notes:list-folders",

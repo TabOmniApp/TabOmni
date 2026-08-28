@@ -35,7 +35,7 @@ import {
 
 import type { McpListing, McpServerInfo } from "@shared/api"
 import { useProjects } from "@/lib/projects"
-import { useSettings, type TabsPlacement } from "@/lib/settings"
+import { useSettings } from "@/lib/settings"
 import { useStudio } from "@/lib/store"
 import {
   nextProfileName,
@@ -212,8 +212,6 @@ function AppearanceSection() {
 }
 
 function TabsSection() {
-  const tabsPlacement = useSettings((state) => state.tabsPlacement)
-  const setTabsPlacement = useSettings((state) => state.setTabsPlacement)
   const groupTabs = useSettings((state) => state.groupTabs)
   const setGroupTabs = useSettings((state) => state.setGroupTabs)
 
@@ -233,28 +231,6 @@ function TabsSection() {
         description="One tab per folder in the strip, with that folder's own files, requests or notes in a second strip inside it. Off, every file and request is a tab of its own."
       >
         <Switch checked={groupTabs} onCheckedChange={setGroupTabs} />
-      </Row>
-      <Row
-        stacked
-        title="Tab strip"
-        description="Vertical tabs put the strip down the right-hand side of the pane, where a long name has a row to itself instead of being truncated. Drag the edge between the two to set how wide it is."
-      >
-        <div role="radiogroup" className="grid grid-cols-2 gap-3">
-          <PlacementOption
-            value="top"
-            current={tabsPlacement}
-            label="Horizontal tabs"
-            hint="A row above the pane"
-            onPick={setTabsPlacement}
-          />
-          <PlacementOption
-            value="right"
-            current={tabsPlacement}
-            label="Vertical tabs"
-            hint="A column on the right"
-            onPick={setTabsPlacement}
-          />
-        </div>
       </Row>
     </Card>
   )
@@ -771,35 +747,27 @@ function Card({ children }: { children: ReactNode }) {
   return <div className="divide-y rounded-lg border">{children}</div>
 }
 
-/**
- * One setting: what it is, what it does, and the control for it.
- *
- * `stacked` for a control too big to sit at the end of the line — the tab
- * strip's two pictures — which is the same row with the control on its own
- * line rather than a second kind of row.
- */
+/** One setting: what it is, what it does, and the control at the end of the
+ * line. There was a `stacked` variant for a control too big for that — the tab
+ * strip's two placement pictures — and it went with them. */
 function Row({
   title,
   description,
-  stacked,
   children,
 }: {
   title: string
   description: string
-  stacked?: boolean
   children: ReactNode
 }) {
   return (
-    <div className={cn("p-4", stacked ? "space-y-3" : "flex gap-6")}>
-      <div className={cn("min-w-0 space-y-1", !stacked && "flex-1")}>
+    <div className="flex gap-6 p-4">
+      <div className="min-w-0 flex-1 space-y-1">
         <p className="text-sm leading-none font-medium">{title}</p>
         <p className="text-xs leading-relaxed text-muted-foreground">
           {description}
         </p>
       </div>
-      <div className={cn(!stacked && "flex shrink-0 items-center")}>
-        {children}
-      </div>
+      <div className="flex shrink-0 items-center">{children}</div>
     </div>
   )
 }
@@ -837,101 +805,5 @@ function Segmented({
         )
       })}
     </div>
-  )
-}
-
-/**
- * One of the two tab layouts, with a miniature of it.
- *
- * The whole card is the control rather than a radio with a card next to it:
- * what is being chosen is a picture, and a target the size of the picture is
- * the one people aim at. It keeps the radio's semantics — `role="radio"` and
- * `aria-checked` — so it is still a group of two to anything reading the
- * dialog rather than two unrelated buttons.
- *
- * The drawing is three boxes rather than an icon: what moves is a whole region
- * of the window, and the shortest way to say which one is to show the window.
- */
-function PlacementOption({
-  value,
-  current,
-  label,
-  hint,
-  onPick,
-}: {
-  value: TabsPlacement
-  current: TabsPlacement
-  label: string
-  hint: string
-  onPick: (value: TabsPlacement) => void
-}) {
-  const active = current === value
-  const vertical = value === "right"
-
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={() => onPick(value)}
-      className={cn(
-        "flex cursor-pointer flex-col items-stretch gap-2 rounded-lg border p-3 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-        active
-          ? "border-primary bg-accent/40"
-          : "hover:bg-accent/20 hover:text-foreground"
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          "flex h-16 gap-1 rounded-md border bg-muted/40 p-1",
-          vertical ? "flex-row-reverse" : "flex-col"
-        )}
-      >
-        {/* The strip, with two tabs in it — the front one lit. */}
-        <span
-          className={cn(
-            "flex shrink-0 gap-0.5 rounded-sm bg-primary/10 p-0.5",
-            vertical ? "w-7 flex-col" : "h-3 flex-row"
-          )}
-        >
-          <span
-            className={cn(
-              "rounded-[2px] bg-primary/70",
-              vertical ? "h-1.5 w-full" : "h-full w-5"
-            )}
-          />
-          <span
-            className={cn(
-              "rounded-[2px] bg-primary/25",
-              vertical ? "h-1.5 w-full" : "h-full w-4"
-            )}
-          />
-        </span>
-        {/* The pane the tabs are for. */}
-        <span className="flex-1 rounded-sm bg-background" />
-      </span>
-
-      <span className="flex items-center gap-2">
-        {/* The radio's own dot, drawn here because the card is the radio. */}
-        <span
-          aria-hidden
-          className={cn(
-            "grid size-4 shrink-0 place-items-center rounded-full border",
-            active ? "border-primary bg-primary" : "border-input"
-          )}
-        >
-          {active && (
-            <span className="size-2 rounded-full bg-primary-foreground" />
-          )}
-        </span>
-        <span className="min-w-0">
-          <span className="block truncate text-xs font-medium">{label}</span>
-          <span className="block truncate text-[0.7rem] text-muted-foreground">
-            {hint}
-          </span>
-        </span>
-      </span>
-    </button>
   )
 }

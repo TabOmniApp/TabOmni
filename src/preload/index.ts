@@ -146,6 +146,11 @@ const api: DesktopApi = {
   stopWorktreeChat: (id) => ipcRenderer.invoke(IPC.stopWorktreeChat, id),
   onWorktreeChatEvent: (listener) =>
     subscribe<WorktreeChatEvent>(IPC.worktreeChatEvent, listener),
+  listBoardCards: () => ipcRenderer.invoke(IPC.listBoardCards),
+  saveBoardCards: (cards) => ipcRenderer.invoke(IPC.saveBoardCards, cards),
+  listBoardColumns: () => ipcRenderer.invoke(IPC.listBoardColumns),
+  saveBoardColumns: (columns) =>
+    ipcRenderer.invoke(IPC.saveBoardColumns, columns),
   listNotes: () => ipcRenderer.invoke(IPC.listNotes),
   saveNotes: (notes) => ipcRenderer.invoke(IPC.saveNotes, notes),
   listNoteFolders: () => ipcRenderer.invoke(IPC.listNoteFolders),

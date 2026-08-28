@@ -6,21 +6,26 @@ import {
   usePanelRef,
 } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
-import { PanelBottom, PanelLeft } from "lucide-react"
+import { PanelLeft } from "lucide-react"
 
 import { useDatabases } from "@/lib/db/databases-store"
 import { useFiles } from "@/lib/files/store"
 import { watchExpandedDirectories } from "@/lib/files/watch"
 import { useNotes } from "@/lib/note/store"
 import { reconcileScope, useActiveTabId, useHasOpenTabs } from "@/lib/panels"
-import { isEditingRichText, isStudioShortcut } from "@/lib/shortcuts"
+import {
+  isEditingRichText,
+  isStudioShortcut,
+  isTerminalShortcut,
+} from "@/lib/shortcuts"
 import { useSettings } from "@/lib/settings"
-import { useDock } from "@/lib/dock"
+import { useDock, DOCK_STRIP_HEIGHT } from "@/lib/dock"
 import { useStudio, type Pane } from "@/lib/store"
 import { useRun } from "@/lib/run/store"
 import { useProjects } from "@/lib/projects"
 import { useClaudeProfiles } from "@/lib/worktree-chat/claude-profiles"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
+import { useBoard } from "@/lib/board/store"
 import { Dock } from "./dock"
 import { ProjectCrumbs } from "./project/project-crumbs"
 import { WorkspaceSidebar } from "./workspace-sidebar"
@@ -28,6 +33,7 @@ import { WorktreeChatPane } from "./worktree/chat-pane"
 import { ApiWorkspace } from "./api/api-workspace"
 import { FileTree } from "./files/file-tree"
 import { ChangesPane } from "./files/changes-pane"
+import { BoardPane } from "./board/board-pane"
 import { FileWorkspace } from "./files/file-workspace"
 import { DatabaseWorkspace } from "./db/database-workspace"
 import { AddFolderDialog } from "./add-folder-dialog"
@@ -63,6 +69,8 @@ function paneView(pane: Pane) {
       return <NoteWorkspace />
     case "worktree":
       return <WorktreeChatPane />
+    case "board":
+      return <BoardPane />
   }
 }
 
@@ -93,6 +101,9 @@ export function Studio() {
     void useRun.getState().restore()
     void useWorktreeChats.getState().refresh()
     void useClaudeProfiles.getState().refresh()
+    // Before any board is opened: a project's tab carries how many cards it has
+    // waiting, and the chat pane's chip asks which card a chat is the work of.
+    void useBoard.getState().refresh()
   }, [])
 
   // A run outlives the dock being closed and the tab being switched away from,
@@ -164,13 +175,10 @@ function Workbench() {
   /** The Settings dialog — the application menu's ⌘, and nothing else, since
    * a preference is not a thing the workspace holds a row for. */
   const [settingsOpen, setSettingsOpen] = useState(false)
-  /** Which side the tab strip is on, which is the one preference the workbench
-   * itself has to lay out for. */
-  const tabsPlacement = useSettings((state) => state.tabsPlacement)
   /** Whether the dock — `Run` and `Terminal` — is on screen: the button in the
    * header, and the chevron in the dock's own strip. */
   const dockOpen = useDock((state) => state.open)
-  const toggleDock = useDock((state) => state.toggle)
+  const toggleDockTab = useDock((state) => state.toggleTab)
   /** The left column, and its toggle in the title bar. */
   const projectSidebar = useProjects((state) => state.sidebar)
   const toggleProjectSidebar = useProjects((state) => state.toggleSidebar)
@@ -197,13 +205,6 @@ function Workbench() {
   // empty, and this is the list that mounts what belongs in it.
   if (shown && !mounted.includes(shown)) setMounted([...mounted, shown])
 
-  // The column is drawn only when there is something in it: an empty strip
-  // takes no room at the top of the pane, and a preference for tabs on the
-  // right should not turn that into a blank band down the side. With nothing
-  // open the strip falls back to the row, which is where its "new query tab"
-  // button already lives.
-  const verticalTabs = tabsPlacement === "right" && hasOpenTabs
-
   // The File menu is a second way to reach the same dialog — and the only one
   // left when Explorer is taken off the rail. It runs in the main process and
   // cannot open a dialog itself, so it names the command instead.
@@ -213,8 +214,9 @@ function Workbench() {
         if (command === "add-folder") setAdding(true)
         if (command === "open-settings") setSettingsOpen(true)
         if (command === "toggle-sidebar") toggleSidebar()
+        if (command === "toggle-terminal") toggleDockTab("terminal")
       }),
-    [toggleSidebar]
+    [toggleSidebar, toggleDockTab]
   )
 
   // The tree follows the disk for as long as the workbench is up — here rather
@@ -299,13 +301,37 @@ function Workbench() {
   }, [toggleSidebar])
 
   /*
+   * `⌃\`` — the dock's Terminal tab, the editors' key for it, and the View
+   * menu's item.
+   *
+   * On the capture phase for the reason the others are, and one more: this is
+   * the only one of them meant to work *inside* the terminal, and xterm would
+   * otherwise hand the key to the pty before the page had it. Showing the tab
+   * when it is not the one on screen, hiding the dock when it is — that is
+   * `toggleTab`, not `toggle`, so the key reaches the terminal from the Run tab
+   * in one press rather than two.
+   */
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!isTerminalShortcut(event)) return
+
+      event.preventDefault()
+      toggleDockTab("terminal")
+    }
+
+    window.addEventListener("keydown", onKeyDown, { capture: true })
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true })
+    }
+  }, [toggleDockTab])
+
+  /*
    * The panel on screen, and the notice that stands in for it.
    *
-   * A value rather than JSX written twice: the tab strip's two placements are
-   * two different boxes around this — a column in a resizable group, or a row
-   * above it — and the pane itself is the same either way. `h-full` rather than
-   * `flex-1` for that reason: it is a whole panel in one arrangement and a flex
-   * child in the other, and the height it wants is its parent's in both.
+   * A value rather than inline JSX, which is what it was when the tab strip had
+   * two placements and this had to go in either of two boxes. It is one box now,
+   * and what the name still buys is that the reader meets the pane's own
+   * question — which panel, or the notice — clear of the panels around it.
    *
    * `overflow-hidden` because the panels below are absolutely positioned and so
    * do not clip: a panel that forgot to scroll its own content would otherwise
@@ -315,9 +341,8 @@ function Workbench() {
   const paneContent = (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
       {/* The strip inside the tab on screen, when the panel is grouping its
-          tabs under the folder each belongs to. Between the workbench's strip
-          and the pane in both arrangements — the tabs may be a column beside
-          the pane, but a folder's own tabs are still a row above it. */}
+          tabs under the folder each belongs to — between the workbench's own
+          strip and the pane. */}
       <GroupTabs pane={pane} />
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -464,45 +489,13 @@ function Workbench() {
                 <div className="drag-region h-full min-w-0 flex-1" />
 
                 {/*
-                  The dock, which is the only way back to it once it is shut: its
-                  own chevron hides it, and the tab strip that switches between
-                  `Run` and `Terminal` goes with it. There was an assistant
-                  button here — a workspace chat that was the dock's first tab —
-                  and this is what is left in its corner.
-
-                  Two things are about clicks landing rather than looks, and
-                  neither is why this button once took every other press — that
-                  was its own tooltip, see `ui/tooltip.tsx` and `side` below.
-
-                  It fills the bar's height instead of being a 24px square
-                  floating in a 44px strip, which is what a title-bar control is
-                  everywhere else. And `no-drag` is claimed even though the
-                  button sits outside the drag region: macOS keeps a stale drag
-                  rect after the element that asked for it has gone
-                  (electron#20926), and the launch screen draws one across this
-                  very corner on every run.
+                  There was a dock toggle in this corner, and before that an
+                  assistant button — a workspace chat that was the dock's first
+                  tab. Both are gone, and the corner is empty: the dock's own
+                  strip stays on screen when it is shut (`DOCK_STRIP_HEIGHT`), so
+                  the way back is the row that closed it rather than a button
+                  three regions away from the thing it showed.
                 */}
-                {/* Wider than the button it holds, on purpose: this is the rect
-                    that says "not draggable", and it has to cover more than the
-                    button in case a stale drag rect reaches past where any live
-                    one ends. */}
-                <div className="no-drag flex h-full shrink-0 items-center pl-3">
-                  <IconButton
-                    label={
-                      dockOpen ? "Hide the panel" : "Show run and terminal"
-                    }
-                    pressed={dockOpen}
-                    onClick={toggleDock}
-                    // Below, because there is no "above" here: this button's top
-                    // edge is the top of the window, and a tooltip with nowhere
-                    // to go is what made this button unclickable every other
-                    // press — see the comment in `ui/tooltip.tsx`.
-                    side="bottom"
-                    className="h-11 w-11 rounded-none"
-                  >
-                    <PanelBottom />
-                  </IconButton>
-                </div>
               </header>
 
               {/* No screen of its own for an empty workspace. A folder is what
@@ -517,58 +510,81 @@ function Workbench() {
                   orientation="horizontal"
                   className="min-w-0 flex-1"
                 >
+                  {/*
+                    The pane, with the dock under it and spanning the whole
+                    width of it.
+
+                    The dock used to be a panel inside the Explorer column,
+                    stacked under the tree the way Conductor stacks its own
+                    Run/Terminal under its file list. That was inherited from a
+                    window whose file list is on the *left* and as wide as one
+                    wants; here the Explorer is on the right and capped at
+                    520px, which made a shell 60-odd columns wide — under the 80
+                    that virtually every CLI's output is written for — and
+                    stole the tree's height every time the dock opened. Both
+                    halves of that are about geometry rather than about what the
+                    dock *is*, so the dock moved and the Explorer went back to
+                    being one full-height list.
+
+                    Under the pane rather than under the whole window because
+                    the Explorer is what somebody consults *while* the dock is
+                    open — run a command, look at `Changes` — and a dock that
+                    shortened the tree to do it would be the coupling that was
+                    just removed, pointed the other way.
+                  */}
                   <ResizablePanel minSize={280}>
-                    {/*
-                      The strip beside the pane rather than above it, and the
-                      boundary between them draggable like every other one in
-                      the workbench: a column of tabs is a list of file names,
-                      and how much of a name fits is exactly what somebody with
-                      a deep tree wants to set for themselves.
-
-                      A nested group rather than a width this component holds,
-                      for the reason the columns either side are panels too —
-                      the drag, the keyboard handle and the minimum all come
-                      with it.
-                    */}
-                    {verticalTabs ? (
-                      <ResizablePanelGroup orientation="horizontal">
-                        <ResizablePanel minSize={240}>
+                    <ResizablePanelGroup orientation="vertical">
+                      {/* Enough to keep an editor readable when the dock has
+                          been dragged tall. */}
+                      <ResizablePanel minSize={200}>
+                        <div className="flex h-full min-w-0 flex-col">
+                          {/* Outside the panel rather than inside one, which is
+                              what keeps a table open on screen while the API
+                              panel is the one being looked at. */}
+                          <WorkspaceTabs pane={pane} />
                           {paneContent}
-                        </ResizablePanel>
+                        </div>
+                      </ResizablePanel>
 
-                        <ResizableHandle />
+                      <ResizableHandle className={cn(!dockOpen && "hidden")} />
 
-                        {/* Wide enough for a name and its icon, and capped
-                            where a column of tabs would start costing the
-                            editor more than the names are worth. */}
-                        <ResizablePanel
-                          defaultSize={224}
-                          minSize={140}
-                          maxSize={420}
-                        >
-                          <WorkspaceTabs pane={pane} orientation="vertical" />
-                        </ResizablePanel>
-                      </ResizablePanelGroup>
-                    ) : (
-                      <div className="flex h-full min-w-0 flex-col">
-                        {/* Outside the panel rather than inside one, which is
-                            what keeps a table open on screen while the API
-                            panel is the one being looked at. */}
-                        <WorkspaceTabs pane={pane} orientation="horizontal" />
-                        {paneContent}
-                      </div>
-                    )}
+                      {/* Collapsed rather than unmounted, and that is not
+                          tidiness: `ShellView`'s cleanup kills the pty, so a
+                          dock taken out of the tree takes the shell's running
+                          command with it.
+
+                          Collapsed to its tab strip rather than to nothing, so
+                          that shutting the dock leaves the row that reopens it
+                          — see `DOCK_STRIP_HEIGHT`. */}
+                      <ResizablePanel
+                        defaultSize={320}
+                        minSize={160}
+                        collapsible
+                        collapsedSize={DOCK_STRIP_HEIGHT}
+                        panelRef={dockPanel}
+                        // The same two-way binding the Explorer column has:
+                        // dragging the dock shut past its minimum collapses the
+                        // panel, and without this the store would still say open
+                        // — a chevron pointing down at a dock that is already
+                        // down, and one press of `⌃`` doing nothing.
+                        onResize={(size, _id, previous) => {
+                          if (previous === undefined) return
+
+                          const shown = size.inPixels > DOCK_STRIP_HEIGHT
+                          if (shown !== useDock.getState().open) {
+                            useDock.getState().toggle()
+                          }
+                        }}
+                      >
+                        <Dock />
+                      </ResizablePanel>
+                    </ResizablePanelGroup>
                   </ResizablePanel>
 
                   <ResizableHandle className={cn(!sidebar && "hidden")} />
 
-                  {/*
-                    The Explorer, with the dock under it — as Conductor stacks
-                    its file list over its Run/Terminal. Two stacked panels: the
-                    tree is the contents of the checkout being worked in, and
-                    the dock is what is *about* what is on screen rather than a
-                    thing that was opened.
-                  */}
+                  {/* The Explorer: the contents of the checkout being worked
+                      in, and the whole height of the column. */}
                   <ResizablePanel
                     defaultSize={320}
                     minSize={240}
@@ -590,27 +606,11 @@ function Workbench() {
                       }
                     }}
                   >
-                    <ResizablePanelGroup orientation="vertical">
-                      <ResizablePanel minSize={140}>
-                        {/* The Explorer, and nothing else — so no tabs above
-                            it. The other three lists are sections of the left
-                            column (hidden for now), and a strip of four tabs
-                            with one tab on it is a row of chrome that answers
-                            nothing. */}
-                        <FileTree onAddFolder={() => setAdding(true)} />
-                      </ResizablePanel>
-
-                      <ResizableHandle className={cn(!dockOpen && "hidden")} />
-                      <ResizablePanel
-                        defaultSize={320}
-                        minSize={160}
-                        collapsible
-                        collapsedSize={0}
-                        panelRef={dockPanel}
-                      >
-                        <Dock />
-                      </ResizablePanel>
-                    </ResizablePanelGroup>
+                    {/* The Explorer, and nothing else — so no tabs above it.
+                        The other three lists are sections of the left column
+                        (hidden for now), and a strip of four tabs with one tab
+                        on it is a row of chrome that answers nothing. */}
+                    <FileTree onAddFolder={() => setAdding(true)} />
                   </ResizablePanel>
                 </ResizablePanelGroup>
               </div>

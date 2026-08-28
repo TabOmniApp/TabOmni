@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils"
 import {
+  Columns3,
   File,
   FileText,
   Folder,
@@ -11,6 +12,8 @@ import {
   Terminal,
 } from "lucide-react"
 
+import { unfinishedCount } from "@/lib/board/cards"
+import { useBoard } from "@/lib/board/store"
 import { useExplorer, type OpenTab } from "@/lib/db/explorer-store"
 import { useChanges } from "@/lib/files/changes"
 import { isDeleted, isDirty, useFiles } from "@/lib/files/store"
@@ -60,6 +63,12 @@ export function useTabItems(): Map<string, TabStripItem> {
 
   const changesOpenIds = useChanges((state) => state.openIds)
   const changesByRoot = useChanges((state) => state.byRoot)
+
+  const boardOpenIds = useBoard((state) => state.openIds)
+  const boardCards = useBoard((state) => state.cards)
+  // The columns too, because what the badge counts is the cards that are not in
+  // the **last** one, and which column that is, is the project's own to decide.
+  const boardColumns = useBoard((state) => state.columns)
 
   const fileOpenIds = useFiles((state) => state.openIds)
   // The one tab drawn in italics: a file being looked at rather than kept.
@@ -183,6 +192,26 @@ export function useTabItems(): Map<string, TabStripItem> {
   }
 
   /*
+   * `Board`, one per project — the same wording argument as `Changes` above:
+   * the tab is about *this* project's board, and which project that is, the
+   * strip already says by holding the tab only while that project is the one
+   * being worked in. The count is what is **not** done, since a board whose
+   * every card is finished is not a board to go and look at.
+   */
+  for (const rootId of boardOpenIds) {
+    const folder = workspaceFolders.find((entry) => entry.id === rootId)?.name
+    const waiting = unfinishedCount(boardCards, boardColumns, rootId)
+
+    add({
+      id: PREFIX.board + rootId,
+      label: "Board",
+      icon: <Columns3 className="size-3.5 shrink-0" />,
+      note: waiting ? String(waiting) : undefined,
+      title: folder ?? "Board",
+    })
+  }
+
+  /*
    * A project's chats, named by what was first asked in them.
    *
    * `Untitled` until there is something to name it after, which is what the
@@ -297,6 +326,8 @@ function groupName(
     // `Changes` has no `groupOf` either, for the reason a chat's group is
     // never reached: there is one of these per project already.
     changes: [],
+    // Nor has `board`, and for exactly that reason.
+    board: [],
     // Every chat is in a project, so the name above is always the answer and
     // this is never reached for one.
     worktree: [],
@@ -315,6 +346,7 @@ function groupName(
     worktree: "Chats",
     changes: "",
     database: "",
+    board: "",
   }[pane]
 }
 

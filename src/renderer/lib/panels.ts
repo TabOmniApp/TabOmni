@@ -1,5 +1,6 @@
 import { chatRootId } from "@shared/api"
 
+import { useBoard } from "./board/store"
 import { useExplorer, type OpenTab } from "./db/explorer-store"
 import type { Relation } from "./db/engines/types"
 import { useChanges } from "./files/changes"
@@ -211,6 +212,13 @@ const changesActive = (
     ? state.selectedId
     : null
 
+const boardActive = (
+  state: ReturnType<typeof useBoard.getState>
+): string | null =>
+  state.selectedId && state.openIds.includes(state.selectedId)
+    ? state.selectedId
+    : null
+
 /**
  * The root a file is in, for scoping — `fileGroupOf`'s answer, with the missing
  * case spelled as null rather than as the group tabs under nothing.
@@ -308,6 +316,20 @@ const PANELS: Record<Pane, PanelTabs> = {
     groupOf: worktreeChatGroupOf,
     rootOf: worktreeChatRootOf,
   },
+  /* One project's kanban board. No `groupOf`: one tab per project has nothing
+   * to gather, which is also true of `changes`. */
+  board: {
+    open: () => useBoard.getState().openIds,
+    active: () => boardActive(useBoard.getState()),
+    select: (id) => useBoard.getState().select(id),
+    close: (id) => useBoard.getState().close(id),
+    closeOthers: (id) => useBoard.getState().closeOthers(id),
+    closeAll: () => useBoard.getState().closeAll(),
+    reorder: (ids) => useBoard.getState().reorder(ids),
+    // The tab's id **is** the root's, so this is the identity — the same as
+    // `changes` above, and for the same reason.
+    rootOf: (id) => id,
+  },
   note: {
     open: () => useNotes.getState().openIds,
     active: () => noteActive(useNotes.getState()),
@@ -330,6 +352,7 @@ const STORES = {
   api: useApi,
   note: useNotes,
   worktree: useWorktreeChats,
+  board: useBoard,
 } as const
 
 /**
@@ -783,7 +806,7 @@ export function useActiveTabId(pane: Pane): string | null {
 }
 
 /** Which tab each panel is showing, subscribed to. Split out because two hooks
- * want the same five selectors and the rules say they must all be called. */
+ * want the same selectors and the rules say they must all be called. */
 function usePanelActive(pane: Pane): string | null {
   return {
     files: useFiles(fileActive),
@@ -792,6 +815,7 @@ function usePanelActive(pane: Pane): string | null {
     api: useApi(apiActive),
     worktree: useWorktreeChats(worktreeChatActive),
     note: useNotes(noteActive),
+    board: useBoard(boardActive),
   }[pane]
 }
 

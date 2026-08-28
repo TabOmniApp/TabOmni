@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils"
 import { blocksOf } from "@/lib/worktree-chat/activity"
 import { placeOf, useWorktreeChats } from "@/lib/worktree-chat/store"
 import { chatLine, totalOf, usageDetail } from "@/lib/worktree-chat/usage"
+import { ChatCardChip } from "../board/chat-card-chip"
 import { ChatAsk } from "./chat-ask"
 import { ChatComposer, type ChatComposerHandle } from "./chat-composer"
 import { ChatActivity } from "./chat-activity"
@@ -300,6 +301,11 @@ function Conversation({
           </p>
         </div>
       )}
+
+      {/* Above the transcript rather than beside the composer: it is a fact
+          about the conversation, not a control over the next turn. Draws
+          nothing at all for a chat no card names — see `ChatCardChip`. */}
+      <ChatCardChip chatId={chatId} />
 
       <div
         ref={box}

@@ -17,6 +17,9 @@ export const PREFIX: Record<Pane, string> = {
   api: "api:",
   worktree: "chat:",
   note: "note:",
+  // A **root** id too, for the same reason `changes` is: one board per project,
+  // and that is what it is about.
+  board: "board:",
 }
 
 /**

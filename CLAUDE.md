@@ -237,9 +237,31 @@ The shape, in one pass: the **left column** (`workspace-sidebar.tsx`) is
 `Projects` and nothing else for now — `SIDEBAR_SECTIONS` in `lib/projects.ts` is
 the one line saying which sections are drawn, and putting `Database` / `Notes` /
 `API` back is adding an id to it; those panels, stores and tabs all still work.
-The **right-hand panel** is Explorer, with `All files` and `Changes` tabs. The
-**dock** below it is `Run` and `Terminal`, collapsed rather than unmounted
-because a pty taken out of the tree ends. A project's rows are its **chats**.
+The **right-hand panel** is Explorer, with `All files` and `Changes` tabs, and it
+is the whole height of its column. The **dock** — `Run` and `Terminal` — is under
+the **pane**, spanning its width, collapsed rather than unmounted because a pty
+taken out of the tree ends. It used to be the lower half of the Explorer column,
+where a 520px cap left the shell ~60 columns wide; `docs/design.md` has the
+argument. It collapses to its own tab row rather than to nothing — that row is
+the way back, which is why no dock button is left in the title bar — so the row's
+height and the panel's `collapsedSize` are one exported `DOCK_STRIP_HEIGHT`
+rather than an `h-9` beside a `36`. `⌃\`` toggles the Terminal tab
+(`isTerminalShortcut`), and it is the one shortcut deliberately _not_ refused
+inside a pty. A project's rows are its **chats**.
+
+A project also has a **board** — one tab per project whose id is the project's,
+so `rootOf` is the identity the way it is for `changes`. Its columns are the
+project's own (added, renamed, recoloured, dragged), seeded as `Todo` / `Doing` /
+`Done`, and their **ids are those words** so cards written before columns were
+records need no migration. A card may name one chat, and that link is **UI-level
+in both directions**: the card opens or starts the chat (through `create`'s
+existing draft argument) and shows whether it is answering; the chat's pane
+carries a chip naming its card. Deleting a column rewrites no cards — an orphan
+is drawn in the first column (`columnOf`), and `membership` in
+`lib/board/cards.ts` is why the drawing and the drop agree about that. The agent
+cannot write to the board — this app serves no MCP server of its own.
+`docs/design.md` § Board carries all of it, including the reversal of the
+"three fixed columns" decision and why this is not the deleted Tasks layer.
 
 ### Constraints that bite
 
@@ -300,6 +322,7 @@ Logic worth testing is split out from the drawing: `lib/worktree-chat/activity.t
 (`test/chat-activity.ts`), `lib/worktree-chat/usage.ts` (`test/chat-usage.ts`),
 `lib/files/review.ts` (`test/review.ts`), `lib/tab-groups.ts`
 (`test/tab-groups.ts`), `lib/files/roots.ts` (`test/file-roots.ts`),
+`lib/board/cards.ts` (`test/board-cards.ts`),
 `lib/files/block-doc.ts`, `lib/worktree-chat/mention-text.ts`
 (`test/chat-mentions.ts`), `lib/worktree-chat/mcp-servers.ts` with
 `main/mcp-servers.ts`'s own `readServer` (`test/mcp-servers.ts`). Put new logic on that side of the line.
