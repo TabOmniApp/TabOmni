@@ -787,6 +787,40 @@ export type AssistantEvent =
    * At most once per chat, and never for one the user has named.
    */
   | { type: "title"; title: string }
+  /**
+   * The subagents this chat has running, as a whole list.
+   *
+   * A **level**, not a pair of edges, for the reason the SDK gives its own
+   * `background_tasks_changed` the same shape: a start and a finish that have to
+   * be matched up leave a spinner running for ever the day one of them is
+   * missed. A receiver replaces its list with this one.
+   *
+   * Not written down and not a line of the conversation: what a subagent did
+   * arrives as the tool rows it produced, and this is only what is happening
+   * *now*. A chat read back off disk has none.
+   */
+  | { type: "agents"; agents: ChatAgent[] }
+
+/**
+ * One subagent running under a turn.
+ *
+ * Read off the CLI's `task_started` / `task_progress` heartbeat, which is the
+ * only account of a subagent that is *still working*: its tool calls arrive on
+ * the same stream and its answer arrives at the end, but between the two — a
+ * minute, five minutes — the transcript says nothing and the pane had nothing to
+ * draw. That gap is the whole reason this exists.
+ */
+export type ChatAgent = {
+  /** The CLI's own task id, which is what the heartbeat is keyed by. */
+  id: string
+  /** What the turn asked for, in the model's own words. */
+  description: string
+  /** Which agent it is — `Explore`, `general-purpose` — where the CLI says. */
+  subagentType?: string
+  /** The last tool it called, so a long-running agent shows movement rather
+   * than only a name. */
+  lastTool?: string
+}
 
 /** One of the choices in a question the model asked. */
 export type ChatAskOption = {
@@ -1677,6 +1711,22 @@ export type WorktreeChat = {
    */
   started?: boolean
   /**
+   * The `CLAUDE_CONFIG_DIR`s the CLI has this session in, `""` for the default.
+   *
+   * `started` alone is the wrong question, because a session is a file under
+   * *one* account's config directory: a chat started on one profile and
+   * continued on another was resumed against a directory that has never heard of
+   * the id, and the CLI answered `No conversation found with session ID`. Which
+   * profile a chat is on is the toolbar's to change mid-conversation, so this
+   * has to be a list rather than the one directory it started in.
+   *
+   * Optional like `started`, and read together with it: a chat written before
+   * this field has no list, and `started === true` is then all there is to go
+   * on — resume, the way it always did, and let `isSessionMissing` in
+   * `worktree-chat.ts` catch the profile that never had it.
+   */
+  startedIn?: string[]
+  /**
    * The model, effort and permission this chat is on.
    *
    * Optional for the same reason `started` is: a chat written before the
@@ -1789,6 +1839,37 @@ export type ReviewNote = {
 }
 
 /**
+ * How bad a finding is, in the model's own judgement.
+ *
+ * Four levels rather than three, because this is the scale a reviewer coming
+ * from a forge already reads — CodeQL, Copilot Autofix and every security alert
+ * GitHub raises use exactly these words, in this order. That is the whole
+ * argument for it: the levels are not defined here, they are *recognised*, and a
+ * scale somebody has to learn is one they end up ignoring.
+ *
+ * Deliberately **not** `BoardPriority`, which is the app's other three-level
+ * scale. They read alike and mean different things: a priority is what somebody
+ * decided to do next, and this is what a model thinks a defect costs. Sharing
+ * the type would make the board's `high` and a review's `high` the same word by
+ * accident, and the first time one of them grew a level the other would too.
+ *
+ * **Absent is a real state** and not a fourth-and-a-half level: a remark a
+ * person typed has no severity at all, and neither has one from a turn that
+ * answered without a usable one — see `asFinding` in `main/review-agent.ts`,
+ * which drops what it cannot read rather than guessing a middle.
+ */
+export type ReviewSeverity = "critical" | "high" | "medium" | "low"
+
+/** Them worst-first, which is the order they are worth reading in and the order
+ * anything sorting by them wants. */
+export const REVIEW_SEVERITY_IDS: ReviewSeverity[] = [
+  "critical",
+  "high",
+  "medium",
+  "low",
+]
+
+/**
  * A range of a diff's lines, and the conversation about it.
  *
  * **Written to disk**, in `REVIEW_FILE` — which is why these types are in the
@@ -1831,6 +1912,29 @@ export type ReviewThread = {
    * dropping it would be this app deciding a review was finished.
    */
   stale?: boolean
+  /**
+   * Whether this conversation has been settled — a forge's *Resolve
+   * conversation*, and the same bargain.
+   *
+   * **Absent is open**, so every thread written before there was such a thing
+   * reads as one, and nothing on disk needs migrating. Resolving neither deletes
+   * the thread nor moves it: it is drawn collapsed on its own lines, still
+   * openable, still repliable — a remark somebody dealt with is the record of
+   * how it was dealt with, which is the whole reason a forge keeps it. What it
+   * *does* buy is the count: the bar and the Changes list count the threads
+   * still asking for something, so a diff worked through reads as done.
+   */
+  resolved?: boolean
+  /**
+   * How bad the finding that opened this thread is — see `ReviewSeverity`.
+   *
+   * On the **thread** rather than on the note, because it is a property of the
+   * finding and a thread is one finding: the replies argue about it, and one
+   * that talked the severity down would be a badge that changed as the
+   * conversation went on. Absent on every thread a person opened, which is the
+   * honest answer — a reviewer typing a remark is not filling in a form.
+   */
+  severity?: ReviewSeverity
 }
 
 /**
@@ -1853,6 +1957,10 @@ export type ReviewFinding = {
   toLine: number
   /** The remark, as markdown. */
   body: string
+  /** How bad the turn thinks it is, when it said so in a word this could read.
+   * See `ReviewSeverity`, and `asFinding` for why an unreadable one is dropped
+   * rather than rounded to the middle. */
+  severity?: ReviewSeverity
 }
 
 /**
@@ -2743,7 +2851,55 @@ export type DesktopApi = {
    * the percentages are averaged over.
    */
   systemUsage: () => Promise<SystemUsage>
+
+  /**
+   * Whether a newer release exists — asked of the GitHub releases API and
+   * answered against this build's own version.
+   *
+   * Polled from the renderer rather than pushed, like `systemUsage`: nothing in
+   * the main process knows when a release is cut, so the only event there could
+   * be is a timer, and a timer belongs beside the thing it draws.
+   */
+  checkForUpdate: () => Promise<UpdateCheck>
+
+  /**
+   * Installs a release and reopens the app, by running the same `install.sh`
+   * the README hands people.
+   *
+   * Resolves with nothing only when the installer could not be *started*, and
+   * throws when it could not be started at all — success is not something this
+   * call can report, because the script's second act is quitting the app that
+   * made it. macOS only, which is what `installable` on `UpdateCheck` says.
+   */
+  installUpdate: (version: string) => Promise<void>
 }
+
+/**
+ * What `checkForUpdate` found.
+ *
+ * `unknown` rather than a rejection, because "GitHub is unreachable" is an
+ * ordinary answer for a check that runs on a timer in the background: the badge
+ * this feeds should stay quiet, not raise an error nobody asked for.
+ */
+export type UpdateCheck =
+  | { status: "current"; current: string }
+  | {
+      status: "available"
+      /** The release's version, without the tag's `v`. */
+      version: string
+      current: string
+      /** The release notes, as GitHub's markdown — empty when it has none. */
+      notes: string
+      /** The release's page, for the "What's new" link. */
+      url: string
+      /**
+       * Whether `installUpdate` can do anything here. `install.sh` is a macOS
+       * script — it mounts a `.dmg` and `ditto`s a bundle — so everywhere else
+       * the only honest button is the one that opens the release page.
+       */
+      installable: boolean
+    }
+  | { status: "unknown"; current: string; error: string }
 
 /**
  * What the menus ask the renderer to do.
@@ -2879,4 +3035,6 @@ export const IPC = {
   terminalData: "terminal:data",
   terminalExit: "terminal:exit",
   systemUsage: "system:usage",
+  checkForUpdate: "update:check",
+  installUpdate: "update:install",
 } as const

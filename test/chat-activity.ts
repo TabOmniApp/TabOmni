@@ -199,6 +199,15 @@ check(
     countsOf([tool("Task", "Explore"), tool("Read", "/a")]).tools === 1
 )
 
+/* The CLI renamed the tool, and a transcript on disk holds whichever name was
+ * current when it was written — so both are the subagent. Testing only the old
+ * one is what let every `Agent` row be counted as an ordinary tool call. */
+check(
+  "under either of its names",
+  countsOf([tool("Agent", "Explore"), tool("Read", "/a")]).subagents === 1 &&
+    countsOf([tool("Agent", "Explore"), tool("Read", "/a")]).tools === 1
+)
+
 check(
   "thinking and narration are both messages",
   countsOf([thought("a"), said("b")]).messages === 2
@@ -309,6 +318,18 @@ check(
   agent.title === "Find chat attachment code"
 )
 check("never the prompt", !JSON.stringify(agent).includes("very long prompt"))
+
+const renamed = describeCall("Agent", {
+  description: "Find chat attachment code",
+  subagent_type: "Explore",
+  prompt: "a very long prompt ".repeat(40),
+})
+check(
+  "the same under the tool's new name",
+  renamed.summary === "Explore" &&
+    !JSON.stringify(renamed).includes("very long prompt"),
+  renamed
+)
 
 check(
   "a call with nothing to say has no extras",

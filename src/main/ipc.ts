@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 import {
+  app,
   clipboard,
   dialog,
   ipcMain,
@@ -64,6 +65,7 @@ import { systemUsage } from "./system-usage"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
 import { TerminalManager } from "./terminal"
 import { TsServers } from "./tsserver"
+import { checkForUpdate, startInstaller } from "./updater"
 import { DirectoryWatchers } from "./watch"
 
 /** What `readImageDataUrl` will actually recognize — the same extensions
@@ -81,6 +83,25 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 /** A thumbnail is all this is for — never worth holding a huge image whole
  * in memory just to preview it. */
 const MAX_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024
+
+/**
+ * Where `install.sh` puts the app, and so the bundle the updater reopens.
+ *
+ * Deliberately not this process's own `app.getPath("exe")`: the script installs
+ * into `/Applications` whatever directory the running copy was launched from,
+ * so reopening where *this* one lives could open the build that was just
+ * replaced — or, from a dev run, an Electron binary in `node_modules`.
+ */
+const APP_DIR = "/Applications/TabOmni.app"
+
+/** The installer, shipped in the bundle (`extraResources`) rather than fetched:
+ * a button that runs a script downloaded at the moment it is pressed is a
+ * different thing to agree to than one that runs the app's own. */
+function installerScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "install.sh")
+    : path.join(app.getAppPath(), "install.sh")
+}
 
 /**
  * An image on disk as a data URL.
@@ -1084,6 +1105,29 @@ export function registerIpc(
   )
 
   ipcMain.handle(IPC.systemUsage, () => systemUsage())
+
+  ipcMain.handle(IPC.checkForUpdate, () =>
+    checkForUpdate(app.getVersion(), process.platform)
+  )
+
+  ipcMain.handle(IPC.installUpdate, async (_event, version: string) => {
+    if (process.platform !== "darwin") {
+      throw new Error(
+        "install.sh is a macOS script — open the release page instead."
+      )
+    }
+    // A version reaching a command line, from the renderer, off the network:
+    // checked here rather than trusted, even though the only thing that ever
+    // sends one is the answer `checkForUpdate` just gave.
+    if (!/^[0-9A-Za-z.+-]{1,64}$/.test(version)) {
+      throw new Error(`Not a version: ${version}`)
+    }
+    await startInstaller({
+      script: installerScript(),
+      version,
+      appPath: APP_DIR,
+    })
+  })
 
   return {
     processes,

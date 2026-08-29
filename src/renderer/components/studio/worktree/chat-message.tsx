@@ -17,7 +17,7 @@ import type { AssistantMessage, ChatTodo } from "@shared/api"
 import { iconFor } from "@/lib/files/icons"
 import { nameOf } from "@/lib/files/paths"
 import { cn } from "@/lib/utils"
-import { AGENT_TOOL } from "@/lib/worktree-chat/activity"
+import { isAgentTool } from "@/lib/worktree-chat/activity"
 import { usageDetail, usageLine } from "@/lib/worktree-chat/usage"
 import { compactLine } from "@/lib/worktree-chat/window"
 import { MarkdownView } from "../markdown-view"
@@ -211,7 +211,7 @@ function CopyMessage({ text }: { text: string }) {
  */
 function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
   const [open, setOpen] = useState(false)
-  const agent = of.name === AGENT_TOOL
+  const agent = isAgentTool(of.name)
 
   /*
    * An edit says how much it moved, not what the CLI said about it.

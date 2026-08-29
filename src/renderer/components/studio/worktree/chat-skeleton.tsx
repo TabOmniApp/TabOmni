@@ -1,5 +1,7 @@
+import { Bot } from "lucide-react"
 import { useEffect, useState } from "react"
 
+import type { ChatAgent } from "@shared/api"
 import { cn } from "@/lib/utils"
 import { Spinner } from "@/components/ui/spinner"
 import { elapsed } from "@/lib/worktree-chat/since"
@@ -10,15 +12,61 @@ import { elapsed } from "@/lib/worktree-chat/since"
  * and read as content arriving that never did — the rows a turn actually draws
  * land within a second of the spinner anyway.
  */
-export function ChatSkeleton({ startedAt }: { startedAt?: number }) {
+export function ChatSkeleton({
+  startedAt,
+  agents = [],
+}: {
+  startedAt?: number
+  /** The subagents running under this turn, if any — see `ChatAgent`. */
+  agents?: ChatAgent[]
+}) {
   return (
-    <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
-      <Spinner className="size-3" />
-      <span className="text-muted-foreground/60">Working…</span>
-      {startedAt !== undefined && <Elapsed startedAt={startedAt} />}
+    <div className="flex flex-col gap-1 px-1 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2">
+        <Spinner className="size-3" />
+        <span className="text-muted-foreground/60">
+          {/* The count on the spinner's own line, because it is the answer to
+              the question somebody is staring at it with: nothing is being
+              written, and this says who is out there working. */}
+          {agents.length > 0
+            ? `Working · ${agents.length} ${agents.length === 1 ? "agent" : "agents"}…`
+            : "Working…"}
+        </span>
+        {startedAt !== undefined && <Elapsed startedAt={startedAt} />}
+      </div>
+
+      {/* One line each, capped: a turn that fanned out to seven agents is the
+          case this was written for, and seven full descriptions push the answer
+          it is waiting for off the screen. The last tool is what shows movement
+          — a name on its own for five minutes reads as something stuck. */}
+      {agents.slice(0, AGENTS_SHOWN).map((agent) => (
+        <div
+          key={agent.id}
+          className="flex items-baseline gap-1.5 pl-5 text-[0.7rem]"
+        >
+          <Bot className="size-3 shrink-0 translate-y-0.5 text-muted-foreground/50" />
+          <span className="min-w-0 truncate text-muted-foreground/70">
+            {agent.description}
+          </span>
+          {agent.lastTool && (
+            <span className="shrink-0 font-mono text-muted-foreground/40">
+              {agent.lastTool}
+            </span>
+          )}
+        </div>
+      ))}
+      {agents.length > AGENTS_SHOWN && (
+        <div className="pl-5 text-[0.7rem] text-muted-foreground/40">
+          and {agents.length - AGENTS_SHOWN} more
+        </div>
+      )}
     </div>
   )
 }
+
+/** How many agents are named before the rest become a count. Four is what fits
+ * above the composer without the turn's own last line leaving the screen. */
+const AGENTS_SHOWN = 4
 
 /**
  * The running clock beside `Working…`.

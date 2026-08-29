@@ -32,13 +32,20 @@ import {
   changesUnder,
   commentCountsUnder,
   countsUnder,
+  worstUnder,
   type ChangeTreeNode,
 } from "@/lib/files/change-tree"
 import { splitChanges, useChanges } from "@/lib/files/changes"
 import { GIT_LABELS, GIT_LETTERS, GIT_TONES } from "@/lib/files/git-status"
 import { nameOf } from "@/lib/files/paths"
 import type { FileRoot } from "@/lib/files/roots"
-import { threadsOf, useReview } from "@/lib/files/review"
+import {
+  openThreads,
+  severityAtRank,
+  severityRank,
+  threadsOf,
+  useReview,
+} from "@/lib/files/review"
 import { useFiles } from "@/lib/files/store"
 import { useStudio } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -100,12 +107,22 @@ export function ChangesList({ root }: { root: FileRoot }) {
    * rather than handed the threads themselves, so `change-tree.ts` stays free
    * of the review's own shape (`commentCountsUnder`). */
   const threads = useReview((state) => state.threads)
-  const commentCounts = useMemo(() => {
+  const [commentCounts, commentRanks] = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const thread of threadsOf({ threads }, root.id)) {
+    /* And the worst severity on each, as a rank — what tints the badge. Two
+       maps rather than one of pairs, because the tree walks them with two
+       different reductions (a sum and a maximum) and neither wants the other's
+       field. */
+    const ranks = new Map<string, number>()
+    /* The open ones: the badge is read as "this file still wants looking at",
+       and a resolved conversation is the opposite of that. It is not gone —
+       opening the file still draws it, folded. */
+    for (const thread of openThreads(threadsOf({ threads }, root.id))) {
       counts.set(thread.path, (counts.get(thread.path) ?? 0) + 1)
+      const rank = severityRank(thread.severity)
+      ranks.set(thread.path, Math.max(ranks.get(thread.path) ?? 0, rank))
     }
-    return counts
+    return [counts, ranks] as const
   }, [threads, root.id])
 
   /** Which row the menu is about, or null for the list as a whole — the same
@@ -152,6 +169,7 @@ export function ChangesList({ root }: { root: FileRoot }) {
         indent={0}
         shut={shut}
         commentCounts={commentCounts}
+        commentRanks={commentRanks}
         onFold={(key) =>
           setShut((state) =>
             state.includes(key)
@@ -375,6 +393,7 @@ function Nodes({
   indent,
   shut,
   commentCounts,
+  commentRanks,
   onFold,
   onMenu,
   onDiscard,
@@ -385,6 +404,8 @@ function Nodes({
   indent: number
   shut: string[]
   commentCounts: Map<string, number>
+  /** The worst severity on each file, as a rank — see `severityRank`. */
+  commentRanks: Map<string, number>
   onFold: (key: string) => void
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
@@ -400,6 +421,7 @@ function Nodes({
               root={root}
               indent={indent}
               commentCount={commentCounts.get(node.change.path) ?? 0}
+              commentRank={commentRanks.get(node.change.path) ?? 0}
               onMenu={onMenu}
               onDiscard={onDiscard}
             />
@@ -418,6 +440,7 @@ function Nodes({
               open={open}
               staged={pile === "staged"}
               commentCount={commentCountsUnder(node, commentCounts)}
+              commentRank={worstUnder(node, commentRanks)}
               onToggle={() => onFold(key)}
               onMenu={onMenu}
               onDiscard={onDiscard}
@@ -431,6 +454,7 @@ function Nodes({
                   indent={indent + 1}
                   shut={shut}
                   commentCounts={commentCounts}
+                  commentRanks={commentRanks}
                   onFold={onFold}
                   onMenu={onMenu}
                   onDiscard={onDiscard}
@@ -460,6 +484,7 @@ function DirRow({
   open,
   staged,
   commentCount,
+  commentRank,
   onToggle,
   onMenu,
   onDiscard,
@@ -472,6 +497,8 @@ function DirRow({
   /** Review threads on the files under this folder, summed — see
    * `commentCountsUnder`. */
   commentCount: number
+  /** The worst of their severities, as a rank — what tints it. */
+  commentRank: number
   onToggle: () => void
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
@@ -509,7 +536,7 @@ function DirRow({
           aria-hidden
           className="flex shrink-0 items-center gap-1.5 group-focus-within/row:invisible group-hover/row:invisible"
         >
-          <CommentBadge count={commentCount} />
+          <CommentBadge count={commentCount} rank={commentRank} />
           {counts && (
             <span className="font-mono text-[0.65rem] tabular-nums">
               <span className={GIT_TONES.added}>+{counts.added}</span>{" "}
@@ -598,6 +625,7 @@ function ChangeRow({
   root,
   indent,
   commentCount,
+  commentRank,
   onMenu,
   onDiscard,
 }: {
@@ -607,6 +635,8 @@ function ChangeRow({
   /** Review threads left on this file — see `commentCounts` in
    * `ChangesList`. */
   commentCount: number
+  /** The worst of their severities, as a rank — what tints it. */
+  commentRank: number
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
 }) {
@@ -716,7 +746,7 @@ function ChangeRow({
           <span className="text-center font-mono text-[0.65rem]">
             {GIT_LETTERS[change.state]}
           </span>
-          <CommentBadge count={commentCount} />
+          <CommentBadge count={commentCount} rank={commentRank} />
           <Counts change={change} />
         </span>
       </SideRow>
@@ -840,15 +870,45 @@ function RowAction({
  * row, the checkout's diff tab opens on this file, and the thread is right
  * there. See `commentCounts` in `ChangesList`.
  */
-function CommentBadge({ count }: { count: number }) {
+function CommentBadge({ count, rank }: { count: number; rank: number }) {
   if (count === 0) return null
 
+  const worst = severityAtRank(rank)
   return (
-    <span className="flex items-center gap-0.5 text-muted-foreground">
+    <span
+      className={cn(
+        "flex items-center gap-0.5",
+        BADGE_TONES[rank] ?? "text-muted-foreground"
+      )}
+      title={
+        worst
+          ? `${count} open comment${count === 1 ? "" : "s"} — worst is ${worst}`
+          : undefined
+      }
+    >
       <MessageSquare aria-hidden className="size-2.5" />
       <span className="font-mono text-[0.65rem] tabular-nums">{count}</span>
     </span>
   )
+}
+
+/**
+ * What a row's badge is coloured by: the **worst** severity on it.
+ *
+ * The complaint this answers is that `3` says how much and not how bad, so a
+ * reviewer opened three files to find the one with the `critical` in it. The
+ * badge is the only thing on that row a review owns, so it is where the answer
+ * has to go.
+ *
+ * Only the top two are coloured, exactly as the chip in a thread is
+ * (`SEVERITY_CHIP` in `review-panel.tsx`) and for the same reason: a tree where
+ * every badge is a different colour is a tree with no signal in it. Ranks are
+ * `severityRank`'s — 4 is `critical`, 3 is `high` — and everything below is the
+ * muted grey the badge has always been.
+ */
+const BADGE_TONES: Record<number, string> = {
+  4: "text-red-600 dark:text-red-400",
+  3: "text-amber-600 dark:text-amber-400",
 }
 
 function Counts({ change }: { change: GitChange }) {

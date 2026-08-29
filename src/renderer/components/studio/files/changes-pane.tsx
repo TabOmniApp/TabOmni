@@ -11,7 +11,8 @@ import {
 import { useChanges } from "@/lib/files/changes"
 import { fileRootsOf } from "@/lib/files/roots"
 import { useFiles } from "@/lib/files/store"
-import { isStudioShortcut } from "@/lib/shortcuts"
+import { useReview } from "@/lib/files/review"
+import { isReviewStepShortcut, isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio } from "@/lib/store"
 import { SECTION_ACCENT } from "../section-marks"
 import { FilePane } from "./file-workspace"
@@ -77,6 +78,22 @@ export function ChangesPane() {
    */
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      /*
+       * `⌥↓` / `⌥↑` walk the review, across files — see `step`.
+       *
+       * Here beside ⌘S because this is the component that knows which checkout
+       * is on screen, and for the same reason that key is here rather than in
+       * the editor: the diff holds no focus to bind a key on. Guarded by
+       * `shown`, so the other pane's arrows are its own.
+       */
+      const delta =
+        rootId !== null && shown ? isReviewStepShortcut(event) : null
+      if (delta && rootId !== null) {
+        event.preventDefault()
+        useReview.getState().step(rootId, delta)
+        return
+      }
+
       if (!isStudioShortcut(event, "s")) return
       if (!path || !shown) return
 
@@ -88,7 +105,7 @@ export function ChangesPane() {
     return () => {
       window.removeEventListener("keydown", onKeyDown, { capture: true })
     }
-  }, [path, shown])
+  }, [path, rootId, shown])
 
   if (!root) {
     return (
@@ -103,12 +120,11 @@ export function ChangesPane() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1">
         {/*
-          `ReviewPanel`'s own bar — `Review`, `Discard`, the comment count —
-          must not wait on a file being picked: it is the one thing that can
-          start a whole-diff review, and gating it behind a click defeats the
-          badge on the Changes tree that exists to say "look here without
-          opening anything first". So the pane still renders with nothing
-          selected, and only the diff itself is swapped for the notice.
+          Only the diff is swapped for the notice: `ReviewPanel` is drawn either
+          way. It has nothing in flow to lose by it — the bar that used to sit
+          under here is gone, and what is left is portals into the diff plus the
+          strip a stranded composer needs — but a pane that unmounted it would
+          be one that dropped every thread's host node on the way past.
         */}
         {path ? (
           <FilePane

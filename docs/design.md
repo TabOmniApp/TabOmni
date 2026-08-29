@@ -637,8 +637,10 @@ Four things fall out of that, and each cost something to get right:
 - **A renderer can no longer work out whether a chat is busy.** "Sent, and no
   `done` yet" was the whole truth while a chat refused a second message; now a
   turn can end with another already queued behind it. So busy is main's to say,
-  as its own `busy` event, taken from the CLI's `session_state_changed` where it
-  sends one and from the pushes and results otherwise.
+  as its own `busy` event, taken from the CLI's `session_state_changed` — which
+  it only sends when `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` asks it to — and
+  from the pushes and results otherwise. See The subagents, below, for why the
+  fallback is not good enough on its own.
 - **The toolbar moves under a running session.** Model and effort go over as
   control requests (`setModel`, `applyFlagSettings`) instead of being an argument
   list a new process is spawned with, and the permission never was the CLI's —
@@ -799,6 +801,44 @@ rather than state in the pane: the pane is one instance reused across the strip,
 so a clock local to it would restart every time somebody looked at another chat.
 It survives a queued message and an `ask` for the same reason — it is how long
 this stretch of work has been going, not the current turn.
+
+#### The subagents, while they are the only thing happening
+
+**A turn that hands its work to subagents used to lose the spinner altogether**,
+and the two halves of that were separate faults.
+
+The first is which signal says a chat is busy. The CLI has an authoritative one
+— `session_state_changed`, whose `idle` is documented as firing only once the
+background-agent loop has exited — but it emits none of them unless
+`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` is set, which this app did not set. So
+`reportsState` in `claude-agent.ts` never turned true and busy fell back to "a
+`result` arrived", which is exactly wrong here: a turn that starts agents in the
+background _is_ finished as far as its result is concerned, and the agents go on
+working for minutes afterwards. Read back off a real transcript, the result line
+landed immediately after `7 agent đang chạy song song` and forty-odd rows of the
+agents' own work arrived under a chat the app was drawing as idle. The env var is
+one line and the fallback stays for a `claude` too old to answer it.
+
+The second is that there was nothing to draw in the gap. A subagent's tool calls
+do arrive on the same stream, but a long one goes quiet for minutes at a time,
+and the pane's only account of it was a tool row that had not come back yet. What
+the CLI sends in the meantime is a heartbeat — `task_started`, `task_progress`,
+`task_updated`, `task_notification` — which `read` was dropping with every other
+system frame. It is now kept as a **set** of running agents, announced whole
+(`ChatAgent`, the `agents` event) rather than as starts and finishes to be paired
+up, for the reason the SDK gives its own `background_tasks_changed` the same
+shape: a bookend that goes missing leaves a spinner nobody can stop. The spinner
+says `Working · 3 agents…` and names up to four of them with the last tool each
+one called, which is what turns a minute of silence into something moving.
+
+**The tool has two names.** It was `Task`, it is now `Agent`, and both are real:
+which one arrives depends on the user's own CLI, and a transcript on disk holds
+whichever was current when it was written. Testing for one of them was a bug in
+three places at once — subagents counted as ordinary tool calls in the fold, the
+row drawn with the fallback wrench and the whole prompt as its argument, and, the
+one that mattered, `Task` alone on `READ_TOOLS` and `ALLOWED_TOOLS`, so a mode
+below `Full access` refused every handoff to a subagent. `AGENT_TOOLS` is the
+pair, kept once per process because the two never import each other.
 
 #### What a turn cost
 
@@ -3214,6 +3254,36 @@ the reversal is only legible beside it:
   into `shared/api.ts`: main is the one writing them now. Writes are **debounced**,
   unlike the board's, because this store is written to by a _drag_ — every row a
   range crosses is a `set`.
+- **A conversation can be resolved**, the way a forge's can, and the word is
+  chosen for what it does not mean: not deleted, not hidden, not moved. A
+  resolved thread folds to **one line on its own lines** — `Resolved`, how many
+  comments, the file and range — and opening it gives back the whole exchange
+  and a `Reopen conversation` beside the reply field it was settled from.
+  Deleting it is still `X`, which is the destructive one and still on hover.
+  Why keep it at all, when `Delete` was already there: a remark that was dealt
+  with is the record of _how_ it was dealt with, and the argument in the thread
+  is usually worth more than the remark that started it — `Delete` is for a
+  comment that should never have been written, and resolving is for one that
+  worked. What resolving buys is the two things a long review runs out of: the
+  **height** (a diff worked through can be read as a diff again) and the
+  **count**. Every count in the app is of the open threads (`openThreads`) —
+  the bar under the diff, the badge on a row of the Changes list — because a
+  count is read as _how much is left_, and a review whose every remark has been
+  answered should say so rather than still claiming twelve. The settled ones are
+  said beside it (`3 comments · 5 resolved`) rather than folded in, since a
+  number that disagrees with the diff under it is worse than two numbers.
+  `resolved` is **absent on an open thread** rather than `false`, so every
+  review already on disk reads as open and nothing migrates; the field is a set
+  rather than a toggle (`resolve(id, boolean)`), because the two ends are two
+  different buttons and a toggle lets a stale render settle what somebody had
+  just reopened. Whether a folded thread is showing is **not** on the store and
+  not written down: it says nothing about the review, and a thread unfolded to
+  be read should fold itself again the next time the pane is built.
+  Hiding resolved threads outright — a `Show resolved` switch on the bar, which
+  is what a forge does with a long conversation — was considered and left out:
+  the threads are drawn _in the diff_ here rather than in a list, so a folded
+  one costs a single row where a hidden one costs a control, a piece of state
+  and a way to lose a comment somebody is looking for.
 
 #### What the first version of it got wrong
 
@@ -3448,10 +3518,112 @@ many places as it has comments.
   that reviewed 399 files and lost one to a timeout should hand over the 399.
   Threads are **added**, never replaced: a review run on top of remarks somebody
   had already written is two reviews of the same diff, and throwing one away is
-  `Discard`'s business rather than this button's. The bar is drawn **always** now,
-  where it used to appear only once there was something to count — a button that
-  reviews the whole change has to be reachable on a diff nobody has commented on
-  yet, which is exactly the state it used to hide in.
+  `Discard`'s business rather than this button's.
+- **A finding says how bad it is**, on the scale a forge already taught
+  everybody: `critical` / `high` / `medium` / `low`, the words CodeQL, Copilot
+  Autofix and every GitHub security alert use, in that order. Four rather than
+  the board's three, and deliberately **not** `BoardPriority` even though they
+  read alike: a priority is what somebody decided to do next and a severity is
+  what a model thinks a defect costs, and sharing the type would make the two
+  the same word by accident. What it buys is the thing a twelve-comment review
+  is missing — an order to read them in — and it costs one word in the prompt
+  and one chip in the thread. The prompt spends its words on the **boundaries**
+  rather than on the names, because that is where a model drifts: `critical` is
+  data loss, a security hole or a crash on an ordinary path (and most reviews
+  should have none), and it is told to judge the _defect_ rather than its own
+  confidence, or every uncertain finding arrives as `low`. Only two of the four
+  are **coloured** — red and amber — and `medium` / `low` are drawn in the same
+  muted grey as the rest of a thread's furniture: a four-colour scale makes
+  every comment shout, and a reviewer scanning a file needs the two that matter
+  to be the two that are visible. It is on the **thread**, not the note, because
+  it belongs to the finding and a thread is one finding — a label that moved as
+  the argument went on would be a badge nobody could trust. **Absent is a real
+  state**: a remark somebody typed has none, and `severityOf` drops a word it
+  does not recognise (`moderate`, `P2`, a number) rather than rounding to the
+  middle, since a `medium` nobody chose cannot be told apart from one the model
+  did. Case and stray spaces are forgiven, and nothing else is.
+  The progress dialog says the **breakdown** when a run finishes — `12 comments
+left — 1 critical, 3 high, 2 low` — because a count on its own does not answer
+  the question somebody asks a review: is this read now, or after lunch. It is
+  tallied where the comments are **left** rather than off the findings, so it
+  cannot disagree with the count beside it: a finding on a file that could not
+  be read leaves no comment and is in neither. Worst first, a level with nothing
+  in it left out entirely (`0 low` is a phrase nobody wants), and a run whose
+  findings all came back unrated says nothing at all rather than an empty
+  bracket — `severitySummary`, checked in `test/review.ts`.
+- **`⌥↓` / `⌥↑` walk the review**, across files, and this is the thing a
+  twelve-file review was missing rather than a convenience. The comments are in
+  the diff under the lines they are about, which is right and is also why
+  reading all of them was twelve trips through the Changes tree and a hunt down
+  each file. `step` takes the **open** threads of the checkout in
+  `orderedThreads` order — by file, then down the page, which is the diff's own
+  order and not the order they were opened (an agent's review is four concurrent
+  turns answering in any order) — opens the next one's file through `openPath`,
+  the way clicking its row would, and focuses it. It **wraps**, deliberately: a
+  review is walked until it is empty rather than until the bottom, and what
+  makes that safe is that resolving is what takes a thread off the walk, so the
+  list shrinks as it is worked through and the last one settled ends it. A
+  focused thread that has since been resolved or deleted starts the walk over
+  rather than ending it.
+  Two things had to be got right. The pane **scrolls** to the thread, which
+  means waiting: `step` may have opened another file, and the widget does not
+  exist until that diff has been read and laid out — so the effect asks for the
+  host node every frame until it is in the document, bounded at two seconds so a
+  file that never draws is not a rAF loop for the session. And the thread is
+  drawn with a **ring** that stays until the walk moves on rather than fading:
+  `⌥↓` is a place, and a highlight that vanished would leave somebody who looked
+  away with no way back but pressing the key again and overshooting. The key is
+  refused inside anything being typed into — `⌥↓` in the reply box is macOS's
+  "end of paragraph", and a reviewer mid-sentence must not be thrown into
+  another file.
+  The walk is also **two buttons** in the Explorer's `Changes` header, beside
+  `Review` and `Discard`, and they exist for one reason: a shortcut with nothing
+  on screen is a shortcut nobody finds. It shipped as keys alone and was
+  invisible — the first thing asked about it was where it was. The tooltips name
+  the keys (`Next review comment (⌥↓)`), so the buttons teach their own
+  replacement; they are in the header rather than in the diff because the walk
+  _starts_ before a file has been picked, which is most of what it is for; and
+  they are never disabled, because the walk wraps and one comment left is a
+  comment both arrows land on. They are drawn only while something is unresolved,
+  which is what keeps that header's own rule — the ordinary state of it is still
+  two tabs and Refresh.
+  Considered and **not** built: a panel listing every finding, the way a forge's
+  `Conversations` tab does. It is the report this feature exists not to produce
+  — see the note above about where the threads are drawn — and the walk gets
+  most of what it would have been for without moving a single comment away from
+  its code.
+- **A row's comment badge is coloured by the worst severity on it.** `3` says
+  how much and not how bad, so a reviewer opened three files to find the one
+  with the `critical` in it; the badge is the only thing on a Changes row a
+  review owns, so it is where that answer goes. A directory row takes the
+  **maximum** under it, the way it already takes the sum — `worstUnder` beside
+  `commentCountsUnder`, and both take a `Map<path, number>` so
+  `lib/files/change-tree.ts` stays free of the review's shape: a rank is
+  comparable without knowing what `critical` means, and `0` — no severity, or no
+  comment — is the identity a maximum needs. Only the top two are coloured,
+  exactly as the chip in a thread is and for the same reason: a tree where every
+  badge is a different colour is a tree with no signal in it.
+- **The bar under the diff is gone**, and it is worth saying what it was, since
+  it survived two rounds of being made better before being deleted. It was a
+  32px strip at the foot of the `Changes` pane holding the comment count,
+  `Discard`, `Review`, and a slot that said what the last run had found or what
+  the running one was doing. Every one of those found a better home, and once
+  they had, the strip was a row of things said elsewhere taking height off the
+  diff on every screen, in every state, whether or not there was a review at
+  all. `Review` is in the Explorer's `Changes` header — where the changed files
+  are listed, and where a review is wanted _before_ a file is picked — and it
+  was already there, so the bar's copy was the same button asked for twice.
+  `Discard` moved beside it, for the reason it could not stay: the comments it
+  clears are across every file, most of which are not the one open. How a run
+  went is the **progress dialog's**, which is on screen while it runs and says
+  the count when it stops — the bar was saying it a second time, in a strip a
+  reviewer who had picked no file could not see. And the count is the **badge on
+  each row** of the Changes list, which answers the better question: not how
+  many remarks there are, but which files have any. The bar's one irreplaceable
+  job — saying a review exists in a file nobody has opened — was that badge's
+  all along. What is left of the strip is the case that had nowhere else to go:
+  a comment being written on a range that has been scrolled off screen draws it,
+  and nothing else does.
 - **Claude is called by name, not by a button.** Writing `@claude-review` in a
   comment runs one turn in that checkout and puts the answer in as a note by
   `agent` — the author `lib/files/review.ts` has had since the day it was written,
@@ -4551,6 +4723,60 @@ Two figures are easy to get wrong and are worth stating:
 The app's share is every process Electron runs, added up. The dock's shells are
 not in it: a pty is a child of the daemon, and counting it would make the studio
 look responsible for work the user started deliberately.
+
+## Updating
+
+The right-hand end of that same bar is where a new release turns up: a pill
+saying `Update to 1.0.20`, and nothing at all when there is none.
+
+**It is not `electron-updater`, and that is not an oversight.** Squirrel.Mac
+refuses to swap a bundle that carries no Developer ID, and these builds carry
+none — signing costs an Apple Developer membership, which is the same fact that
+`install.sh` exists to work around. An auto-updater bolted on anyway would be a
+progress bar that ends in a failure the user cannot act on. So the whole
+mechanism is three small pieces:
+
+- `src/main/updater.ts` asks the GitHub releases API for `releases/latest` and
+  compares its tag against `app.getVersion()`. It imports no `electron` — the
+  current version and the script's path are arguments — so `test/updates.ts` can
+  import it under plain `bun`, the same bargain `main/git.ts` makes.
+- `src/renderer/lib/updates.ts` decides _when_ to ask: once at launch, then
+  every six hours. Releases are cut a handful of times a month and the anonymous
+  API allows sixty requests an hour per address, which this app is not the only
+  thing on the machine spending.
+- The button runs **`install.sh`** — the same script the README hands people,
+  shipped inside the bundle as an `extraResources` entry rather than fetched
+  when the button is pressed. A button that downloads and executes a script at
+  the moment of the click is a different thing to agree to than one that runs
+  the app's own copy, even where both URLs are the same.
+
+Three details are load-bearing:
+
+- **The installer is spawned detached.** `install.sh` quits the running app
+  itself, by design, so that a bundle is not replaced out from under a live
+  process — a child of that process would die mid-`ditto`. Detached, it survives
+  to finish and to `open` the app again.
+- **There is no success path to report.** The app is gone before the script
+  ends, so the renderer's `installing` state is never cleared, and the honest
+  end of it is the window closing. A failure to _start_ the installer is
+  reported in the dialog; a failure inside it lands in `~/.tabomni/update.log`,
+  which is the only place left to put it.
+- **`isNewer` is strictly newer, and numeric.** A string comparison makes
+  `1.0.9` newer than `1.0.19` and offers everybody a downgrade forever, and a
+  check for "different" does the same to anyone running a build from a checkout.
+  Prereleases sort below the release they precede. `test/updates.ts` is that
+  table, and it is the only part of this with an opinion worth testing.
+
+Nothing ever pops up. The check comes back while the user is in the middle of
+something, and whatever that was, it was more important — so the answer becomes
+a pill and a section in Settings › Updates, and never a modal over the composer.
+Skipping a version is per version: the pill returns for the next release rather
+than never again, and the Settings section ignores the dismissal entirely, since
+a page headed Updates is not a place to hide one.
+
+Off macOS the check still runs — "there is a newer version" is true on Windows
+too — but `installable` is false and the only button is the one that opens the
+release page.
 
 ## The launch screen
 

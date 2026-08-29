@@ -69,9 +69,23 @@ export type ActivityTodo = {
   running: string | null
 }
 
-/** The tool a subagent runs under, which is counted and drawn as an agent
- * rather than as one more tool call. */
-export const AGENT_TOOL = "Task"
+/**
+ * The tool a subagent runs under, which is counted and drawn as an agent rather
+ * than as one more tool call.
+ *
+ * **Two names, because the CLI renamed it.** It was `Task` and is now `Agent`,
+ * and both are real: which one a turn sends is the user's own `claude`'s
+ * business, and a transcript on disk holds whichever was current when it was
+ * written. Testing for one of them was the whole of the bug — every subagent
+ * counted as an ordinary tool call, drawn with the wrong glyph and the whole
+ * prompt as its argument. `main/claude-agent.ts` keeps the same pair for the
+ * side of it main decides: the two processes never import each other.
+ */
+export const AGENT_TOOLS = ["Agent", "Task"]
+
+export function isAgentTool(name: string): boolean {
+  return AGENT_TOOLS.includes(name)
+}
 
 export function blocksOf(messages: AssistantMessage[]): ChatBlock[] {
   const blocks: ChatBlock[] = []
@@ -226,7 +240,7 @@ export function countsOf(lines: AssistantMessage[]): ActivityCounts {
 
   for (const line of lines) {
     if (line.role === "tool") {
-      if (line.name === AGENT_TOOL) subagents += 1
+      if (isAgentTool(line.name)) subagents += 1
       else tools += 1
       // Overwritten rather than kept from the first: the same list is written
       // again every time an item starts or finishes, and only the last of them

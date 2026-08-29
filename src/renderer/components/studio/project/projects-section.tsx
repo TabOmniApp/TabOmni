@@ -31,7 +31,22 @@ import {
   ungroupedChats,
   useWorktreeChats,
 } from "@/lib/worktree-chat/store"
+import type { WorktreeChat } from "@shared/api"
 import { since } from "@/lib/worktree-chat/since"
+
+/**
+ * The chats this column lists: the ones that are on disk.
+ *
+ * A `+` opens a tab before anything has been said in it — the chat is held in
+ * `unsaved` until its first message writes it down. The strip is what is open
+ * in this run and so shows it at once; this column is where a conversation from
+ * last week is found again, and a row for a chat that will leave no file if the
+ * tab is shut is a row that disappears without anybody deleting it.
+ */
+function saved(chats: WorktreeChat[], unsaved: string[]): WorktreeChat[] {
+  if (unsaved.length === 0) return chats
+  return chats.filter((chat) => !unsaved.includes(chat.id))
+}
 
 /**
  * The workspace's projects, and the chats held in each.
@@ -69,8 +84,9 @@ export function ProjectsSection() {
 
   const folders = useStudio((state) => state.folders)
   const chats = useWorktreeChats((state) => state.chats)
+  const unsaved = useWorktreeChats((state) => state.unsaved)
 
-  const orphans = ungroupedChats(chats)
+  const orphans = ungroupedChats(saved(chats, unsaved))
   const ungroupedShut = collapsed.includes(UNGROUPED_ID)
 
   return (
@@ -287,6 +303,7 @@ function ProjectRow({
  */
 function ProjectChats({ folderId }: { folderId: string | null }) {
   const chats = useWorktreeChats((state) => state.chats)
+  const unsaved = useWorktreeChats((state) => state.unsaved)
   const selectedId = useWorktreeChats((state) => state.selectedId)
   const sending = useWorktreeChats((state) => state.sending)
   // Which chats are stopped on a question — see the note in `tab-items.tsx`
@@ -301,7 +318,8 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const menuFocus = useMenuFocusHandoff()
 
-  const own = folderId ? chatsOf(chats, folderId) : ungroupedChats(chats)
+  const listed = saved(chats, unsaved)
+  const own = folderId ? chatsOf(listed, folderId) : ungroupedChats(listed)
   if (own.length === 0) return null
 
   return (

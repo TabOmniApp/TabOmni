@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Claude } from "@/components/ui/svgs/claude"
-import { useReview } from "@/lib/files/review"
+import { severitySummary, useReview } from "@/lib/files/review"
 
 /**
  * A whole-diff review while it runs, and what it left behind when it stops.
@@ -25,10 +25,12 @@ import { useReview } from "@/lib/files/review"
  * out (`ReviewProgressEvent`, pushed from `review-agent.ts`), then a sentence
  * saying how many comments were left.
  *
- * A dialog rather than a line in the `Changes` bar, because the bar is in the
- * diff pane and the button that starts a review is in the Explorer's header —
- * a reviewer who has not opened a file yet would be watching a strip that is
- * not on screen. It closes on the user's word rather than on the turn ending:
+ * A dialog rather than a line in a bar under the diff, which is where this used
+ * to be said: that bar lived under a file that had been picked, and the button
+ * that starts a review is in the Explorer's header — so a reviewer who has not
+ * opened a file yet was watching a strip that was not on screen. The bar has
+ * since gone entirely, and this is now the only place a run reports itself.
+ * It closes on the user's word rather than on the turn ending:
  * the count is the point of it, and a dialog that vanished at the moment it
  * had something to say would be one nobody ever read.
  *
@@ -42,6 +44,10 @@ export function ReviewProgressDialog() {
   const progress = useReview((state) => state.progress)
   const found = useReview((state) => state.reviewFound)
   const error = useReview((state) => state.reviewError)
+  /* What it found, by severity — the one thing a count of comments cannot say,
+     and the thing that decides whether the diff is read now or after lunch.
+     Empty when nothing came back rated, which draws as nothing. */
+  const summary = severitySummary(useReview((state) => state.reviewFoundBy))
 
   /* The last line, kept in view. A review of twenty files sends more lines
    * than the box is tall, and a log that has to be scrolled to see what is
@@ -75,7 +81,7 @@ export function ReviewProgressDialog() {
                 ? error
                 : found === 0
                   ? "Nothing was left to comment on."
-                  : `${found} comment${found === 1 ? "" : "s"} left on the lines they are about. Open a changed file to read them — the Changes tree says which files have any.`}
+                  : `${found} comment${found === 1 ? "" : "s"} left on the lines they are about${summary ? ` — ${summary}` : ""}. Open a changed file to read them — the Changes tree says which files have any.`}
           </DialogDescription>
         </DialogHeader>
 

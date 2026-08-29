@@ -7,6 +7,7 @@ import {
 
 import type {
   AssistantMessage,
+  ChatAgent,
   ChatTodo,
   ChatWindow,
   ChatWindowSlice,
@@ -315,6 +316,15 @@ export type AgentHandlers = {
    * be a state it can set rather than an edge it has to count.
    */
   onBusy: (busy: boolean) => void
+  /**
+   * Which subagents are running, as the whole list every time.
+   *
+   * A level rather than a start and a finish to be paired up — see `ChatAgent`.
+   * Called with an empty list when the last of them ends, and once more on the
+   * way out, so nothing is left running on screen by a session that died holding
+   * one.
+   */
+  onAgents: (agents: ChatAgent[]) => void
   /** One turn is over. `error` is null when it succeeded. The session is not
    * over: another message may already be queued behind this one. */
   onTurn: (error: string | null) => void
@@ -452,6 +462,10 @@ export async function startAgentSession(
     if (finished) return
     finished = true
     handlers.onBusy(false)
+    // Before `onExit`, and unconditionally: a task belongs to the CLI that was
+    // running it, so a session that died holding one has no subagent left — and
+    // an emptied list is the only thing that takes it off the screen.
+    handlers.onAgents([])
     handlers.onExit(error)
   }
 
@@ -473,9 +487,22 @@ export async function startAgentSession(
       // The user's own install, not the SDK's bundled CLI: their login, their
       // settings, their `CLAUDE_BIN` override.
       pathToClaudeCodeExecutable: binary,
-      env: environment(
-        session.configDir ? { CLAUDE_CONFIG_DIR: session.configDir } : {}
-      ),
+      env: environment({
+        /*
+         * The CLI's own state signal, which it only emits when asked to.
+         *
+         * Without this the stream carries no `session_state_changed` at all and
+         * `reportsState` below never turns true, so "the chat is busy" falls
+         * back to the `result` line — and a `result` is *not* the end of the
+         * work when the turn started background subagents: the CLI closes the
+         * turn, the agents carry on, their frames keep arriving with a
+         * `parent_tool_use_id`, and the spinner has already gone out. The CLI's
+         * own `idle` waits for those agents to exit, which is the fact this
+         * app has no other way to learn.
+         */
+        CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
+        ...(session.configDir ? { CLAUDE_CONFIG_DIR: session.configDir } : {}),
+      }),
       // One or the other, never both — the SDK refuses `sessionId` together
       // with `resume`, which is the same rule `--session-id` had.
       ...(session.resume
@@ -549,10 +576,24 @@ export async function startAgentSession(
    * Not version-sniffed: `session_state_changed` is simply absent from an older
    * CLI's stream, and the first one that arrives says the CLI has it. Until
    * then, "the turn ended" is the best guess at "no longer busy" available —
-   * wrong only in that a chat with something queued blinks idle for as long as
-   * it takes the CLI to start the next turn.
+   * wrong in that a chat with something queued blinks idle for as long as it
+   * takes the CLI to start the next turn, and wrong for as long as a background
+   * subagent outlives the turn that started it. Which is why the env var above
+   * asks for the events: without it no CLI sends any, and the fallback is what
+   * every chat ran on.
    */
   let reportsState = false
+
+  /**
+   * The subagents running right now, keyed by the CLI's own task id.
+   *
+   * Kept here rather than announced as edges, because what the pane needs is the
+   * set: `task_started` and `task_notification` are bookends, and a missed one
+   * is a spinner nobody can stop. Cleared when the process ends, since a task
+   * belongs to the CLI that was running it.
+   */
+  const agents = new Map<string, ChatAgent>()
+  const announceAgents = () => handlers.onAgents([...agents.values()])
 
   /**
    * When the turn being answered started, for the wall time on its usage line.
@@ -615,6 +656,82 @@ export async function startAgentSession(
           // rather than over, and a composer that said otherwise would invite a
           // second message on top of a question nobody has answered.
           handlers.onBusy(message.state !== "idle")
+          continue
+        }
+
+        /*
+         * A subagent's heartbeat, which is the only sign of life it gives.
+         *
+         * Four frames for the same thing: `task_started` and `task_progress`
+         * say a task exists and where it has got to, `task_updated` carries a
+         * status patch, and `task_notification` is the end. All four are
+         * merged into one map and announced as the whole set — see `agents`.
+         *
+         * `skip_transcript` is the CLI asking for a task to be kept out of the
+         * conversation. Housekeeping rather than work somebody asked for, so it
+         * is not counted here either.
+         */
+        if (message.type === "system" && message.subtype === "task_started") {
+          if (!message.skip_transcript) {
+            agents.set(message.task_id, {
+              id: message.task_id,
+              description: message.description,
+              ...(message.subagent_type
+                ? { subagentType: message.subagent_type }
+                : {}),
+            })
+            announceAgents()
+          }
+          continue
+        }
+
+        if (message.type === "system" && message.subtype === "task_progress") {
+          const known = agents.get(message.task_id)
+          agents.set(message.task_id, {
+            id: message.task_id,
+            description: message.description,
+            ...(message.subagent_type
+              ? { subagentType: message.subagent_type }
+              : known?.subagentType
+                ? { subagentType: known.subagentType }
+                : {}),
+            ...(message.last_tool_name
+              ? { lastTool: message.last_tool_name }
+              : {}),
+          })
+          announceAgents()
+          continue
+        }
+
+        if (message.type === "system" && message.subtype === "task_updated") {
+          // Only the statuses that end it: `running` and `paused` are a task
+          // that is still somebody's to wait for, and dropping a paused one
+          // would say the work finished.
+          const status = message.patch.status
+          if (
+            status === "completed" ||
+            status === "failed" ||
+            status === "killed"
+          ) {
+            if (agents.delete(message.task_id)) announceAgents()
+          } else if (message.patch.description) {
+            const known = agents.get(message.task_id)
+            if (known) {
+              agents.set(message.task_id, {
+                ...known,
+                description: message.patch.description,
+              })
+              announceAgents()
+            }
+          }
+          continue
+        }
+
+        if (
+          message.type === "system" &&
+          message.subtype === "task_notification"
+        ) {
+          if (agents.delete(message.task_id)) announceAgents()
           continue
         }
 
@@ -1238,6 +1355,26 @@ export function collapse(text: string): string {
 }
 
 /**
+ * What the CLI calls the tool that runs a subagent — **both** of its names.
+ *
+ * It was `Task` and is now `Agent`, and which one arrives is the user's own
+ * `claude`'s business rather than this app's: a chat on an older CLI still sends
+ * `Task`, and a transcript on disk holds whichever was current when it was
+ * written. So every test of it is a test of the pair, here and in
+ * `lib/worktree-chat/activity.ts`, which is the renderer's copy of this fact —
+ * the two processes never import each other.
+ *
+ * Getting this wrong is not cosmetic: the name is on `READ_TOOLS` and
+ * `ALLOWED_TOOLS` in `worktree-chat.ts`, so a mode that did not know the new one
+ * refused every handoff to a subagent.
+ */
+export const AGENT_TOOLS = ["Agent", "Task"]
+
+export function isAgentTool(name: string): boolean {
+  return AGENT_TOOLS.includes(name)
+}
+
+/**
  * A tool call as the three things a row draws it from.
  *
  * Pulled out of `summarise` rather than folded into it, because a row wants the
@@ -1246,10 +1383,10 @@ export function collapse(text: string): string {
  * muted mono text after it. One string could not have been split back up —
  * "is this a path" is not a question to ask of text somebody's command wrote.
  *
- * `Task` is the reason `summary` is not always `summarise`: its input is a
- * description, a whole prompt and a subagent type, none of which the key list
- * names, so every subagent row was the JSON of the entire prompt collapsed to
- * 120 characters. What a row wants there is which agent ran.
+ * The subagent tool is the reason `summary` is not always `summarise`: its
+ * input is a description, a whole prompt and a subagent type, none of which the
+ * key list names, so every subagent row was the JSON of the entire prompt
+ * collapsed to 120 characters. What a row wants there is which agent ran.
  */
 export function describeCall(
   name: string,
@@ -1295,14 +1432,13 @@ export function describeCall(
 
   const path = text("file_path") ?? text("notebook_path")
   const title = text("description")
-  const summary =
-    name === "Task"
-      ? (text("subagent_type") ?? "")
-      : // Nothing at all rather than `summarise`'s `{}`: a row that says the
-        // empty object says less than a row that says only the tool's name.
-        Object.keys(record).length === 0
-        ? ""
-        : summarise(record)
+  const summary = isAgentTool(name)
+    ? (text("subagent_type") ?? "")
+    : // Nothing at all rather than `summarise`'s `{}`: a row that says the
+      // empty object says less than a row that says only the tool's name.
+      Object.keys(record).length === 0
+      ? ""
+      : summarise(record)
 
   /*
    * The whole argument, but only where the row is not already showing it.
@@ -1314,7 +1450,7 @@ export function describeCall(
    * actually wants opened: the heredoc, the 300-character query, the `Bash` line
    * with four pipes in it.
    */
-  const whole = name === "Task" ? "" : argumentOf(record)
+  const whole = isAgentTool(name) ? "" : argumentOf(record)
   const more = whole && collapse(whole) !== whole ? detailOf(whole) : undefined
 
   return {

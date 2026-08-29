@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import {
+  ArrowUpCircle,
   ChevronDown,
   Columns2,
   ExternalLink,
@@ -37,6 +38,7 @@ import type { McpListing, McpServerInfo } from "@shared/api"
 import { useProjects } from "@/lib/projects"
 import { useSettings } from "@/lib/settings"
 import { useStudio } from "@/lib/store"
+import { pendingUpdate, useUpdates } from "@/lib/updates"
 import {
   accountCaption,
   accountLabel,
@@ -141,6 +143,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <TabsSection />
             ) : section === "claude" ? (
               <ClaudeSection />
+            ) : section === "updates" ? (
+              <UpdatesSection />
             ) : (
               <McpSection />
             )}
@@ -151,7 +155,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-type SectionId = "appearance" | "tabs" | "claude" | "mcp"
+type SectionId = "appearance" | "tabs" | "claude" | "mcp" | "updates"
 
 /** The sections, in the order they are listed. Each one is a heading, a line
  * saying what it covers, and the rows below — kept together so adding a
@@ -179,6 +183,12 @@ const SECTIONS: {
     label: "Claude",
     blurb: "Separate `claude` identities a chat's turns can run under.",
     icon: KeyRound,
+  },
+  {
+    id: "updates",
+    label: "Updates",
+    blurb: "Which TabOmni this is, and whether there is a newer one.",
+    icon: ArrowUpCircle,
   },
   {
     id: "mcp",
@@ -236,6 +246,112 @@ function TabsSection() {
       >
         <Switch checked={groupTabs} onCheckedChange={setGroupTabs} />
       </Row>
+    </Card>
+  )
+}
+
+/**
+ * Which build this is, and the button that replaces it.
+ *
+ * The same store the status bar's pill reads, and the same install — this page
+ * exists because a pill that only appears when there is news cannot answer
+ * "am I up to date?", and because somebody who skipped a version needs
+ * somewhere to change their mind. So the dismissal is deliberately ignored
+ * here: a section headed Updates is not a place to hide one.
+ *
+ * There is no "check automatically" switch. The check is one request every six
+ * hours against a public endpoint, carrying nothing about the user — a
+ * preference for that is a decision nobody has enough information to make, and
+ * every setting costs a line somebody has to read.
+ */
+function UpdatesSection() {
+  const check = useUpdates((state) => state.check)
+  const checking = useUpdates((state) => state.checking)
+  const installing = useUpdates((state) => state.installing)
+  const error = useUpdates((state) => state.error)
+  const refresh = useUpdates((state) => state.refresh)
+  const install = useUpdates((state) => state.install)
+  // Dismissal is the pill's business, not this page's.
+  const update = useUpdates((state) => pendingUpdate(state, false))
+
+  return (
+    <Card>
+      <Row
+        title="Version"
+        description={
+          !check
+            ? "Asking GitHub what is out."
+            : check.status === "current"
+              ? `TabOmni ${check.current} — the latest release.`
+              : `TabOmni ${check.current}.`
+        }
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={checking}
+          onClick={() => void refresh()}
+        >
+          <RefreshCw className={cn("size-3.5", checking && "animate-spin")} />
+          Check now
+        </Button>
+      </Row>
+
+      {update ? (
+        <Row
+          title={`TabOmni ${update.version} is available`}
+          description={
+            update.installable
+              ? "Installs into /Applications and reopens the app. Terminal sessions and anything running in the dock end with it."
+              : "Installing from inside the app is macOS only — the release page has the build for this machine."
+          }
+        >
+          <div className="flex items-center gap-2">
+            <a
+              href={update.url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              What&rsquo;s new
+              <ExternalLink className="size-3" />
+            </a>
+            {update.installable && (
+              <Button
+                size="sm"
+                disabled={installing}
+                onClick={() => void install()}
+              >
+                {installing ? "Installing…" : "Update and reopen"}
+              </Button>
+            )}
+          </div>
+        </Row>
+      ) : (
+        check?.status === "unknown" && (
+          // Said out loud rather than left as silence: "no update" and "could
+          // not ask" look identical otherwise, and only one of them means the
+          // version on screen is worth trusting.
+          <Row title="Could not check" description={check.error}>
+            <a
+              href="https://github.com/TabOmniApp/TabOmni/releases"
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Releases
+              <ExternalLink className="size-3" />
+            </a>
+          </Row>
+        )
+      )}
+
+      {error && (
+        <p className="px-4 pb-3 text-xs leading-relaxed text-destructive">
+          {error} The installer&rsquo;s own output is in{" "}
+          <code className="font-mono">~/.tabomni/update.log</code>.
+        </p>
+      )}
     </Card>
   )
 }

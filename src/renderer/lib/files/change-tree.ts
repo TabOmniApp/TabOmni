@@ -207,3 +207,23 @@ export function commentCountsUnder(
     0
   )
 }
+
+/**
+ * The **worst** of something under a node, where the count above takes a sum.
+ *
+ * The one this exists for is a review's severity, and it is a bare `number` for
+ * the same reason the counts are: a rank is comparable and this file does not
+ * have to learn what `critical` means to take a maximum of ranks. `0` is
+ * nothing — an unrated comment, or no comment at all — and it is the identity
+ * for a max, which is why it is the level that means "none" rather than one of
+ * the four (`severityRank` in `lib/files/review.ts`).
+ */
+export function worstUnder(
+  node: ChangeTreeNode,
+  ranks: Map<string, number>
+): number {
+  return changesUnder(node).reduce(
+    (worst, change) => Math.max(worst, ranks.get(change.path) ?? 0),
+    0
+  )
+}

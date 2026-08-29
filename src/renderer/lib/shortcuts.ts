@@ -36,6 +36,44 @@ export function isStudioShortcut(event: KeyboardEvent, key: string): boolean {
   return true
 }
 
+/**
+ * `⌥↓` / `⌥↑` — the next and previous unanswered review comment, or null.
+ *
+ * **The one thing a review of twelve files was missing**: the comments are in
+ * the diff, under the lines they are about, which is where they belong and also
+ * means that reading all of them was twelve clicks in the Changes tree and a
+ * hunt down each file. This is the way through them, and it crosses files —
+ * see `step` in `lib/files/review.ts`.
+ *
+ * `⌥` rather than a letter, because the letters are spoken for and this is a
+ * *movement*: the arrow keys are what an editor already moves by, and the
+ * modifier is the one both platforms leave free for a pane to claim. Returned as
+ * a direction rather than answered as two predicates, since every caller wants
+ * the pair.
+ *
+ * Refused **inside anything being typed into**, which is the whole of the care
+ * here: `⌥↓` in the reply box is macOS's "end of paragraph", and a reviewer
+ * halfway through writing a sentence must not be thrown into another file by
+ * it. A `repeat` is allowed, unlike the studio's shortcuts — holding the key to
+ * walk a review is the gesture, not an accident.
+ */
+export function isReviewStepShortcut(event: KeyboardEvent): -1 | 1 | null {
+  if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) {
+    return null
+  }
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return null
+  if (inTerminal(event.target) || isTyping(event.target)) return null
+  return event.key === "ArrowDown" ? 1 : -1
+}
+
+/** Whether the target takes text — a field, or anything `contenteditable`. */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+}
+
 /** Whether the key was pressed inside a terminal, where xterm hands it to the
  * process. */
 function inTerminal(target: EventTarget | null): boolean {

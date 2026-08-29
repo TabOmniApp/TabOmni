@@ -2,7 +2,9 @@ import { Cpu, MemoryStick } from "lucide-react"
 
 import type { SystemUsage } from "@shared/api"
 import { useSystemUsage } from "@/lib/system/usage"
+import { useUpdateWatch } from "@/lib/updates"
 import { Meter } from "./meter"
+import { UpdatePill } from "./update-pill"
 
 /**
  * What the machine has left, along the bottom of the window.
@@ -20,6 +22,10 @@ import { Meter } from "./meter"
  */
 export function SystemBar() {
   const usage = useSystemUsage()
+  // Before the early return, and here rather than in `UpdatePill`: the pill
+  // draws nothing until there is something to install, so it cannot be the
+  // thing that keeps the check running.
+  useUpdateWatch()
 
   // Nothing is drawn until the first reading lands — a row of empty meters
   // would be a claim that the machine is idle, which is not what "not yet
@@ -55,15 +61,20 @@ export function SystemBar() {
 
       {/* Right-hand end, away from the machine's two: this app is a part of
           what those meters are already showing, not a third thing beside
-          them, and a divider would suggest otherwise. */}
-      <span
-        className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums"
-        title={appTitle(usage)}
-      >
-        <span className="text-muted-foreground/70">This app</span>
-        {formatPercent(usage.appCpuPercent)} CPU
-        <span className="text-muted-foreground/40">·</span>
-        {bytes(usage.appMemory)}
+          them, and a divider would suggest otherwise. The `ml-auto` is on the
+          group rather than on the figures, so an update pill appearing beside
+          them moves nothing else in the row. */}
+      <span className="ml-auto flex shrink-0 items-center gap-2">
+        <UpdatePill />
+        <span
+          className="flex shrink-0 items-center gap-1.5 tabular-nums"
+          title={appTitle(usage)}
+        >
+          <span className="text-muted-foreground/70">This app</span>
+          {formatPercent(usage.appCpuPercent)} CPU
+          <span className="text-muted-foreground/40">·</span>
+          {bytes(usage.appMemory)}
+        </span>
       </span>
     </footer>
   )

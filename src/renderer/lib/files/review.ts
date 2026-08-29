@@ -2,6 +2,15 @@ import { create } from "zustand"
 
 import { useSettings } from "@/lib/settings"
 
+/* The one runtime value these types come with: the severities in the order they
+ * are worth reading, which `severitySummary` walks. */
+import { REVIEW_SEVERITY_IDS } from "@shared/api"
+
+/* The pane the walk moves through — `step` opens the next thread's file the way
+ * clicking its row in the Changes list would. One direction only: that store
+ * knows nothing about a review. */
+import { useChanges } from "./changes"
+
 /*
  * The record's own types live in the contract rather than here, because a review
  * is written to disk now and main is the one writing it — see `REVIEW_FILE` in
@@ -15,6 +24,7 @@ export type {
   ReviewAuthor,
   ReviewNote,
   ReviewSide,
+  ReviewSeverity,
   ReviewSnippet,
   ReviewThread,
 } from "@shared/api"
@@ -25,6 +35,7 @@ import type {
   ReviewAuthor,
   ReviewNote,
   ReviewSide,
+  ReviewSeverity,
   ReviewSnippet,
   ReviewThread,
 } from "@shared/api"
@@ -244,6 +255,10 @@ export type ThreadInput = {
   snippet: ReviewSnippet
   body: string
   author?: ReviewAuthor
+  /** How bad the finding is, when it came from one — see `ReviewSeverity`. The
+   * composer never sets it: a person writing a remark is not filling in a
+   * form. */
+  severity?: ReviewSeverity
 }
 
 type ReviewState = {
@@ -327,6 +342,21 @@ type ReviewState = {
   /** How many comments the last finished review left, or null while one is
    * running or before any has run — what the dialog says when it is done. */
   reviewFound: number | null
+  /**
+   * How those comments broke down by severity — `{ critical: 1, high: 3 }`.
+   *
+   * Counted as the comments are **left** rather than off the findings, so it
+   * agrees with `reviewFound`: a finding on a file that could not be read is
+   * dropped without a comment, and a summary claiming it would be a number
+   * nobody could find in the diff.
+   *
+   * A partial record: a severity nothing was rated is **absent** rather than
+   * zero, because the dialog reads it as a list of what there is and `0 low` is
+   * a phrase nobody wants. Findings with no severity at all are in
+   * `reviewFound` and in none of these, which is why the two are not expected
+   * to add up.
+   */
+  reviewFoundBy: Partial<Record<ReviewSeverity, number>>
   closeProgress: () => void
   /** Subscribes to `onReviewProgress`, once — called from `studio.tsx` the
    * way every other main-pushed stream is. Returns the unsubscribe. */
@@ -393,6 +423,39 @@ type ReviewState = {
   ) => void
   /** Opens one thread's reply box, or closes whichever is open. */
   openReply: (threadId: string | null) => void
+  /**
+   * The thread `⌥↓` last landed on, or null.
+   *
+   * What it buys is two things at once: the pane scrolls to it, and it is drawn
+   * with a ring so the eye finds it in a file that may have three others. Not
+   * persisted and not per root — it is where somebody is *now*, and a place in a
+   * review is not a thing to come back to a week later.
+   */
+  focused: string | null
+  /**
+   * The next unanswered comment, or the previous one — `⌥↓` / `⌥↑`.
+   *
+   * **Across files**, which is the whole point of it: it opens the file the next
+   * thread is in before focusing it, so a review of twelve files is walked with
+   * one key instead of twelve trips through the Changes tree. `openPath` rather
+   * than `selectPath`, so a pane that is not on screen comes to the front the
+   * same way clicking the row would.
+   *
+   * Only the **open** threads, through `orderedThreads`: a walk that stopped at
+   * conversations somebody has already settled is a walk that gets longer the
+   * more work you do.
+   */
+  step: (rootId: string, delta: 1 | -1) => void
+  /**
+   * Settles a conversation, or reopens it — see `ReviewThread.resolved`.
+   *
+   * A **set** rather than a toggle, because the two ends are two different
+   * buttons and a toggle would let a stale render resolve what somebody had
+   * just reopened. Resolving closes the reply box if it is this thread's: the
+   * box is the "there is more to say here" affordance, and leaving it open
+   * beside a collapsed thread says both things at once.
+   */
+  resolve: (threadId: string, resolved: boolean) => void
   /** The whole thread, notes and all: there is no deleting half a
    * conversation. */
   remove: (threadId: string) => void
@@ -505,6 +568,7 @@ export const useReview = create<ReviewState>((set, get) => ({
   progress: [],
   progressOpen: null,
   reviewFound: null,
+  reviewFoundBy: {},
 
   closeProgress() {
     // The lines go with it: they describe a run that has been read and
@@ -580,6 +644,10 @@ export const useReview = create<ReviewState>((set, get) => ({
           anchor: input.anchor,
           snippet: input.snippet,
           notes: [note],
+          // Left off entirely when there is none, rather than written as
+          // `undefined`: this record goes to disk as JSON, and a key holding
+          // nothing is a key every later reader has to think about.
+          ...(input.severity ? { severity: input.severity } : {}),
         },
       ],
     })
@@ -622,6 +690,36 @@ export const useReview = create<ReviewState>((set, get) => ({
   openReply(threadId) {
     if (get().replyTo === threadId) return
     set({ replyTo: threadId })
+  },
+
+  focused: null,
+
+  step(rootId, delta) {
+    const next = stepThrough(
+      orderedThreads(threadsOf(get(), rootId)),
+      get().focused,
+      delta
+    )
+    if (!next) return
+
+    set({ focused: next.id })
+    // Only when it is somewhere else: `openPath` on the file already showing
+    // would be a `set` per keypress, and every subscriber of the changes store
+    // re-rendering behind a scroll.
+    if (useChanges.getState().selectedPath[rootId] !== next.path) {
+      useChanges.getState().openPath(rootId, next.path)
+    }
+  },
+
+  resolve(threadId, resolved) {
+    const threads = get().threads.map((thread) =>
+      thread.id === threadId ? { ...thread, resolved } : thread
+    )
+    set({
+      threads,
+      replyTo: resolved && get().replyTo === threadId ? null : get().replyTo,
+    })
+    keep(threads)
   },
 
   remove(threadId) {
@@ -732,6 +830,7 @@ export const useReview = create<ReviewState>((set, get) => ({
       // review shows the same thing running.
       progressOpen: rootId,
       reviewFound: null,
+      reviewFoundBy: {},
     })
 
     let answer: ReviewChangesAnswer
@@ -750,7 +849,12 @@ export const useReview = create<ReviewState>((set, get) => ({
     if ("error" in answer) {
       // `reviewFound` is set here too, or the dialog would read a failed run
       // as one still going: null is "no answer yet", and this is an answer.
-      set({ reviewing: null, reviewError: answer.error, reviewFound: 0 })
+      set({
+        reviewing: null,
+        reviewError: answer.error,
+        reviewFound: 0,
+        reviewFoundBy: {},
+      })
       return
     }
 
@@ -771,6 +875,9 @@ export const useReview = create<ReviewState>((set, get) => ({
      * file that cannot be read is skipped below, and the dialog must not
      * claim a comment that is not there. */
     let left = 0
+    /** The same tally by severity — see `reviewFoundBy`. Counted here, beside
+     * `left`, so the two cannot disagree about a finding that was dropped. */
+    const by: Partial<Record<ReviewSeverity, number>> = {}
     for (const finding of answer.findings) {
       const path = `${rootPath}/${finding.path}`
       if (!texts.has(path)) {
@@ -800,13 +907,18 @@ export const useReview = create<ReviewState>((set, get) => ({
         },
         body: finding.body,
         author: "agent",
+        severity: finding.severity,
       })
       left += 1
+      if (finding.severity) {
+        by[finding.severity] = (by[finding.severity] ?? 0) + 1
+      }
     }
 
     set({
       reviewing: null,
       reviewFound: left,
+      reviewFoundBy: by,
       // Said rather than left silent: a review that found nothing and a review
       // that failed look identical from the outside, and only one of them is
       // good news.
@@ -900,6 +1012,117 @@ export function threadsOf(
 ): ReviewThread[] {
   if (rootId === null) return []
   return state.threads.filter((thread) => thread.rootId === rootId)
+}
+
+/**
+ * The ones still asking for something.
+ *
+ * The **count** every part of the UI shows is of these rather than of the lot —
+ * the bar under the diff, the badge on a row of the Changes list — because a
+ * count is read as "how much is left", and a review whose every remark has been
+ * dealt with should say so. The threads themselves are not filtered anywhere: a
+ * resolved conversation stays on its lines, collapsed.
+ *
+ * `resolved` is absent on everything written before the field existed, so this
+ * is a truthiness check and not `=== false`.
+ */
+export function openThreads(threads: ReviewThread[]): ReviewThread[] {
+  return threads.filter((thread) => !thread.resolved)
+}
+
+/**
+ * Every open thread of one checkout, in the order somebody reads them.
+ *
+ * **By file and then down the page**, which is the order the diff is in and the
+ * order the Changes list draws its rows in — not the order the threads were
+ * opened, which is what `threadsOf` gives and which for an agent's review is
+ * whichever of four concurrent turns answered first. A walk that jumped between
+ * files and back would be one nobody could keep their place in.
+ *
+ * A thread's line is the **working file's** when it has one and the commit's
+ * otherwise, because that is the row it is drawn under: a remark about deleted
+ * code sits with the deleted chunk, above the lines that replaced it.
+ *
+ * Pure, and checked in `test/review.ts`.
+ */
+export function orderedThreads(threads: ReviewThread[]): ReviewThread[] {
+  return [...openThreads(threads)].sort(
+    (a, b) => a.path.localeCompare(b.path) || lineOf(a) - lineOf(b)
+  )
+}
+
+/** Which row a thread is drawn on — see `orderedThreads`. */
+function lineOf(thread: ReviewThread): number {
+  return thread.anchor.new?.fromLine ?? thread.anchor.old?.fromLine ?? 0
+}
+
+/**
+ * Which thread `⌥↓` / `⌥↑` lands on next, or null when there are none.
+ *
+ * **Wraps**, deliberately: a review is walked until it is empty rather than
+ * until the bottom, and stopping at the last comment would leave somebody
+ * pressing a key that does nothing with three files still to read. What makes
+ * that safe is that resolving is what takes a thread *out* of this list — so the
+ * walk shrinks as it is worked through, and the last one resolved ends it.
+ *
+ * A `from` that is not in the list — nothing focused yet, or the thread that was
+ * focused has just been resolved or deleted — starts at the top going forwards
+ * and at the bottom going back, which is what "next" means when there is no
+ * current.
+ *
+ * Pure, and checked in `test/review.ts`.
+ */
+export function stepThrough(
+  ordered: ReviewThread[],
+  from: string | null,
+  delta: 1 | -1
+): ReviewThread | null {
+  if (ordered.length === 0) return null
+  const at = ordered.findIndex((thread) => thread.id === from)
+  if (at === -1) return ordered[delta === 1 ? 0 : ordered.length - 1] ?? null
+  return ordered[(at + delta + ordered.length) % ordered.length] ?? null
+}
+
+/**
+ * A severity as a number, worst highest, and nothing as 0.
+ *
+ * For the two places that have to **compare** severities rather than draw one:
+ * the badge on a Changes row, which shows the worst of a file's, and the walk up
+ * a directory that takes the worst of everything under it. A number rather than
+ * the id, so `lib/files/change-tree.ts` can take a maximum without learning what
+ * a review is — the same line `commentCountsUnder` already holds.
+ */
+export function severityRank(severity: ReviewSeverity | undefined): number {
+  const at = severity ? REVIEW_SEVERITY_IDS.indexOf(severity) : -1
+  return at === -1 ? 0 : REVIEW_SEVERITY_IDS.length - at
+}
+
+/** And back, for the row that has a maximum and has to draw it. */
+export function severityAtRank(rank: number): ReviewSeverity | undefined {
+  return REVIEW_SEVERITY_IDS[REVIEW_SEVERITY_IDS.length - rank]
+}
+
+/**
+ * What a finished review found, by severity: `1 critical, 3 high, 2 low`.
+ *
+ * **Worst first**, in `REVIEW_SEVERITY_IDS` order rather than in whatever order
+ * the tally happened to be built, because the first word is the one that
+ * decides whether the diff is read now or after lunch.
+ *
+ * A level with nothing in it is left out entirely — `0 low` is a phrase nobody
+ * wants — and a review whose findings all came back unrated reads as `""`,
+ * which the dialog draws as nothing rather than as an empty bracket. The count
+ * of comments is said separately and is the number that includes them.
+ *
+ * Pure, and checked in `test/review.ts`.
+ */
+export function severitySummary(
+  by: Partial<Record<ReviewSeverity, number>>
+): string {
+  return REVIEW_SEVERITY_IDS.flatMap((id) => {
+    const count = by[id] ?? 0
+    return count > 0 ? [`${count} ${id}`] : []
+  }).join(", ")
 }
 
 /*

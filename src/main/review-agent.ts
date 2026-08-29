@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { join } from "node:path"
+import path, { join } from "node:path"
 
-import type { ReviewFinding } from "../shared/api"
+import {
+  REVIEW_SEVERITY_IDS,
+  type ReviewFinding,
+  type ReviewSeverity,
+} from "../shared/api"
 import { startAgentSession } from "./claude-agent"
 import { changes, fileDiff } from "./git"
 
@@ -241,6 +245,7 @@ async function oneTurn(request: {
         onCompacting: () => {},
         onCompacted: () => {},
         onBusy: () => {},
+        onAgents: () => {},
         onTurn: (error) => {
           const text = said.join("\n\n").trim()
           if (error) return finish({ error })
@@ -339,11 +344,12 @@ const PATCH_LIMIT = 240_000
 const REVIEW_PROMPT = [
   "You are reviewing one file's uncommitted changes in a repository, inside a desktop studio. What you return is turned into comments pinned to the lines you name, in the same pane the user is reading the diff in — so this is not a report, it is a set of remarks somebody will act on one by one.",
   "",
-  'Answer with a single fenced ```json block and nothing else: an array of findings, each `{ "path", "fromLine", "toLine", "body" }`.',
+  'Answer with a single fenced ```json block and nothing else: an array of findings, each `{ "path", "fromLine", "toLine", "severity", "body" }`.',
   "",
   "- `path` is the file under review, exactly as it is named below, relative to the repository. Findings about any other file are discarded — every changed file is reviewed separately, so a problem in one of the others will be caught by its own review rather than by yours.",
   "- `fromLine` and `toLine` are lines of the file **as it is now**, counting from 1, inclusive. Never a line number from the old version: if the problem is something the change deleted, comment on the lines that replaced it.",
-  "- `body` is the remark, in one or two sentences. Markdown is rendered, so backticks around an identifier read as written.",
+  "- `severity` is one of `critical`, `high`, `medium`, `low`. `critical` is data loss, a security hole, or a crash on an ordinary path — reserve it, and expect most reviews to have none. `high` is a real bug on a path that will be taken. `medium` is a case not handled, a leak under load, a name that will mislead the next reader. `low` is a remark worth making that nobody has to act on today. Judge the *defect*, not how confident you are about it: a maybe-bug that would corrupt data is still critical.",
+  "- `body` is the remark, in one or two sentences. Markdown is rendered, so backticks around an identifier read as written. Do not restate the severity in it — it is shown as a label beside the comment.",
   "",
   "Read the file before commenting on it: the patch below is `--unified=0` and shows you the changed lines without what surrounds them. The other changed files are listed so you can read the ones that bear on this change — a caller, a type, the other side of a contract — not so you can review them.",
   "",
@@ -396,7 +402,31 @@ export async function reviewChanges(
   const rows = await changes(request.cwd)
   // One entry per path: `changes` returns a row per side of the index, and a
   // file that is staged and then edited again is two rows of one file.
-  const paths = [...new Set(rows.map((row) => row.path))].sort()
+  //
+  // A row's `path` is **absolute** and everything downstream of here wants it
+  // relative — the prompt names the file that way, `names` matches the model's
+  // answer against it, and the renderer joins it back onto the root. Taking it
+  // as relative was a `join(cwd, absolute)` that named no file at all, so every
+  // turn was skipped and a review of a dozen files came back instantly with
+  // nothing to say. A directory row (a wholly untracked directory is one entry)
+  // is dropped: there is no patch for it, and its files are not listed.
+  const paths = [
+    ...new Set(
+      rows
+        .filter((row) => !row.directory)
+        .map((row) => path.relative(request.cwd, row.path))
+        .filter((relative) => relative && !relative.startsWith(".."))
+    ),
+  ].sort()
+  /** The new files, which `git diff HEAD` says nothing about — they are in no
+   * commit and, unstaged, in no index either. Skipping them for want of a patch
+   * left exactly the files most worth reading unreviewed, so their turn is told
+   * the whole file is the change instead. */
+  const untracked = new Set(
+    rows
+      .filter((row) => row.state === "untracked" && !row.directory)
+      .map((row) => path.relative(request.cwd, row.path))
+  )
   if (paths.length === 0) {
     return { error: "Nothing has changed in this checkout." }
   }
@@ -421,7 +451,12 @@ export async function reviewChanges(
       const relative = paths[next++]
       if (relative === undefined) return
 
-      const answer = await reviewFile(request, relative, paths)
+      const answer = await reviewFile(
+        request,
+        relative,
+        paths,
+        untracked.has(relative)
+      )
       done += 1
       if (answer !== null) {
         attempted += 1
@@ -464,17 +499,20 @@ export async function reviewChanges(
 async function reviewFile(
   request: ReviewChangesRequest,
   relative: string,
-  all: string[]
+  all: string[],
+  isNew: boolean
 ): Promise<ReviewChangesResult | null> {
   const patch = await fileDiff(request.cwd, join(request.cwd, relative))
-  if (!patch) return null
+  if (!patch && !isNew) return null
 
   const prompt = [
     `Review the changes to \`${relative}\`.`,
     "",
-    patch.length > PATCH_LIMIT
-      ? "Its patch is too large to include here. Read the file instead."
-      : ["```diff", patch, "```"].join("\n"),
+    !patch
+      ? "This file is new — the whole of it is the change, and there is no patch to show. Read it."
+      : patch.length > PATCH_LIMIT
+        ? "Its patch is too large to include here. Read the file instead."
+        : ["```diff", patch, "```"].join("\n"),
     "",
     ...(all.length > 1
       ? [
@@ -576,5 +614,22 @@ function asFinding(entry: unknown): ReviewFinding | null {
   // A `toLine` that is missing, not a number, or above its start reads as a
   // one-line finding rather than as a reason to drop the remark.
   const end = Number.isInteger(to) && to >= from ? to : from
-  return { path, fromLine: from, toLine: end, body }
+  return { path, fromLine: from, toLine: end, body, severity: severityOf(row) }
+}
+
+/**
+ * The severity a finding claimed, if it claimed one this can read.
+ *
+ * Lenient about **case and whitespace only** — `"High"` and `" high "` are the
+ * same word typed by a model that was not paying attention, and refusing them
+ * would drop the label off a real finding. Nothing else is mapped: `"warning"`,
+ * `"P2"` and `"moderate"` come back undefined and the comment is drawn without
+ * a label, which is the same rule `asFinding` follows for a line number that is
+ * not a number. Guessing a middle here would be worse than saying nothing,
+ * because a `medium` nobody chose is indistinguishable from one the model did.
+ */
+function severityOf(row: Record<string, unknown>): ReviewSeverity | undefined {
+  const said =
+    typeof row.severity === "string" ? row.severity.trim().toLowerCase() : ""
+  return REVIEW_SEVERITY_IDS.find((id) => id === said)
 }

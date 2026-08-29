@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
-import { readdir, readFile } from "node:fs/promises"
+import { copyFile, mkdir, readdir, readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 
 import {
   chatOptions,
@@ -20,6 +20,7 @@ import {
   type WorktreeChatOptions,
 } from "../shared/api"
 import {
+  AGENT_TOOLS,
   collapse,
   lineId,
   startAgentSession,
@@ -198,7 +199,7 @@ const ALLOWED_TOOLS = [
   "TodoWrite",
   "WebFetch",
   "WebSearch",
-  "Task",
+  ...AGENT_TOOLS,
 ]
 
 /**
@@ -249,7 +250,7 @@ const READ_TOOLS = [
   "TodoWrite",
   "WebFetch",
   "WebSearch",
-  "Task",
+  ...AGENT_TOOLS,
 ]
 
 /**
@@ -386,16 +387,18 @@ export class WorktreeChats {
   private readonly live = new Map<string, Live>()
 
   /**
-   * Chats the CLI has been started on during *this* run.
+   * Which `CLAUDE_CONFIG_DIR`s the CLI has been started on each chat in during
+   * *this* run — see `WorktreeChat.startedIn`, of which this is the shape in
+   * memory.
    *
-   * A write-through cache in front of `started` on the record, and not a
+   * A write-through cache in front of `startedIn` on the record, and not a
    * duplicate of it: the listing is rewritten by a read-modify-write on every
    * appended line, so a turn's first answer could read the listing before
    * `markStarted` had saved and write it back afterwards, dropping the flag it
-   * never saw. Both writers OR this in, which is what makes the order between
+   * never saw. Both writers merge this in, which is what makes the order between
    * them stop mattering.
    */
-  private readonly started = new Set<string>()
+  private readonly startedIn = new Map<string, Set<string>>()
 
   /**
    * Chats `append` named after their first message and `retitle` has not yet
@@ -533,7 +536,7 @@ export class WorktreeChats {
     }
 
     this.messages.set(id, [])
-    this.started.delete(id)
+    this.startedIn.delete(id)
     this.setBusy(id, false)
 
     await this.source.writeChat(id, [])
@@ -548,7 +551,7 @@ export class WorktreeChats {
     live?.session?.close()
 
     this.messages.delete(id)
-    this.started.delete(id)
+    this.startedIn.delete(id)
     this.autoTitled.delete(id)
 
     await this.source.saveChats(
@@ -659,10 +662,10 @@ export class WorktreeChats {
     // written before that expansion existed can still carry a literal `~`, and
     // `CLAUDE_CONFIG_DIR` reaches `claude` with no shell in between to expand
     // it — see `expandHome`.
+    const profiles = await this.source.claudeProfiles()
     const profileConfigDir = options.profileId
-      ? ((await this.source.claudeProfiles()).find(
-          (profile) => profile.id === options.profileId
-        )?.configDir ?? null)
+      ? (profiles.find((profile) => profile.id === options.profileId)
+          ?.configDir ?? null)
       : null
     const configDir = profileConfigDir ? expandHome(profileConfigDir) : null
 
@@ -711,11 +714,43 @@ export class WorktreeChats {
     // Off the record rather than off a `Set` in this process: the CLI's session
     // outlives the app's run, so a chat sent to before a restart has to come
     // back as `--resume`.
+    //
+    // Asked of *this* config directory, not of the chat: a session is a file
+    // under one account's directory, so a chat resumed on the profile it was not
+    // started on is resumed against a directory that has never heard of the id.
+    // A chat written before that was recorded has only `started`, and resumes
+    // the way it always did — see `isSessionMissing`, which is what catches the
+    // profile switch it cannot see coming.
+    const record = (await this.source.chats()).find((chat) => chat.id === id)
+    const dir = configDir ?? ""
+    const startedHere =
+      this.startedIn.get(id)?.has(dir) === true ||
+      record?.startedIn?.includes(dir) === true
+
+    /** A chat from before `startedIn`: the CLI has this id somewhere and the
+     * record does not say where, so every profile the workspace knows is a
+     * candidate, plus the default directory a chat with no profile ran in. */
+    const legacy = record?.started === true && record.startedIn === undefined
+    const elsewhere = [
+      ...new Set([
+        ...(record?.startedIn ?? []),
+        ...(this.startedIn.get(id) ?? []),
+        ...(legacy
+          ? ["", ...profiles.map((profile) => expandHome(profile.configDir))]
+          : []),
+      ]),
+    ].filter((other) => other !== dir)
+
+    // Which is the whole point of switching profile mid-chat rather than
+    // starting a new one: the conversation moves with it. `carryTranscript`
+    // fails quietly, and a chat that could not be carried opens a new session
+    // rather than refusing the message.
     const resume =
-      this.started.has(id) ||
-      (await this.source.chats()).some(
-        (chat) => chat.id === id && chat.started === true
-      )
+      startedHere ||
+      (elsewhere.length > 0 && (await carryTranscript(id, elsewhere, dir))) ||
+      // Nothing to carry and nothing recorded, but the CLI does have the id —
+      // resume the way this always did and let `isSessionMissing` catch it.
+      legacy
 
     // The message goes with it: `open` hands it to the CLI as the work it is
     // coming up to do, so there is no window in which a session exists with an
@@ -1001,6 +1036,10 @@ export class WorktreeChats {
         // conversation, and a reload finds out by there being no session rather
         // than by reading a stale flag.
         onBusy: (busy) => this.setBusy(id, busy),
+        // Forwarded and not kept, like `busy` and for the same reason: which
+        // subagents are running is true of a live CLI, and a chat read back off
+        // disk has none. What they *did* is the tool rows they wrote.
+        onAgents: (agents) => this.emit({ chatId: id, type: "agents", agents }),
         onTurn: (error) => this.endTurn(id, error),
         onExit: (error) => {
           exited = true
@@ -1056,7 +1095,7 @@ export class WorktreeChats {
       // must not be resumed on the next try. It resolves on the CLI's first
       // message rather than on the call returning, because `query()` is lazy —
       // see its comment.
-      await this.markStarted(id)
+      await this.markStarted(id, configDir)
 
       // Awaiting a file write above means the process can have died in the
       // meantime, in which case `onExit` has reported it and taken the entry
@@ -1098,6 +1137,38 @@ export class WorktreeChats {
         configDir,
         disabledTools,
         true,
+        message
+      )
+    }
+
+    /*
+     * The mirror of it: this profile has never had this session, so open it.
+     *
+     * A session lives under one account's `CLAUDE_CONFIG_DIR`, and the profile
+     * picker moves a chat between them mid-conversation — so the id this chat
+     * *is* names a conversation in the directory it was started in and nothing
+     * at all in the one it has just been moved to. `startedIn` is what keeps
+     * this from happening at all, and this is what covers the chats written
+     * before that field existed, whose record says only that the CLI has the id
+     * somewhere.
+     *
+     * What the new session does *not* get is the conversation: the lines are
+     * this app's, the context was the other account's, and there is nothing to
+     * carry across. That is what changing account means, and it is the reason
+     * this is a fresh session rather than a failure — the alternative is a chat
+     * that can never be spoken into again.
+     *
+     * Narrow, once, and only the other way round, for the same reason
+     * `isSessionTaken` is.
+     */
+    if (resume && exitError !== null && isSessionMissing(exitError)) {
+      return this.open(
+        id,
+        cwd,
+        options,
+        configDir,
+        disabledTools,
+        false,
         message
       )
     }
@@ -1205,16 +1276,24 @@ export class WorktreeChats {
    * store's own queue serialises them, so this cannot interleave with the title
    * the same turn is about to set.
    */
-  private async markStarted(id: string): Promise<void> {
-    if (this.started.has(id)) return
-    this.started.add(id)
+  private async markStarted(
+    id: string,
+    configDir: string | null
+  ): Promise<void> {
+    const dir = configDir ?? ""
+    const dirs = this.startedIn.get(id) ?? new Set<string>()
+    if (dirs.has(dir)) return
+    dirs.add(dir)
+    this.startedIn.set(id, dirs)
 
     try {
       const chats = await this.source.chats()
       if (!chats.some((chat) => chat.id === id)) return
       await this.source.saveChats(
         chats.map((chat) =>
-          chat.id === id ? { ...chat, started: true } : chat
+          chat.id === id
+            ? { ...chat, started: true, startedIn: startedDirs(chat, dirs) }
+            : chat
         )
       )
     } catch (error) {
@@ -1452,9 +1531,10 @@ export class WorktreeChats {
             ? {
                 ...chat,
                 title: titled,
-                // OR'd in rather than carried through: this listing may have
-                // been read before `markStarted` saved — see `started`.
-                started: chat.started === true || this.started.has(id),
+                // Merged in rather than carried through: this listing may have
+                // been read before `markStarted` saved — see `startedIn`.
+                started: chat.started === true || this.startedIn.has(id),
+                startedIn: startedDirs(chat, this.startedIn.get(id)),
                 updatedAt: new Date().toISOString(),
               }
             : chat
@@ -1664,6 +1744,34 @@ function isSessionTaken(error: string): boolean {
   return /session id .* is already in use/i.test(error)
 }
 
+/**
+ * Whether the CLI refused to resume because it has no such session.
+ *
+ * Matched on the text for the same reason `isSessionTaken` is, and just as
+ * narrowly: it is the trigger for starting a *new* conversation under an id the
+ * user believes is an old one, so anything looser would throw a chat's context
+ * away over an unrelated failure.
+ */
+function isSessionMissing(error: string): boolean {
+  return /no conversation found with session id/i.test(error)
+}
+
+/**
+ * The config directories a chat's record should now say the CLI has it in.
+ *
+ * Merged rather than written, because two writers keep this field — `markStarted`
+ * and `append` — and either can be reading a listing the other has already
+ * saved over. Undefined stays undefined until there is something to say, so a
+ * chat nobody has spoken into is not given an empty array.
+ */
+function startedDirs(
+  chat: WorktreeChat,
+  dirs: Set<string> | undefined
+): string[] | undefined {
+  if (!dirs || dirs.size === 0) return chat.startedIn
+  return [...new Set([...(chat.startedIn ?? []), ...dirs])]
+}
+
 /** A chat's name: the first thing asked, on one line and short enough for a tab
  * in a strip. */
 function titleOf(text: string): string {
@@ -1673,7 +1781,8 @@ function titleOf(text: string): string {
 }
 
 /**
- * The CLI's own name for a session, out of the transcript it keeps.
+ * Where the CLI keeps one session's transcript under one config directory, or
+ * null if that directory has no such session.
  *
  * **Found by looking rather than by computing where.** The transcript lives in a
  * folder named for the project — the path with every non-alphanumeric character
@@ -1681,6 +1790,92 @@ function titleOf(text: string): string {
  * reached through a symlink lands somewhere this app would have to guess at
  * (`/tmp` is filed under `-private-tmp` on macOS). A session id is a UUID, so
  * the file name alone identifies it and the folder does not have to be derived.
+ *
+ * `""` is the default directory, the way it is on `WorktreeChat.startedIn`.
+ */
+async function transcriptIn(
+  configDir: string,
+  sessionId: string
+): Promise<string | null> {
+  const projects = join(configDir || join(homedir(), ".claude"), "projects")
+
+  let folders: string[]
+  try {
+    folders = await readdir(projects)
+  } catch {
+    // No transcripts at all — a first run, or a profile pointed somewhere the
+    // CLI has not written yet.
+    return null
+  }
+
+  for (const folder of folders) {
+    const path = join(projects, folder, `${sessionId}.jsonl`)
+    try {
+      await stat(path)
+      return path
+    } catch {
+      continue
+    }
+  }
+
+  return null
+}
+
+/**
+ * Copies a session's transcript into the config directory it is about to be
+ * resumed under, so that switching profile keeps the conversation.
+ *
+ * A session is a file, and `--resume` is that file being read: the two accounts
+ * share no state, so the *only* way the new one can continue a conversation the
+ * old one had is to be given it. The folder is the source's own rather than one
+ * derived from the cwd — the CLI names it after the path it resolved, which is
+ * exactly the guess `transcriptIn` exists to avoid — and it is the same name
+ * under either directory, because it is the same project.
+ *
+ * Two things follow from this that are worth saying out loud. The conversation
+ * is **handed to the other account**: its messages are sent, billed and stored
+ * under the profile the user has just switched to, which is what they asked for
+ * by switching mid-chat. And the first turn after a switch re-reads the whole
+ * context — the prompt cache belongs to the account too, so this is a copy, not
+ * a move of something warm.
+ *
+ * Never overwrites: a directory that already has the session has the *later*
+ * copy of it, since it is the one the CLI has been appending to.
+ */
+async function carryTranscript(
+  sessionId: string,
+  from: string[],
+  to: string
+): Promise<boolean> {
+  if (await transcriptIn(to, sessionId)) return true
+
+  for (const source of from) {
+    const path = await transcriptIn(source, sessionId)
+    if (!path) continue
+
+    const folder = join(
+      to || join(homedir(), ".claude"),
+      "projects",
+      basename(dirname(path))
+    )
+    try {
+      await mkdir(folder, { recursive: true })
+      await copyFile(path, join(folder, `${sessionId}.jsonl`))
+      return true
+    } catch (error) {
+      // Worth a line and not worth failing the message over: what it costs is
+      // the conversation, and the turn still runs — as a new session, which is
+      // what this app did before it could carry one at all.
+      console.error("Could not carry the chat to the new profile", error)
+      return false
+    }
+  }
+
+  return false
+}
+
+/**
+ * The CLI's own name for a session, out of the transcript it keeps.
  *
  * The **last** entry wins: the CLI appends a fresh line rather than rewriting,
  * and a conversation that turned out to be about something else is retitled.
@@ -1693,51 +1888,36 @@ async function aiTitleOf(
   configDir: string | null,
   sessionId: string
 ): Promise<string | null> {
-  const projects = join(configDir ?? join(homedir(), ".claude"), "projects")
+  const path = await transcriptIn(configDir ?? "", sessionId)
+  if (!path) return null
 
-  let folders: string[]
+  let transcript: string
   try {
-    folders = await readdir(projects)
+    transcript = await readFile(path, "utf8")
   } catch {
-    // No transcripts at all — a first run, or a profile pointed somewhere the
-    // CLI has not written yet.
     return null
   }
 
-  for (const folder of folders) {
-    let transcript: string
+  let title: string | null = null
+  for (const line of transcript.split("\n")) {
+    if (!line.includes('"ai-title"')) continue
     try {
-      transcript = await readFile(
-        join(projects, folder, `${sessionId}.jsonl`),
-        "utf8"
-      )
-    } catch {
-      continue
-    }
-
-    let title: string | null = null
-    for (const line of transcript.split("\n")) {
-      if (!line.includes('"ai-title"')) continue
-      try {
-        const entry: unknown = JSON.parse(line)
-        if (
-          entry &&
-          typeof entry === "object" &&
-          "type" in entry &&
-          entry.type === "ai-title" &&
-          "aiTitle" in entry &&
-          typeof entry.aiTitle === "string"
-        ) {
-          const named = collapse(entry.aiTitle)
-          if (named) title = named
-        }
-      } catch {
-        // A line the CLI was still writing when this read it. The turn after
-        // this one looks again.
+      const entry: unknown = JSON.parse(line)
+      if (
+        entry &&
+        typeof entry === "object" &&
+        "type" in entry &&
+        entry.type === "ai-title" &&
+        "aiTitle" in entry &&
+        typeof entry.aiTitle === "string"
+      ) {
+        const named = collapse(entry.aiTitle)
+        if (named) title = named
       }
+    } catch {
+      // A line the CLI was still writing when this read it. The turn after
+      // this one looks again.
     }
-    return title
   }
-
-  return null
+  return title
 }

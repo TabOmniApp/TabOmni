@@ -207,6 +207,9 @@ const api: DesktopApi = {
     subscribe<TerminalExit>(IPC.terminalExit, listener),
 
   systemUsage: () => ipcRenderer.invoke(IPC.systemUsage),
+
+  checkForUpdate: () => ipcRenderer.invoke(IPC.checkForUpdate),
+  installUpdate: (version) => ipcRenderer.invoke(IPC.installUpdate, version),
 }
 
 contextBridge.exposeInMainWorld("desktop", api)

@@ -110,6 +110,13 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   answers with the paths it could not restore instead of deleting them: they go
   to the trash in `ipc.ts`, because this module stays free of `electron` so the
   tests can import it.
+- **`updater.ts`** — whether GitHub has a newer release, and running
+  `install.sh` (carried in the bundle as an `extraResources` entry) to install
+  it. **Not `electron-updater`**: Squirrel.Mac will not replace an unsigned
+  bundle and these builds are unsigned. The installer is spawned **detached**,
+  because the script's own second act is quitting this app. Free of `electron` —
+  the version and the script's path are arguments — so `test/updates.ts` can
+  import `isNewer`. `docs/design.md` § Updating has the rest.
 - **`tsserver.ts`** — one per Explorer root, using _that root's own_
   `typescript`, and nothing if it has none.
 - **`mcp-servers.ts`** — which MCP servers the user's own `claude` has, asked of
@@ -156,6 +163,11 @@ things are not visible from the option names:
    `import.meta.url` becomes `{}` under a CJS bundle, so a `define`/banner
    points it at a real file URL. That banner must not go near the sandboxed
    preload.
+6. `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` is what makes the CLI say whether it
+   is busy at all. Without it there is no `session_state_changed` on the stream
+   and busy falls back to the `result` line — which is wrong for exactly as long
+   as a background subagent outlives the turn that started it. The subagent
+   heartbeat (`task_*`) is read the same way, as the `agents` event.
 
 **What the CLI is handed is identical on every turn of every mode**, and this is
 load-bearing rather than tidiness. `allowedTools`, `disallowedTools` and a

@@ -12,7 +12,7 @@ import {
 import type { ComponentType, ReactNode, SVGProps } from "react"
 
 import type { AssistantMessage } from "@shared/api"
-import { AGENT_TOOL } from "@/lib/worktree-chat/activity"
+import { AGENT_TOOLS } from "@/lib/worktree-chat/activity"
 import { cn } from "@/lib/utils"
 import { AsanaLogo } from "@/components/ui/svgs/asana"
 import { Atlassian } from "@/components/ui/svgs/atlassian"
@@ -164,7 +164,8 @@ const TOOL_ICONS: Record<string, ToolIcon> = {
   WebFetch: Globe,
   WebSearch: Globe,
   TodoWrite: ListTodo,
-  [AGENT_TOOL]: Bot,
+  // Both of the subagent tool's names — see `AGENT_TOOLS`.
+  ...Object.fromEntries(AGENT_TOOLS.map((name) => [name, Bot])),
 }
 
 /**

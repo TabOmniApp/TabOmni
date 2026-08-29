@@ -138,6 +138,7 @@ function Conversation({
   const reading = useWorktreeChats((state) => state.reading.includes(chatId))
   const sending = useWorktreeChats((state) => state.sending.includes(chatId))
   const startedAt = useWorktreeChats((state) => state.startedAt[chatId])
+  const agents = useWorktreeChats((state) => state.agents[chatId])
   const context = useWorktreeChats((state) => state.context[chatId])
   const contextWindow = useWorktreeChats((state) => state.window[chatId])
   const compacting = useWorktreeChats((state) => state.compacting[chatId])
@@ -389,8 +390,17 @@ function Conversation({
               </div>
             )}
             {/* Not while a question is up — the turn is held, not working, and
-                a spinner under the card would say otherwise. */}
-            {sending && !ask && <ChatSkeleton startedAt={startedAt} />}
+                a spinner under the card would say otherwise.
+
+                A running subagent counts as working even when the chat does
+                not: a turn that started one in the background is *over* as far
+                as the CLI's own result is concerned, and on a `claude` too old
+                to report its state that is all `sending` has to go on. The
+                agents are what is still out there, so they draw their own
+                spinner. */}
+            {(sending || (agents ?? []).length > 0) && !ask && (
+              <ChatSkeleton startedAt={startedAt} agents={agents} />
+            )}
           </div>
         )}
       </div>

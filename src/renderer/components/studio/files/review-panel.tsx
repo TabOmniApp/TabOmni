@@ -8,7 +8,14 @@ import {
   type SVGProps,
 } from "react"
 import { createPortal } from "react-dom"
-import { Loader2, MessageSquare, Trash2, User, X } from "lucide-react"
+import {
+  Check,
+  CheckCircle2,
+  Loader2,
+  MessageSquare,
+  User,
+  X,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Claude } from "@/components/ui/svgs/claude"
@@ -26,6 +33,7 @@ import {
   useReview,
   type PendingRange,
   type ReviewAuthor,
+  type ReviewSeverity,
   type ReviewSpot,
   type ReviewThread,
 } from "@/lib/files/review"
@@ -44,9 +52,24 @@ import {
  * taken back — see the effect in `ReviewPanel`. */
 const drawn = new Set<string>()
 
+/** How long the walk waits for a thread's widget to appear before giving up —
+ * see the effect in `ReviewPanel`. Roughly two seconds at 60Hz. */
+const MAX_FIND_FRAMES = 120
+
 /**
- * The review of one checkout: the threads, wherever they are drawn, and the
- * one-line bar that says how many there are.
+ * What the thread the walk is standing on wears.
+ *
+ * A ring rather than a tint, because the box already has a background and a
+ * border doing work; a ring is the one layer nothing else in a thread uses. It
+ * stays until the walk moves on rather than fading after a second: `⌥↓` is a
+ * *place*, and a highlight that disappeared would leave somebody who looked away
+ * mid-file with no way back to it but pressing the key again and overshooting.
+ */
+const FOCUS_RING = (focused: boolean) =>
+  focused ? "ring-2 ring-ring/70 ring-offset-1 ring-offset-background" : ""
+
+/**
+ * The review of one checkout: the threads, wherever they are drawn.
  *
  * **The remarks are in the diff, under the lines they are about**, and this
  * component's own output is mostly *portals* rather than anything laid out here.
@@ -63,9 +86,17 @@ const drawn = new Set<string>()
  * this pane is not showing portals into a detached node and draws nothing,
  * without this component having to work out which those are.
  *
- * What is left in flow is a bar: how many comments there are across the whole
- * checkout, and `Discard`. It is the only thing that can say a review exists in a
- * file that is not open, and the only place a review can be thrown away.
+ * **Nothing is left in flow but the stranded composer.** There was a bar under
+ * the diff — the comment count, `Discard`, `Review`, and whatever the last run
+ * had to say for itself — and every one of those found a better home, which is
+ * what made it 32 pixels of diff spent on a row that repeated things said
+ * elsewhere. `Review` is in the Explorer's `Changes` header, where the changed
+ * files are listed and where somebody wants it *before* picking one; `Discard`
+ * is beside it, for the same reason; how a run went is the progress dialog's,
+ * which is on screen while it runs and says the count when it stops; and the
+ * comment count is the badge on each row of that same list, which says *which*
+ * files rather than only how many. The bar's one irreplaceable job — saying a
+ * review exists in a file nobody has opened — was already the badge's.
  */
 export function ReviewPanel({
   rootId,
@@ -118,17 +149,40 @@ export function ReviewPanel({
     for (const id of alive) drawn.add(id)
   }, [ids])
 
-  /* Threads, not notes: this counts the **places** a remark has been left, so a
-   * thread somebody has argued with three times is still one place to go and
-   * look. See the note where `noteCount` used to be. */
-  const count = threads.length
   const label = (path: string) => relativeTo(rootPath, path) || path
 
-  /* By root rather than a flag: a second project's pane must not spin for a turn
-   * that is not its own. */
-  const reviewing = useReview((state) => state.reviewing) === rootId
-  const reviewError = useReview((state) => state.reviewError)
-  const progress = useReview((state) => state.progress)
+  /*
+   * The thread `⌥↓` landed on, brought into view.
+   *
+   * **Retried across frames rather than done once**, which is the whole of the
+   * difficulty: `step` may have opened another file, and the widget the thread is
+   * drawn in does not exist until that file's diff has been read, parsed and laid
+   * out. So the node is asked for every frame until it is in the document —
+   * `threadHost` hands back the same node whether or not the editor has attached
+   * it yet, so there is nothing to subscribe to, only something to wait for.
+   *
+   * Bounded, because a thread in a file that turns out not to be readable would
+   * otherwise be a rAF loop for the rest of the session. Two seconds is far more
+   * than a diff takes and short enough that nothing accumulates.
+   */
+  const focused = useReview((state) => state.focused)
+  useEffect(() => {
+    if (!focused) return
+    let frames = 0
+    let raf = 0
+
+    const find = () => {
+      const node = threadHost(focused)
+      if (node.isConnected) {
+        node.scrollIntoView({ block: "center", behavior: "smooth" })
+        return
+      }
+      if (frames++ < MAX_FIND_FRAMES) raf = requestAnimationFrame(find)
+    }
+
+    find()
+    return () => cancelAnimationFrame(raf)
+  }, [focused])
 
   return (
     <>
@@ -146,6 +200,7 @@ export function ReviewPanel({
               rootPath={rootPath}
               label={label(thread.path)}
               replying={replyTo === thread.id}
+              focused={focused === thread.id}
             />,
             threadHost(thread.id)
           )}
@@ -162,98 +217,20 @@ export function ReviewPanel({
       )}
 
       {/*
-        The bar.
+        The box for a range that is on screen nowhere — see `stranded`.
 
-        **Always drawn**, where it used to appear only once there was something
-        to count. `Review` is why: a button that hands the whole diff to Claude
-        has to be reachable on a diff nobody has commented on yet, which is
-        exactly the state the bar used to hide in. Thirty-two pixels is what that
-        costs, and it buys the one line that can say a review exists in a file
-        nobody has opened.
+        The one thing the bar used to hold that had no other home, so it is what
+        is left of it: a strip at the foot of the pane, drawn **only** when there
+        is a comment being written with nothing on screen to hang it from. Every
+        other state draws no row at all, which is the point of taking the bar
+        out.
       */}
-      <div className="shrink-0 border-t bg-muted/20">
-        <div className="flex h-8 items-center gap-2 px-3">
-          <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="text-xs font-medium">
-            Review
-            {count > 0 && (
-              <span className="ml-1.5 font-normal text-muted-foreground">
-                {count === 1 ? "1 comment" : `${count} comments`}
-              </span>
-            )}
-          </span>
-
-          {/* Whatever the last whole-diff review had to say for itself: that it
-              found nothing, or that it could not be run. Beside the button that
-              started it rather than in a thread — it is about the run, not about
-              any line. */}
-          {reviewError && (
-            <span className="min-w-0 truncate text-xs text-muted-foreground">
-              {reviewError}
-            </span>
-          )}
-
-          {/* While it runs, the same slot says what it is doing instead — the
-              turn's own last tool call (`Read src/main/ipc.ts`), so a review
-              of a dozen files reads as progress rather than as a spinner with
-              nothing behind it. See `progress` and `listen` on the store. */}
-          {reviewing && progress.length > 0 && (
-            <span
-              className="min-w-0 truncate font-mono text-xs text-muted-foreground"
-              title={progress.join("\n")}
-            >
-              {progress[progress.length - 1]}
-            </span>
-          )}
-
-          <div className="ml-auto flex items-center gap-1.5">
-            {count > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 gap-1.5 px-2 text-xs"
-                onClick={() => useReview.getState().clear(rootId)}
-              >
-                <Trash2 className="size-3" />
-                Discard
-              </Button>
-            )}
-            {/*
-              One turn over every changed file, leaving what it finds as threads
-              on the lines it names — the same author a reviewer's own remarks
-              have, in the same pane, answerable in the same way.
-
-              Not a chat: the point is that the findings arrive **as comments**,
-              beside the code, rather than as a report somebody has to read and
-              then re-enter. `review-agent.ts` has the shape of the turn.
-            */}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 gap-1.5 px-2 text-xs"
-              disabled={reviewing}
-              title="Hands every changed file to Claude and leaves what it finds as comments"
-              onClick={() =>
-                void useReview.getState().reviewAll(rootId, rootPath)
-              }
-            >
-              {reviewing ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Claude className="size-3" />
-              )}
-              {reviewing ? "Reviewing…" : "Review"}
-            </Button>
-          </div>
+      {stranded && (
+        <div className="shrink-0 border-t bg-muted/20 px-3 py-2">
+          <RangeLine label={label(stranded.path)} place={stranded} />
+          <Composer place={stranded} rootPath={rootPath} />
         </div>
-
-        {stranded && (
-          <div className="border-t bg-background px-3 py-2">
-            <RangeLine label={label(stranded.path)} place={stranded} />
-            <Composer place={stranded} rootPath={rootPath} />
-          </div>
-        )}
-      </div>
+      )}
     </>
   )
 }
@@ -482,6 +459,52 @@ const AUTHOR_TITLE: Record<ReviewAuthor, string> = {
 }
 
 /**
+ * How bad a finding says it is, as a chip.
+ *
+ * The classes live here and the id lives in the record, the same split
+ * `BOARD_TONES` has from `BoardTone` — a review on disk says `critical`, and
+ * what that is worth in pixels is this file's business.
+ *
+ * The hues are the ones a forge trained everybody on: red for the one that
+ * stops a release, amber for a real bug, and then **nothing** — `medium` and
+ * `low` are drawn in the muted grey the rest of the thread's furniture uses.
+ * That is the decision worth defending: a four-colour scale makes every comment
+ * shout, and a reviewer scanning a file needs the two that matter to be the two
+ * that are coloured. `low` is quieter still, and deliberately readable only when
+ * looked at.
+ */
+const SEVERITY_CHIP: Record<ReviewSeverity, string> = {
+  critical: "bg-red-500/12 text-red-700 dark:bg-red-400/15 dark:text-red-300",
+  high: "bg-amber-500/15 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300",
+  medium: "bg-muted text-muted-foreground",
+  low: "bg-muted/60 text-muted-foreground/80",
+}
+
+/** What each reads as. Capitalised rather than shouted: this sits beside a name
+ * and a line number, and an upper-case word at that size is a klaxon. */
+const SEVERITY_TITLE: Record<ReviewSeverity, string> = {
+  critical: "Critical",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+}
+
+/** The chip itself. Absent severity draws nothing at all — see
+ * `ReviewThread.severity`: a remark somebody typed has none, and a placeholder
+ * saying so would be a form field on a sentence. */
+function SeverityMark({ severity }: { severity: ReviewSeverity | undefined }) {
+  if (!severity) return null
+  return (
+    <span
+      className={`shrink-0 rounded-sm px-1 py-px font-sans text-[0.6rem] font-medium ${SEVERITY_CHIP[severity]}`}
+      title={`Claude rated this ${SEVERITY_TITLE[severity].toLowerCase()}`}
+    >
+      {SEVERITY_TITLE[severity]}
+    </span>
+  )
+}
+
+/**
  * One range and everything said about it, in the shape a forge uses.
  *
  * **A bordered box between two runs of code, with one block per thing said and a
@@ -510,20 +533,44 @@ function Thread({
   rootPath,
   label,
   replying,
+  focused,
 }: {
   thread: ReviewThread
   /** The checkout, for the turn `Ask Claude` runs — see `askAgent`. */
   rootPath: string
   label: string
   replying: boolean
+  /** Whether the walk is standing on this one — see `step`. Drawn as a ring:
+   * the pane has scrolled here, and a comment landed on among three others is
+   * one the eye still has to find. */
+  focused: boolean
 }) {
   const asking = useReview((state) => state.asking).includes(thread.id)
   const failed = useReview((state) => state.askErrors)[thread.id]
+  /* Whether a *resolved* thread has been opened again to be read. Local, and
+     deliberately not on the store: it says nothing about the review, it is not
+     worth writing down, and a resolved thread the reader unfolded should fold
+     itself back the next time the pane is built. Resolving again re-folds it,
+     which is why this is reset there rather than left as it stood. */
+  const [showing, setShowing] = useState(false)
+
+  if (thread.resolved && !showing) {
+    return (
+      <ResolvedMark
+        thread={thread}
+        label={label}
+        focused={focused}
+        onShow={() => setShowing(true)}
+      />
+    )
+  }
 
   return (
     /* `overflow-hidden` so the separators and the footer's own tint stop at the
        rounded corners rather than squaring them off. */
-    <div className="group overflow-hidden rounded-md border bg-popover shadow-md">
+    <div
+      className={`group overflow-hidden rounded-md border bg-popover shadow-md ${FOCUS_RING(focused)}`}
+    >
       <ul>
         {thread.notes.map((note, at) => {
           const Mark = AUTHOR_MARK[note.author]
@@ -535,6 +582,10 @@ function Thread({
                 <span className="text-xs font-medium">
                   {AUTHOR_TITLE[note.author]}
                 </span>
+                {/* Beside the name on the first note, because it belongs to the
+                    finding rather than to the thread's later argument — see
+                    `ReviewThread.severity`. */}
+                {first && <SeverityMark severity={thread.severity} />}
                 {first && (
                   <span className="ml-auto min-w-0 truncate font-mono text-[0.7rem] text-muted-foreground">
                     {label}:{anchorLabel(thread.anchor)}
@@ -604,7 +655,7 @@ function Thread({
         </p>
       )}
 
-      <div className="border-t bg-muted/40 px-3 py-2">
+      <div className="space-y-1.5 border-t bg-muted/40 px-3 py-2">
         {replying ? (
           <Box
             placeholder="Reply…  @ to ask Claude"
@@ -634,8 +685,90 @@ function Thread({
             Reply… <span className="opacity-70">@ to ask Claude</span>
           </button>
         )}
+
+        {/*
+          The forge's *Resolve conversation*, and under the reply field for the
+          same reason it sits under one there: the two are the ends of the same
+          decision — say something more, or say this is dealt with — and a
+          button that settles a thread belongs after the one that continues it.
+
+          Full width and quiet: it is pressed once per thread, so it does not
+          need to be loud, but it must be visible without hovering. The `Delete`
+          beside the first note is the destructive one and stays on hover; this
+          one is undone by pressing it again.
+        */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-full gap-1.5 px-2 text-xs text-muted-foreground"
+          onClick={() =>
+            useReview.getState().resolve(thread.id, !thread.resolved)
+          }
+        >
+          {thread.resolved ? (
+            <>
+              <MessageSquare className="size-3" />
+              Reopen conversation
+            </>
+          ) : (
+            <>
+              <Check className="size-3" />
+              Resolve conversation
+            </>
+          )}
+        </Button>
       </div>
     </div>
+  )
+}
+
+/**
+ * A settled conversation, folded to one line.
+ *
+ * **Folded rather than hidden**, which is the whole of the argument: a review
+ * that quietly removed what had been dealt with would be this app deciding a
+ * discussion was over, and the record of *how* a remark was answered is the
+ * reason a forge keeps the thread at all. What resolving buys is the height —
+ * a diff worked through is a diff you can read again — and the counts, which
+ * `openThreads` takes care of.
+ *
+ * The whole row is the button: a thread this small has one thing to do with it,
+ * and a chevron beside a line of text is a target nobody can hit. `Reopen` is
+ * inside the thread it opens rather than out here, because reopening is a
+ * decision about the conversation and this row is a door.
+ */
+function ResolvedMark({
+  thread,
+  label,
+  focused,
+  onShow,
+}: {
+  thread: ReviewThread
+  label: string
+  focused: boolean
+  onShow: () => void
+}) {
+  const notes = thread.notes.length
+  return (
+    <button
+      type="button"
+      className={`flex w-full items-center gap-1.5 rounded-md border bg-popover/60 px-3 py-1.5 text-left shadow-sm hover:bg-accent ${FOCUS_RING(focused)}`}
+      onClick={onShow}
+      title="Show this resolved conversation"
+    >
+      <CheckCircle2 className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="text-xs font-medium">Resolved</span>
+      {/* Kept on the folded row: what was settled is worth knowing without
+          unfolding it, and a `Critical` that has been dealt with is the most
+          interesting line in a worked-through diff. */}
+      <SeverityMark severity={thread.severity} />
+      <span className="text-[0.7rem] text-muted-foreground">
+        {notes === 1 ? "1 comment" : `${notes} comments`}
+      </span>
+      <span className="ml-auto min-w-0 truncate font-mono text-[0.7rem] text-muted-foreground">
+        {label}:{anchorLabel(thread.anchor)}
+      </span>
+    </button>
   )
 }
 

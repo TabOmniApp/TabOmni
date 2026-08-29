@@ -17,9 +17,15 @@ const {
   isDeletedOnly,
   isEmptyAnchor,
   mentionsAgent,
+  openThreads,
+  orderedThreads,
   rangeLabel,
   markMention,
   settle,
+  severityAtRank,
+  severityRank,
+  severitySummary,
+  stepThrough,
   snippetOf,
   threadPrompt,
   threadsOf,
@@ -382,6 +388,57 @@ async function main() {
     "and so does one whose end is above its start — a bad `toLine` is not a reason to lose the remark"
   )
 
+  check(
+    "a severity is read, whatever case it was typed in",
+    (() => {
+      const found = findingsIn(
+        fenced(
+          '[{"path":"a.ts","fromLine":1,"toLine":1,"severity":"critical","body":"x"},' +
+            '{"path":"a.ts","fromLine":2,"toLine":2,"severity":" High ","body":"y"},' +
+            '{"path":"a.ts","fromLine":3,"toLine":3,"severity":"low","body":"z"}]'
+        )
+      )
+      return (
+        found?.[0]?.severity === "critical" &&
+        found[1]?.severity === "high" &&
+        found[2]?.severity === "low"
+      )
+    })(),
+    "case and stray spaces are a model not paying attention, not a different word"
+  )
+
+  check(
+    "a severity nothing recognises is dropped, and the remark is kept",
+    (() => {
+      const found = findingsIn(
+        fenced(
+          '[{"path":"a.ts","fromLine":1,"toLine":1,"severity":"moderate","body":"x"},' +
+            '{"path":"a.ts","fromLine":2,"toLine":2,"severity":3,"body":"y"},' +
+            '{"path":"a.ts","fromLine":3,"toLine":3,"body":"z"}]'
+        )
+      )
+      return (
+        found?.length === 3 &&
+        found.every((finding) => finding.severity === undefined)
+      )
+    })(),
+    "guessing a middle would be indistinguishable from a `medium` the model chose"
+  )
+
+  check(
+    "a finished review reads back worst first",
+    severitySummary({ low: 2, critical: 1, high: 3 }) ===
+      "1 critical, 3 high, 2 low",
+    "the first word decides whether the diff is read now or after lunch"
+  )
+
+  check(
+    "a level with nothing in it is left out, and nothing rated says nothing",
+    severitySummary({ medium: 1, low: 0 }) === "1 medium" &&
+      severitySummary({}) === "",
+    "`0 low` is a phrase nobody wants, and the comment count is said separately"
+  )
+
   section("how an anchor reads")
 
   check(
@@ -618,6 +675,124 @@ async function main() {
   check(
     "and deleting the thread takes its box with it",
     useReview.getState().replyTo === null
+  )
+
+  section("settling one")
+
+  const settling = useReview.getState().threads[0]!.id
+  review.openReply(settling)
+  review.resolve(settling, true)
+  const settled = () =>
+    useReview.getState().threads.find((thread) => thread.id === settling)
+  check(
+    "resolving a thread marks it and closes its reply box",
+    settled()?.resolved === true && useReview.getState().replyTo === null,
+    "the box is the 'there is more to say here' affordance"
+  )
+  check(
+    "it is kept, notes and all — folded is not deleted",
+    (settled()?.notes.length ?? 0) > 0 &&
+      useReview.getState().threads.some((thread) => thread.id === settling)
+  )
+  check(
+    "and it stops being counted",
+    !openThreads(useReview.getState().threads).some(
+      (thread) => thread.id === settling
+    )
+  )
+
+  review.resolve(settling, false)
+  check(
+    "reopening puts it back in the count",
+    settled()?.resolved === false &&
+      openThreads(useReview.getState().threads).some(
+        (thread) => thread.id === settling
+      ),
+    "a set rather than a toggle: the two ends are two buttons"
+  )
+
+  check(
+    "a thread written before the field existed reads as open",
+    openThreads([thread("/w/a.ts", 1, 1, [["you", "old record"]])]).length ===
+      1,
+    "`resolved` is absent on everything on disk already"
+  )
+
+  section("walking through them")
+
+  /*
+   * `⌥↓` / `⌥↑` — the way through a review of twelve files, and the two halves
+   * of it that are worth being sure about: the order, and where the next one is.
+   */
+  const walkable = [
+    thread("/w/b.ts", 5, 5, [["agent", "second file"]]),
+    thread("/w/a.ts", 40, 41, [["agent", "further down a"]]),
+    thread("/w/a.ts", 3, 3, [["agent", "top of a"]]),
+  ]
+
+  check(
+    "the walk goes by file and then down the page",
+    orderedThreads(walkable)
+      .map((entry) => entry.notes[0]!.body)
+      .join(" | ") === "top of a | further down a | second file",
+    "not the order they were opened — four concurrent turns answer in any order"
+  )
+
+  check(
+    "a settled conversation is not on the walk",
+    orderedThreads([
+      ...walkable,
+      { ...thread("/w/a.ts", 1, 1, [["you", "done"]]), resolved: true },
+    ]).length === 3,
+    "a walk that kept them gets longer the more work you do"
+  )
+
+  check(
+    "with nothing focused, forwards is the first and back is the last",
+    (() => {
+      const order = orderedThreads(walkable)
+      return (
+        stepThrough(order, null, 1)?.notes[0]?.body === "top of a" &&
+        stepThrough(order, null, -1)?.notes[0]?.body === "second file"
+      )
+    })()
+  )
+
+  check(
+    "it wraps at both ends",
+    (() => {
+      const order = orderedThreads(walkable)
+      const last = order.at(-1)!
+      const first = order[0]!
+      return (
+        stepThrough(order, last.id, 1)?.id === first.id &&
+        stepThrough(order, first.id, -1)?.id === last.id
+      )
+    })(),
+    "a review is walked until it is empty, not until the bottom"
+  )
+
+  check(
+    "a thread that has left the walk starts it over rather than ending it",
+    stepThrough(orderedThreads(walkable), "gone", 1)?.notes[0]?.body ===
+      "top of a",
+    "the focused one can be resolved or deleted while it is focused"
+  )
+
+  check(
+    "and an empty review has nowhere to go",
+    stepThrough([], null, 1) === null
+  )
+
+  check(
+    "a severity ranks worst-highest, and nothing ranks 0",
+    severityRank("critical") === 4 &&
+      severityRank("high") === 3 &&
+      severityRank("low") === 1 &&
+      severityRank(undefined) === 0 &&
+      severityAtRank(4) === "critical" &&
+      severityAtRank(0) === undefined,
+    "0 is the identity a directory row takes a maximum from"
   )
 
   review.clear("root")

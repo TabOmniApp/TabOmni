@@ -43,6 +43,8 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  ChevronUp,
+  MessageSquareX,
   NotebookPen,
   Pencil,
   RotateCw,
@@ -208,6 +210,26 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
    * project's turn rather than pretending it can start one. */
   const reviewing = useReview((state) => state.reviewing) !== null
 
+  /* How many threads this checkout is carrying — what decides whether there is
+   * a review to discard. Every thread, resolved or not: a review of nothing but
+   * settled conversations is still a review to throw away. Read as a length
+   * rather than as a filtered array, so the selector returns a number and this
+   * header does not re-render on every keystroke in a reply box. */
+  const reviewCount = useReview(
+    (state) =>
+      state.threads.filter((thread) => thread.rootId === shown?.id).length
+  )
+
+  /* And how many are still asking for something, which is what the walk moves
+   * between — a review of nothing but settled conversations has nowhere to
+   * walk to, so the two buttons go with the last unresolved one. */
+  const walkCount = useReview(
+    (state) =>
+      state.threads.filter(
+        (thread) => thread.rootId === shown?.id && !thread.resolved
+      ).length
+  )
+
   return (
     <ContextMenu>
       <div className="flex h-full flex-col">
@@ -235,13 +257,65 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
 
           <div className="flex shrink-0 items-center gap-0.5">
             {/*
+              The way through the review, and the reason it is drawn at all.
+
+              `⌥↓` / `⌥↑` do this and are the better way to do it — a walk is a
+              key you hold, not a button you aim at twelve times. But a shortcut
+              with nothing on screen is a shortcut nobody finds, and this pair is
+              what says the walk exists: the tooltip names the key, so the button
+              teaches its own replacement. Beside the review's other two rather
+              than in the diff, because the walk *starts* before a file has been
+              picked — that is most of what it is for.
+
+              Never disabled and never a "no more": the walk wraps, so with one
+              comment left both arrows land on it. See `step`.
+            */}
+            {tab === "changes" && shown && walkCount > 0 && (
+              <>
+                <IconButton
+                  label="Previous review comment (⌥↑)"
+                  onClick={() => useReview.getState().step(shown.id, -1)}
+                >
+                  <ChevronUp />
+                </IconButton>
+                <IconButton
+                  label="Next review comment (⌥↓)"
+                  onClick={() => useReview.getState().step(shown.id, 1)}
+                >
+                  <ChevronDown />
+                </IconButton>
+              </>
+            )}
+            {/*
+              Throwing the review away, beside the button that starts one.
+
+              It was in the diff pane's own bar, and came here when that bar
+              went: it is the only way to clear a review, so it cannot live
+              under a file that has been picked — the comments it discards are
+              across every file, most of which are not open. Drawn only while
+              there is a review to discard, which is what keeps this header from
+              becoming the row of icons the note below refuses.
+
+              No confirmation, unlike the git `Discard` two rows down: that one
+              throws away work and this one throws away remarks about it.
+            */}
+            {tab === "changes" && shown && reviewCount > 0 && (
+              <IconButton
+                label={`Discard ${reviewCount} review comment${reviewCount === 1 ? "" : "s"} in this checkout`}
+                onClick={() => useReview.getState().clear(shown.id)}
+              >
+                <MessageSquareX />
+              </IconButton>
+            )}
+            {/*
               Review, on the tab the changed files are listed in.
 
-              Here rather than only in the diff pane's own bar, because that
-              bar lives under a file that has been picked — and a review is
-              the thing somebody wants *before* picking one, over the whole
-              pile. Drawn only when there is something to review, so the
-              header of `All files` is left as it was.
+              The one place it is now: it used to be here *and* in a bar under
+              the diff, which is one button asked for twice. A review is the
+              thing somebody wants *before* picking a file, over the whole pile,
+              so this is the end that survives. Drawn only when there is
+              something to review, so the header of `All files` is left as it
+              was.
             */}
             {tab === "changes" &&
               shown &&
@@ -265,16 +339,19 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
                   )}
                 </IconButton>
               )}
-            {/* **Refresh, and nothing else.** The header is two tabs now and a
-                row of icons beside them is a row of icons nobody reads — every
-                other action here is on a menu over the thing it acts on, which
-                is where it belongs: `New file` and `Collapse all` on the root
-                bar's menu (or a directory row's, which creates in *that*
-                directory), `Add folder` on the empty space under the tree and
-                in the File menu. Refresh is the one that is about the panel
-                rather than about anything in it, and it is the one with no
-                target to right-click: the filesystems `fs.watch` is quiet on
-                are why it exists at all. */}
+            {/* **Refresh is the only one always here**, and the rule it stands
+                for still holds: a row of icons beside two tabs is a row of icons
+                nobody reads, so every action about a *thing* is on a menu over
+                that thing — `New file` and `Collapse all` on the root bar's menu
+                (or a directory row's, which creates in *that* directory),
+                `Add folder` on the empty space under the tree and in the File
+                menu. What the four above have in common is that they are about
+                the **review**, which has no row to right-click and is not on
+                screen until it exists: each of them is drawn only while it has
+                something to act on, so the ordinary state of this header is
+                still two tabs and one button. Refresh is the one that is about
+                the panel itself, and the filesystems `fs.watch` is quiet on are
+                why it exists at all. */}
             <IconButton
               label="Refresh"
               disabled={folders.length === 0}

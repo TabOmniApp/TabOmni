@@ -3,6 +3,7 @@ import { create } from "zustand"
 import {
   chatRootId,
   type AssistantMessage,
+  type ChatAgent,
   type ChatPlace,
   type ChatWindow,
   type WorktreeChat,
@@ -86,6 +87,19 @@ type WorktreeChatState = {
    * was closed for idleness has none until its next turn.
    */
   window: Record<string, ChatWindow>
+  /**
+   * The subagents each chat has running right now.
+   *
+   * Replaced wholesale by every `agents` event rather than added to and removed
+   * from — main sends the whole list for exactly that reason (see `ChatAgent`),
+   * so a start or a finish that never arrived cannot leave an agent running on
+   * screen for ever.
+   *
+   * Live and never written down, like `sending`: what a subagent *did* is the
+   * tool rows it wrote into the transcript, and this is only what is happening
+   * while nothing is being written.
+   */
+  agents: Record<string, ChatAgent[]>
   /** The chats the CLI is compacting right now. A state and not a fraction —
    * compaction is one summarisation call, so there is no progress to report. */
   compacting: Record<string, boolean>
@@ -241,6 +255,7 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
   startedAt: {},
   context: {},
   window: {},
+  agents: {},
   compacting: {},
   compactError: {},
   asks: {},
@@ -490,6 +505,8 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
       // reporting a conversation that has been thrown away.
       context: without(get().context, id),
       window: without(get().window, id),
+      // Same reason: the session that was running them is closed.
+      agents: without(get().agents, id),
       compacting: without(get().compacting, id),
       compactError: without(get().compactError, id),
     })
@@ -687,6 +704,18 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
           compactError: event.error
             ? { ...get().compactError, [chatId]: event.error }
             : without(get().compactError, chatId),
+        })
+        return
+      }
+
+      // Replaced rather than merged — the event is the whole list, and an empty
+      // one is main saying the last subagent has finished.
+      if (event.type === "agents") {
+        set({
+          agents:
+            event.agents.length > 0
+              ? { ...get().agents, [chatId]: event.agents }
+              : without(get().agents, chatId),
         })
         return
       }
