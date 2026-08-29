@@ -11,26 +11,47 @@ import {
   gutter,
   GutterMarker,
   ViewPlugin,
+  WidgetType,
   type BlockInfo,
   type ViewUpdate,
 } from "@codemirror/view"
 
-import { DIFF_ROW_HEIGHT, removedChunkAt } from "./diff-chrome"
-import type { ReviewSide, ReviewThread } from "./review"
+import {
+  DIFF_ROW_HEIGHT,
+  FOREIGN_WIDGET,
+  removedChunkAt,
+  removedChunkOf,
+} from "./diff-chrome"
+import { threadHost } from "./review-hosts"
+import {
+  EMPTY_ANCHOR,
+  isEmptyAnchor,
+  withRow,
+  type ReviewSelection,
+  type ReviewSide,
+  type ReviewSpot,
+  type ReviewThread,
+} from "./review"
 
 /**
  * The review, as the diff draws it: the column a line is picked from, and the
  * tint on the lines a thread is about.
  *
- * **What it does not draw is the thread.** It did, as a block widget under the
- * range — which is where a forge puts one — and the boxes were taken out again:
- * a diff with three comments in it is a diff pushed apart in three places, and
- * the code around a remark is the thing somebody is reading. So the diff says
- * *which* lines have been commented on, in one bubble and a tint, and the
- * remarks themselves are the list in the pane's own bar (`review-panel.tsx`).
- * What went with the widgets: their DOM, the `drafts` they needed because a
- * rebuild would have taken a half-typed sentence with it, and `replyTo` ever
- * reaching this file.
+ * **It draws the threads too, under the lines they are about** — and that has
+ * been true, then not, and now is again. They were block widgets here; they were
+ * taken out to a strip at the foot of the pane, on the argument that a diff with
+ * three comments in it is a diff pushed apart in three places; and they are back,
+ * because that argument was worth less than what it cost. A remark four hundred
+ * pixels below the code it is about is a remark you read with a finger on the
+ * screen, and a diff pushed apart *at* a comment is pushed apart where somebody
+ * is already looking. Everywhere else it is untouched.
+ *
+ * What made the first attempt expensive was that a widget's DOM had to be built
+ * by hand — a React root per thread would be mounted by a view that rebuilds on
+ * every file, layout and theme change, and measured before React had committed
+ * anything into it. `review-hosts.ts` is the answer to that: the node belongs to
+ * neither side, the widget hands the same one back every time, and React portals
+ * into it. See `threadWidgets` below.
  *
  * The column is a gutter rather than a click on the line itself for a reason
  * that is not cosmetic: the diff is genuinely read-only, so nothing in the
@@ -69,8 +90,10 @@ export type ReviewMarks = {
   /** This file's threads, **both sides**: one editor draws the working file's
    * and the removed rows in the same pass. */
   threads: ReviewThread[]
-  /** The range being written about right now, or null. */
-  pending: { fromLine: number; toLine: number; side: ReviewSide } | null
+  /** The range being written about right now, or null. Both sides, since a range
+   * can now cover a hunk — and its two ends on screen, which is what the band is
+   * closed at. See `ReviewSelection`. */
+  pending: ReviewSelection | null
 }
 
 /**
@@ -81,12 +104,26 @@ export type ReviewMarks = {
  * and not a second copy of what a review *is*.
  */
 export type ReviewActions = {
-  /** A click in the column: the line, whether it was a shift-click, and which
-   * file that line is numbered in — a removed row is the commit's. */
-  pick: (line: number, extend: boolean, side: ReviewSide) => void
-  /** A drag: the line it started on, and the line it is over now. Both are on
-   * `side`, since a drag that leaves the side it started on is ignored. */
-  drag: (anchor: number, line: number, side: ReviewSide) => void
+  /**
+   * A press in the review column, as the whole range it names.
+   *
+   * An anchor rather than a line and a side, because the two are no longer
+   * separable: the run a gesture covers can cross from a chunk's deleted rows
+   * into the lines that replaced them, and those are lines of two different
+   * files. Working out which rows a gesture covered needs the editor, so it is
+   * done here and the caller is handed the answer.
+   */
+  pick: (selection: ReviewSelection) => void
+  /**
+   * Where the range being picked is on screen, or null when none of it is.
+   *
+   * Reported by whichever editor draws that side, so in a split diff exactly one
+   * of the two speaks — see `pendingSpot`. What the caller does with it is put
+   * the composer against the lines rather than at the foot of the pane.
+   */
+  locate: (spot: ReviewSpot | null) => void
+  /** The same, while the pointer is still down. */
+  drag: (selection: ReviewSelection) => void
   /** The button let go, wherever that happened — what opens the box. */
   settle: () => void
 }
@@ -135,6 +172,47 @@ const reviewMarks = StateField.define<ReviewMarks>({
   },
 })
 
+/** One row of one of the two files — what the pointer is over, and what a press
+ * on it means. */
+type Row = { side: ReviewSide; line: number }
+
+const setHoverRow = StateEffect.define<Row | null>()
+
+/**
+ * The row the pointer is anywhere on — **the whole row, not the column**.
+ *
+ * This is the discoverability fix, and it is worth saying what it replaces. The
+ * `+` was revealed by a CSS `:hover` on the gutter cell, which is a 14px-wide
+ * target laid over the sign column: a reader who had never been told the column
+ * was there had to sweep the pointer through it to find out, and one who had
+ * been told still had to aim at it. The affordance now appears when the pointer
+ * is anywhere on the line — which is where it already is, since the line is what
+ * they are reading — and the column is then a short move sideways.
+ *
+ * It costs a transaction per row crossed, which is the thing the CSS was
+ * avoiding. That is the same rate a drag already dispatches at, the marker for
+ * every other row is `eq` to what it was so the gutter redraws one cell, and the
+ * dispatch is skipped entirely when the row has not changed.
+ *
+ * In editor state rather than in a `:hover` because a removed chunk is **one**
+ * gutter element holding twenty rows: CSS can light the slot or nothing, and
+ * which of the twenty the pointer is on is arithmetic only this side knows.
+ */
+const hoverRow = StateField.define<Row | null>({
+  create: () => null,
+  update(row, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setHoverRow)) return effect.value
+    }
+    return row
+  },
+})
+
+/** Whether this row is the one under the pointer. */
+function hovered(row: Row | null, side: ReviewSide, line: number): boolean {
+  return row !== null && row.side === side && row.line === line
+}
+
 /**
  * Which lines carry a thread, for the column's cells.
  *
@@ -154,13 +232,24 @@ function commentedIn(threads: ReviewThread[]): Record<ReviewSide, Set<number>> {
     old: new Set<number>(),
   }
   for (const thread of threads) {
-    for (let line = thread.fromLine; line <= thread.toLine; line += 1) {
-      lines[thread.side].add(line)
+    // A thread whose lines are nowhere in the file has no rows to tint: its
+    // numbers are the ones it was written with, and marking whatever sits at
+    // them now would be the app pointing at the wrong code. The thread is still
+    // drawn, under wherever it last was, and says it is outdated.
+    if (thread.stale) continue
+    for (const side of SIDES) {
+      const range = thread.anchor[side]
+      if (!range) continue
+      for (let line = range.fromLine; line <= range.toLine; line += 1) {
+        lines[side].add(line)
+      }
     }
   }
   commented.set(threads, lines)
   return lines
 }
+
+const SIDES: readonly ReviewSide[] = ["old", "new"]
 
 /**
  * What one row of one side is: nothing, somewhere in the range being written
@@ -178,20 +267,62 @@ function commentedIn(threads: ReviewThread[]): Record<ReviewSide, Set<number>> {
  */
 function stateOf(marks: ReviewMarks, side: ReviewSide, line: number): CellKind {
   const { pending } = marks
-  if (
-    pending &&
-    pending.side === side &&
-    line >= pending.fromLine &&
-    line <= pending.toLine
-  ) {
-    const first = line === pending.fromLine
-    const last = line === pending.toLine
+  const range = pending?.anchor[side]
+  if (pending && range && line >= range.fromLine && line <= range.toLine) {
+    /*
+     * Which end of the *whole* range this row is, taken from what the walk
+     * actually saw rather than guessed from the side.
+     *
+     * A range covering a hunk has two runs in two files and is drawn as one
+     * band, closed at the top of the topmost row and the bottom of the
+     * bottommost, with no rule at the join. Which of the two sides is on top is
+     * a fact about the layout — a deleted chunk sits after the context line
+     * before the change and before the lines that replaced it — so it cannot be
+     * read off the anchor. It was, and the band came out inside out: the top
+     * rule drawn on the bottom row.
+     *
+     * In the split view each editor sees only its own side, so a hunk's band is
+     * left open at the edge where it continues in the other editor — honest,
+     * since the rest of it is over there.
+     */
+    const at = (end: { side: ReviewSide; line: number }) =>
+      end.side === side && end.line === line
+    const first = at(pending.first)
+    const last = at(pending.last)
     if (first && last) return "pendingSolo"
     if (first) return "pendingFirst"
     if (last) return "pendingLast"
     return "pending"
   }
-  if (commentedIn(marks.threads)[side].has(line)) return "commented"
+  /*
+   * A commented run is drawn as the same band, one shade quieter.
+   *
+   * It was a filled bubble on **every** row of the range plus a bare left edge,
+   * which put a column of solid glyphs down the diff — the loudest thing in a
+   * pane whose whole job is showing code — and covered the `+`, so the one row
+   * you could not offer to comment on was a row somebody had already commented
+   * on. The band says the same thing with no glyphs at all, and it says it in the
+   * vocabulary the reader has just used to pick the range.
+   *
+   * The ends come from the **set** rather than from anything stored: a row whose
+   * neighbour on this side is not commented is an end of a run. That is exact
+   * within a side — for the working file a line number is a row, and for the
+   * commit two chunks cannot hold consecutive numbers or they would be one chunk
+   * — and it costs one thing against `pending`, which carries its ends: a comment
+   * covering a whole hunk is drawn as two touching bands rather than one, with a
+   * hairline where the deleted rows meet the ones that replaced them. Storing the
+   * ends per thread would close that, and it is not worth a field on the record
+   * for a rule nobody would notice was there.
+   */
+  const has = commentedIn(marks.threads)[side]
+  if (has.has(line)) {
+    const first = !has.has(line - 1)
+    const last = !has.has(line + 1)
+    if (first && last) return "commentedSolo"
+    if (first) return "commentedFirst"
+    if (last) return "commentedLast"
+    return "commented"
+  }
   return "empty"
 }
 
@@ -217,26 +348,6 @@ function plusIcon(): SVGElement {
   return svg
 }
 
-/** A filled speech bubble, for a line that has already been commented on. */
-function commentIcon(): SVGElement {
-  const ns = "http://www.w3.org/2000/svg"
-  const svg = document.createElementNS(ns, "svg")
-  svg.setAttribute("viewBox", "0 0 16 16")
-  svg.setAttribute("width", "11")
-  svg.setAttribute("height", "11")
-  svg.setAttribute("aria-hidden", "true")
-
-  const bubble = document.createElementNS(ns, "path")
-  bubble.setAttribute(
-    "d",
-    "M2 3.25C2 2.56 2.56 2 3.25 2h9.5c.69 0 1.25.56 1.25 1.25v6.5c0 .69-.56 1.25-1.25 1.25H8.06l-2.7 2.35A.75.75 0 0 1 4.1 12.8v-1.8H3.25C2.56 11 2 10.44 2 9.75Z"
-  )
-  bubble.setAttribute("fill", "currentColor")
-
-  svg.append(bubble)
-  return svg
-}
-
 /** What one row's state looks like. Shared by the gutter cell and the rows of a
  * removed chunk, which are the same control drawn in two places. */
 type CellKind =
@@ -246,35 +357,63 @@ type CellKind =
   | "pendingLast"
   | "pendingSolo"
   | "commented"
+  | "commentedFirst"
+  | "commentedLast"
+  | "commentedSolo"
 
-/** The two ends of the range being picked, which are the rows that carry a
- * handle. */
-const HANDLES = new Set<CellKind>(["pendingFirst", "pendingLast", "pendingSolo"]) // prettier-ignore
+/**
+ * The rows that carry a handle — **the bottom of the range, and only that**.
+ *
+ * Both ends carried one at first, and two of them at once turned out to read as
+ * two separate offers rather than as one range with two ends: they are 20px
+ * glyphs hanging over the code, and the band already says where the range starts
+ * and stops. One is enough, and the bottom is where it belongs — the composer
+ * hangs from the same edge, so the mark and the box are one thing rather than
+ * two.
+ */
+const HANDLES = new Set<CellKind>(["pendingLast", "pendingSolo"])
 
-function markDOM(kind: CellKind): HTMLElement {
+/**
+ * One row's mark.
+ *
+ * `shown` is the row being under the pointer — see `hoverRow`. It is a class
+ * rather than a second `:hover` rule because what counts as "under the pointer"
+ * here is a whole row of a diff, which the gutter cell is 14px of.
+ */
+function markDOM(kind: CellKind, shown: boolean): HTMLElement {
   const span = document.createElement("span")
   span.setAttribute("role", "button")
-  span.title =
-    kind === "commented"
-      ? "Commented — click to comment on this line too"
-      : "Comment on this line (shift-click for a range)"
+  span.title = COMMENTED.has(kind)
+    ? "Commented — click to comment on this line too"
+    : "Comment on this line — drag or shift-click for a range"
 
-  if (kind === "commented") {
-    span.className = "cm-reviewMark cm-reviewMark-has"
-    span.append(commentIcon())
-    return span
-  }
-
-  // The `+` is in the DOM for every row and shown by the theme below only
-  // under the pointer, or on the two ends of the range being picked. Drawing it
-  // per hover instead would mean a marker that changes identity as the mouse
-  // moves, and a gutter redraw per row crossed.
+  /*
+   * The `+` on every row, whatever else that row is.
+   *
+   * A commented row used to draw a filled bubble here instead, which put a
+   * column of solid glyphs down the diff and — worse — meant the one row that
+   * could not offer to be commented on was a row somebody had already commented
+   * on. That a line carries a remark is the band's job now; this column has one
+   * job, which is offering to add one.
+   *
+   * In the DOM for every row and revealed by the theme below on the row under
+   * the pointer, or on the end of the range being picked. A column of plus signs
+   * down every diff in the app would be the loudest thing in it.
+   */
   span.className = `cm-reviewMark cm-reviewMark-add${
-    HANDLES.has(kind) ? " cm-reviewMark-handle" : ""
-  }`
+    shown ? " cm-reviewMark-shown" : ""
+  }${HANDLES.has(kind) ? " cm-reviewMark-handle" : ""}`
   span.append(plusIcon())
   return span
 }
+
+/** The four states a row already carrying a remark can be in. */
+const COMMENTED = new Set<CellKind>([
+  "commented",
+  "commentedFirst",
+  "commentedLast",
+  "commentedSolo",
+])
 
 /** The class a row of either kind carries for its state, so the tint is one
  * rule wherever the row is drawn. */
@@ -285,6 +424,9 @@ const CELL_CLASS: Record<CellKind, string> = {
   pendingLast: "cm-reviewCell-pending",
   pendingSolo: "cm-reviewCell-pending",
   commented: "cm-reviewCell-has",
+  commentedFirst: "cm-reviewCell-has",
+  commentedLast: "cm-reviewCell-has",
+  commentedSolo: "cm-reviewCell-has",
 }
 
 /**
@@ -301,39 +443,94 @@ const LINE_CLASS: Record<CellKind, string> = {
   pendingFirst: "cm-reviewLine-pendingFirst",
   pendingLast: "cm-reviewLine-pendingLast",
   pendingSolo: "cm-reviewLine-pendingSolo",
+  /*
+   * The same four, and that is the point rather than an oversight.
+   *
+   * They were a shade quieter, on the reasoning that a range already commented on
+   * is a state of the file while a range being picked is something happening now.
+   * That is backwards. A picked range lives for as long as a drag and arrives with
+   * a handle on its end and a composer floating against it — it could not be
+   * missed if it tried. A commented one has to be **found**, by somebody scrolling
+   * a diff looking for what they have already said, and it was the fainter of the
+   * two. So: one band, one strength, and what tells "now" apart from "marked" is
+   * the handle and the box, which is where the difference belongs.
+   *
+   * Two sets of **names** for one appearance, rather than one set: `spotOf` finds
+   * the range being picked by querying these classes, and a commented row sharing
+   * them would be a composer anchored to the union of everything marked in the
+   * file. The theme groups the selectors, so there is still one declaration per
+   * shape.
+   */
   commented: "cm-reviewLine-has",
+  commentedFirst: "cm-reviewLine-hasFirst",
+  commentedLast: "cm-reviewLine-hasLast",
+  commentedSolo: "cm-reviewLine-hasSolo",
 }
 
 class ReviewCell extends GutterMarker {
   constructor(
     readonly kind: CellKind,
+    readonly shown: boolean,
     override readonly elementClass: string
   ) {
     super()
   }
 
   override eq(other: ReviewCell) {
-    return other.kind === this.kind && other.elementClass === this.elementClass
+    return (
+      other.kind === this.kind &&
+      other.shown === this.shown &&
+      other.elementClass === this.elementClass
+    )
   }
 
   override toDOM() {
-    return markDOM(this.kind)
+    return markDOM(this.kind, this.shown)
   }
 }
 
-const emptyCell = new ReviewCell("empty", "cm-reviewCell")
-
-/** One cell per state, built once: a marker is compared by `eq` and rebuilt
- * whenever it differs, so a fresh object per row would redraw the column on
- * every pointer move. */
-const CELLS: Record<CellKind, ReviewCell> = {
-  empty: emptyCell,
-  pending: new ReviewCell("pending", "cm-reviewCell cm-reviewCell-pending"),
-  pendingFirst: new ReviewCell("pendingFirst", "cm-reviewCell cm-reviewCell-pending"), // prettier-ignore
-  pendingLast: new ReviewCell("pendingLast", "cm-reviewCell cm-reviewCell-pending"), // prettier-ignore
-  pendingSolo: new ReviewCell("pendingSolo", "cm-reviewCell cm-reviewCell-pending"), // prettier-ignore
-  commented: new ReviewCell("commented", "cm-reviewCell cm-reviewCell-has"),
+const CELL_ELEMENT: Record<CellKind, string> = {
+  empty: "cm-reviewCell",
+  pending: "cm-reviewCell cm-reviewCell-pending",
+  pendingFirst: "cm-reviewCell cm-reviewCell-pending",
+  pendingLast: "cm-reviewCell cm-reviewCell-pending",
+  pendingSolo: "cm-reviewCell cm-reviewCell-pending",
+  commented: "cm-reviewCell cm-reviewCell-has",
+  commentedFirst: "cm-reviewCell cm-reviewCell-has",
+  commentedLast: "cm-reviewCell cm-reviewCell-has",
+  commentedSolo: "cm-reviewCell cm-reviewCell-has",
 }
+
+/**
+ * Every cell there is, built once — twelve objects, one per state and hover.
+ *
+ * Prebuilt because a marker is compared by `eq` and rebuilt whenever it differs:
+ * a fresh object per row would redraw the whole column on every pointer move,
+ * which is exactly the traffic hovering a whole row generates. What changes as
+ * the pointer crosses a row is which two of these twelve are handed back.
+ */
+const CELLS: Record<"off" | "on", Record<CellKind, ReviewCell>> = {
+  off: build(false),
+  on: build(true),
+}
+
+function build(shown: boolean): Record<CellKind, ReviewCell> {
+  const cell = (kind: CellKind) =>
+    new ReviewCell(kind, shown, CELL_ELEMENT[kind])
+  return {
+    empty: cell("empty"),
+    pending: cell("pending"),
+    pendingFirst: cell("pendingFirst"),
+    pendingLast: cell("pendingLast"),
+    pendingSolo: cell("pendingSolo"),
+    commented: cell("commented"),
+    commentedFirst: cell("commentedFirst"),
+    commentedLast: cell("commentedLast"),
+    commentedSolo: cell("commentedSolo"),
+  }
+}
+
+const emptyCell = CELLS.off.empty
 
 /**
  * The column beside a removed chunk: one mark per removed line.
@@ -348,7 +545,10 @@ class RemovedReviewColumn extends GutterMarker {
   constructor(
     /** The first row's line number in the commit — what a click on it means. */
     readonly firstOld: number,
-    readonly kinds: CellKind[]
+    readonly kinds: CellKind[],
+    /** Which of these rows the pointer is on, as an offset from the first, or
+     * null. The slot's own `:hover` cannot answer this — see `hoverRow`. */
+    readonly hover: number | null
   ) {
     super()
   }
@@ -356,6 +556,7 @@ class RemovedReviewColumn extends GutterMarker {
   override eq(other: RemovedReviewColumn) {
     return (
       other.firstOld === this.firstOld &&
+      other.hover === this.hover &&
       other.kinds.length === this.kinds.length &&
       other.kinds.every((kind, at) => kind === this.kinds[at])
     )
@@ -364,11 +565,11 @@ class RemovedReviewColumn extends GutterMarker {
   override toDOM() {
     const wrap = document.createElement("span")
     wrap.className = "cm-reviewRemovedCol"
-    for (const kind of this.kinds) {
+    this.kinds.forEach((kind, at) => {
       const row = wrap.appendChild(document.createElement("span"))
       row.className = `cm-reviewRemovedRow ${CELL_CLASS[kind]}`.trimEnd()
-      row.append(markDOM(kind))
-    }
+      row.append(markDOM(kind, at === this.hover))
+    })
     return wrap
   }
 }
@@ -381,6 +582,9 @@ const LINES: Record<CellKind, Decoration | null> = {
   pendingLast: Decoration.line({ class: LINE_CLASS.pendingLast }),
   pendingSolo: Decoration.line({ class: LINE_CLASS.pendingSolo }),
   commented: Decoration.line({ class: LINE_CLASS.commented }),
+  commentedFirst: Decoration.line({ class: LINE_CLASS.commentedFirst }),
+  commentedLast: Decoration.line({ class: LINE_CLASS.commentedLast }),
+  commentedSolo: Decoration.line({ class: LINE_CLASS.commentedSolo }),
 }
 
 /**
@@ -404,12 +608,9 @@ function reviewDecorations(
 ) {
   const builder = new RangeSetBuilder<Decoration>()
   const lines = new Set<number>(commentedIn(marks.threads)[side])
-  if (marks.pending?.side === side) {
-    for (
-      let line = marks.pending.fromLine;
-      line <= marks.pending.toLine;
-      line += 1
-    ) {
+  const range = marks.pending?.anchor[side]
+  if (range) {
+    for (let line = range.fromLine; line <= range.toLine; line += 1) {
       lines.add(line)
     }
   }
@@ -422,6 +623,128 @@ function reviewDecorations(
   }
 
   return builder.finish()
+}
+
+/**
+ * The threads, drawn under the lines they are about.
+ *
+ * **This is the reversal.** They were block widgets here once, were taken out to
+ * a strip at the foot of the pane because a diff with three comments in it is a
+ * diff pushed apart in three places, and are back — because that objection turned
+ * out to be worth less than what it bought: a remark four hundred pixels below
+ * the code it is about is a remark you read with your finger on the screen. A
+ * diff pushed apart at a comment is pushed apart *where you are already looking*,
+ * and everywhere else it is untouched. `docs/design.md` has both arguments.
+ *
+ * What is different this time is `review-hosts.ts`: the widget hands back a node
+ * somebody else owns, so the thread is still a React component with a reply box
+ * and a spinner in it. The plain-DOM version is what made this expensive before.
+ *
+ * **Where it attaches.** Under the last line of the range on this editor's own
+ * side — or, for a comment on deleted lines in the unified diff, under the chunk
+ * those rows live in, since a removed row is inside another widget and is not a
+ * document position anybody can hang anything from. `side: 1` puts it after the
+ * line rather than before it.
+ *
+ * One editor draws each thread, the same rule `pendingSpot` follows: a comment
+ * with any working-file lines belongs beside those, and only a wholly deleted one
+ * goes on the commit's side.
+ */
+function threadWidgets(column: ReviewColumn): Extension {
+  const { side, removals } = column
+
+  class ThreadWidget extends WidgetType {
+    /** Not the diff chrome's own widget — see `FOREIGN_WIDGET`. Without it every
+     * gutter in `diff-chrome.ts` reads a thread as a collapsed region and draws
+     * the expander beside it. */
+    readonly [FOREIGN_WIDGET] = true
+
+    constructor(readonly ids: string[]) {
+      super()
+    }
+
+    override eq(other: ThreadWidget) {
+      return (
+        other.ids.length === this.ids.length &&
+        other.ids.every((id, at) => id === this.ids[at])
+      )
+    }
+
+    override toDOM() {
+      const wrap = document.createElement("div")
+      wrap.className = "cm-reviewThreads"
+      // The same nodes every time — see `review-hosts.ts`. Appending a node that
+      // is already somewhere else moves it, which is exactly what a rebuilt view
+      // needs to happen.
+      for (const id of this.ids) wrap.append(threadHost(id))
+      return wrap
+    }
+
+    /* Everything in here is React's: a click on `Reply` is not a click in the
+     * document, and letting the editor see it would put the caret somewhere and
+     * take the focus off the box being typed into. */
+    override ignoreEvent() {
+      return true
+    }
+  }
+
+  return EditorView.decorations.compute([reviewMarks], (state) => {
+    const { threads } = state.field(reviewMarks)
+    if (threads.length === 0) return Decoration.none
+
+    /** Threads by the position they hang from, since several can land on one
+     * line — two remarks about the same range, or two ranges ending together. */
+    const at = new Map<number, string[]>()
+
+    for (const thread of threads) {
+      const pos = anchorPos(state, thread)
+      if (pos === null) continue
+      at.set(pos, [...(at.get(pos) ?? []), thread.id])
+    }
+
+    const builder = new RangeSetBuilder<Decoration>()
+    for (const pos of [...at.keys()].sort((a, b) => a - b)) {
+      builder.add(
+        pos,
+        pos,
+        Decoration.widget({
+          widget: new ThreadWidget(at.get(pos) ?? []),
+          block: true,
+          side: 1,
+        })
+      )
+    }
+    return builder.finish()
+  })
+
+  /** Where one thread hangs from in this editor, or null when it is not this
+   * editor's to draw. */
+  function anchorPos(
+    state: Parameters<typeof removedChunkOf>[0],
+    thread: ReviewThread
+  ): number | null {
+    const { doc } = state
+
+    if (thread.anchor.new) {
+      // The working file's lines are this editor's own in both layouts, so the
+      // commit's editor in a split diff draws nothing for a thread that has any.
+      if (side !== "new") return null
+      const line = Math.min(Math.max(thread.anchor.new.toLine, 1), doc.lines)
+      return doc.line(line).to
+    }
+
+    if (!thread.anchor.old) return null
+
+    // Deleted lines are ordinary lines of the commit's own editor in a split
+    // diff, and rows inside a chunk widget in the unified one.
+    if (side === "old" && !removals) {
+      const line = Math.min(Math.max(thread.anchor.old.toLine, 1), doc.lines)
+      return doc.line(line).to
+    }
+    if (!removals) return null
+
+    return removedChunkOf(state, thread.anchor.old.toLine)?.pos ?? null
+  }
 }
 
 /**
@@ -450,9 +773,6 @@ function reviewDecorations(
 export function reviewGutter(column: ReviewColumn): Extension {
   const { side, removals, overlay } = column
 
-  /** One row of one file: which of the two, and its line number there. */
-  type Row = { side: ReviewSide; line: number }
-
   /**
    * The row the pointer went down on, or null when it is up.
    *
@@ -464,6 +784,18 @@ export function reviewGutter(column: ReviewColumn): Extension {
    * store already holds.
    */
   let anchor: Row | null = null
+  /**
+   * Where the gesture started, in **document** coordinates.
+   *
+   * Document rather than client, so it survives the diff scrolling under it: a
+   * shift-click reaches back to this after any amount of reading in between, and
+   * a client Y recorded before a scroll names a different row after one.
+   *
+   * Kept past the release, unlike `anchor`, because a shift-click is the second
+   * half of a gesture whose first half was an ordinary press. Cleared by the next
+   * plain press, which starts a new one.
+   */
+  let anchorDocY: number | null = null
   /** The view the press landed in, so the pointer can be resolved to a row of
    * *that* editor after it has left the column — and, in a split diff, not the
    * commit's side. */
@@ -502,18 +834,85 @@ export function reviewGutter(column: ReviewColumn): Extension {
     return { side, line: view.state.doc.lineAt(block.from).number }
   }
 
+  /**
+   * Every row between two heights, as one anchor.
+   *
+   * **Sampled rather than enumerated**, and the reason is that the samples go
+   * through `rowOf` — the same function the press itself used. A walk over
+   * `viewportLineBlocks` would be the tidier shape and would have to re-derive
+   * what a block *means*, which is where the old version's two answers came from:
+   * the press resolved one row and the drag resolved another, and a diff whose
+   * rows are not all the same height is where the two parted company. One
+   * function, one answer, and the range always contains the row that was clicked.
+   *
+   * The step is half a row, so no row can be stepped over — every row in this
+   * pane is at least `DIFF_ROW_HEIGHT` tall, since that is what pins the removed
+   * chunks' arithmetic. Both ends are sampled exactly, so a one-row gesture is
+   * one row whatever the step lands on.
+   *
+   * A folded bar contributes nothing: `rowOf` answers null for it, and it is not
+   * a line of either file. Before this, a drag that reached one stopped dead —
+   * the range froze while the pointer kept going, which read as the selection
+   * being broken. Now the walk passes over it and picks up on the far side, which
+   * is what dragging across a fold looks like everywhere else.
+   */
+  const spanBetween = (
+    view: EditorView,
+    fromDocY: number,
+    toDocY: number
+  ): ReviewSelection | null => {
+    const top = Math.min(fromDocY, toDocY)
+    const bottom = Math.max(fromDocY, toDocY)
+    const step = DIFF_ROW_HEIGHT / 2
+
+    let anchor = EMPTY_ANCHOR
+    /* The two ends **on screen**, which is the one thing the anchor cannot say
+     * and the walk gets for free: it goes down the page, so the first row it
+     * sees is the top of the range and the last is the bottom. */
+    let first: Row | null = null
+    let last: Row | null = null
+
+    const take = (docY: number) => {
+      const row = rowOf(view, view.lineBlockAtHeight(docY), docY + view.documentTop) // prettier-ignore
+      if (!row) return
+      anchor = withRow(anchor, row.side, row.line)
+      first ??= row
+      last = row
+    }
+
+    for (let docY = top; docY < bottom; docY += step) take(docY)
+    take(bottom)
+
+    // Every row of the run was a folded bar, which is a line of neither file.
+    if (!first || !last || isEmptyAnchor(anchor)) return null
+    return { anchor, first, last }
+  }
+
   const track = (event: MouseEvent) => {
-    if (anchor === null || dragging === null) return
+    if (anchor === null || dragging === null || anchorDocY === null) return
 
     const row = rowAtY(dragging, event.clientY, rowOf)
-    // A drag that has left the side it started on does nothing rather than
-    // jumping: the two sides are numbered in different files, so there is no
-    // range that spans them. Dragging back returns to the rows it left.
-    if (row === null || row.side !== anchor.side) return
-    if (row.line === over?.line) return
-
+    // A row the pointer is already on, or a folded bar, which is not a row of
+    // either file. Either way there is nothing new to select: the range changes
+    // per row, not per pixel.
+    if (row === null) return
+    if (row.line === over?.line && row.side === over.side) return
     over = row
-    column.drag(anchor.line, row.line, anchor.side)
+
+    // The clamped Y rather than the raw one, so a drag pulled past the end of the
+    // pane selects to the last row on screen and stays there — the same bargain
+    // `rowAtY` makes for the row itself.
+    const box = dragging.scrollDOM.getBoundingClientRect()
+    const clamped = Math.min(
+      Math.max(event.clientY, box.top + 1),
+      box.bottom - 1
+    )
+    const span = spanBetween(
+      dragging,
+      anchorDocY,
+      clamped - dragging.documentTop
+    )
+    if (span) column.drag(span)
   }
 
   const release = () => {
@@ -525,14 +924,66 @@ export function reviewGutter(column: ReviewColumn): Extension {
     column.settle()
   }
 
+  /**
+   * The row under the pointer, followed on this editor's own DOM.
+   *
+   * On `view.dom` rather than on the gutter, which is the whole point: the
+   * pointer is on the *code* while somebody reads it, and that is when the offer
+   * to comment has to be visible. `mouseleave` clears it, or the last row stays
+   * lit after the pointer has gone to the composer.
+   *
+   * Nothing here runs during a drag — `track` on `window` owns the pointer then,
+   * and the two ends of the range are drawn as handles regardless.
+   */
+  const hoverTracking = ViewPlugin.fromClass(
+    class {
+      private at: Row | null = null
+
+      constructor(readonly view: EditorView) {
+        view.dom.addEventListener("mousemove", this.move)
+        view.dom.addEventListener("mouseleave", this.leave)
+      }
+
+      destroy() {
+        this.view.dom.removeEventListener("mousemove", this.move)
+        this.view.dom.removeEventListener("mouseleave", this.leave)
+      }
+
+      private readonly move = (event: MouseEvent) => {
+        // Not through `rowAtY`, which clamps to the scroller and reads its
+        // rectangle to do it: a `mousemove` on this editor's own DOM is inside
+        // it by definition, and a layout read per pointer move is the one cost
+        // this plugin cannot afford. What is left is what CodeMirror's own
+        // gutter handlers do to resolve a line.
+        const y = event.clientY - this.view.documentTop
+        const row = rowOf(this.view, this.view.lineBlockAtHeight(y), event.clientY) // prettier-ignore
+        // Per row, not per pixel: a move inside the row it is already on is the
+        // common case and must cost nothing.
+        if (row?.line === this.at?.line && row?.side === this.at?.side) return
+        this.set(row)
+      }
+
+      private readonly leave = () => this.set(null)
+
+      private set(row: Row | null) {
+        this.at = row
+        this.view.dispatch({ effects: setHoverRow.of(row) })
+      }
+    }
+  )
+
   return [
     reviewMarks,
+    hoverRow,
+    hoverTracking,
     gutter({
       class: `cm-diffGutter cm-reviewGutter${overlay ? " cm-reviewGutter-over" : ""}`,
       lineMarker: (view, line) => {
         const marks = view.state.field(reviewMarks)
         const number = view.state.doc.lineAt(line.from).number
-        return CELLS[stateOf(marks, side, number)]
+        const kind = stateOf(marks, side, number)
+        const on = hovered(view.state.field(hoverRow), side, number)
+        return CELLS[on ? "on" : "off"][kind]
       },
       /**
        * Beside a removed chunk: a mark per line it draws, numbered in the
@@ -544,18 +995,29 @@ export function reviewGutter(column: ReviewColumn): Extension {
         if (!removed) return null
 
         const marks = view.state.field(reviewMarks)
+        const at = view.state.field(hoverRow)
+        const hover =
+          at !== null &&
+          at.side === "old" &&
+          at.line >= removed.firstOld &&
+          at.line < removed.firstOld + removed.lines
+            ? at.line - removed.firstOld
+            : null
+
         return new RemovedReviewColumn(
           removed.firstOld,
           Array.from({ length: removed.lines }, (_, at) =>
             stateOf(marks, "old", removed.firstOld + at)
-          )
+          ),
+          hover
         )
       },
       lineMarkerChange: (update) =>
         update.docChanged ||
         update.viewportChanged ||
         update.startState.field(reviewMarks) !==
-          update.state.field(reviewMarks),
+          update.state.field(reviewMarks) ||
+        update.startState.field(hoverRow) !== update.state.field(hoverRow),
       domEventHandlers: {
         mousedown(view, block, event) {
           const mouse = event as MouseEvent
@@ -568,6 +1030,28 @@ export function reviewGutter(column: ReviewColumn): Extension {
           // there is nothing to pick there.
           if (row === null) return false
 
+          const docY = mouse.clientY - view.documentTop
+          /*
+           * A shift-click reaches back to where the last press was.
+           *
+           * The anchor is **tracked** now, where it deliberately was not before:
+           * a shift-click used to grow whatever was pending, so one below
+           * extended downwards and one above extended upwards, which is what a
+           * reader means by either when a range is a pair of numbers in one file.
+           * A range that can cross sides has no such thing as growing — the rows
+           * between two points are what it is made of, and which rows those are
+           * depends on where the run *started*. So the second half of the gesture
+           * is measured from the first, the way a shift-click works in an editor.
+           */
+          const span: ReviewSelection = (mouse.shiftKey && anchorDocY !== null
+            ? spanBetween(view, anchorDocY, docY)
+            : null) ?? {
+            anchor: withRow(EMPTY_ANCHOR, row.side, row.line),
+            first: row,
+            last: row,
+          }
+
+          if (!mouse.shiftKey) anchorDocY = docY
           anchor = row
           over = row
           dragging = view
@@ -577,7 +1061,7 @@ export function reviewGutter(column: ReviewColumn): Extension {
           window.addEventListener("mousemove", track)
           window.addEventListener("mouseup", release, { once: true })
 
-          column.pick(row.line, mouse.shiftKey, row.side)
+          column.pick(span)
           // Both, and both matter: the default would start a text selection
           // that a shift-click then extends across the diff, and the bubble
           // would reach the pane's own handlers.
@@ -593,8 +1077,111 @@ export function reviewGutter(column: ReviewColumn): Extension {
     // Only where there are removed rows to paint: the split view's deletions are
     // ordinary lines on its other editor and are tinted by the decorations above.
     ...(removals ? [removedRowTints] : []),
+    pendingSpot(column),
+    threadWidgets(column),
     reviewTheme,
   ]
+}
+
+/**
+ * Where the range being picked is on screen, told to the caller.
+ *
+ * **Measured off the DOM rather than computed from line numbers**, and that is
+ * the shortcut worth defending: a range on the *new* side is a run of document
+ * lines and `coordsAtPos` would answer it, but a range on the **old** side lives
+ * inside a `@codemirror/merge` block widget, where there is no position to ask
+ * about — finding it would mean scanning the chunks for one containing that
+ * commit line and then doing the row-height arithmetic again. Both sides already
+ * carry a class saying they are pending, on the rows themselves
+ * (`reviewDecorations` for one, `removedRowTints` for the other), so reading
+ * their rectangles is one query that is right for both by construction.
+ *
+ * Reported after the layout it is measuring, which is why it is on `measure`
+ * rather than in `update`: the pending class arrives in a transaction, and
+ * reading a rectangle in the middle of applying one is what forces the layout
+ * this is trying to observe.
+ *
+ * **Exactly one editor speaks.** In a split diff the marks are pushed to both
+ * and each draws its own side, so each reports only for the side it owns —
+ * otherwise the editor with nothing pending in it would answer null over the
+ * top of the one that had measured it.
+ */
+function pendingSpot(column: ReviewColumn): Extension {
+  /* A range covering a hunk is drawn in both editors of a split diff, and the
+   * box belongs beside the working file's half of it — which is where the reader
+   * is looking and where the fix will go. So the `new` editor wins whenever the
+   * range has a `new` half, and the `old` one speaks only for a range that is
+   * entirely deleted lines. The unified editor draws both and always owns it. */
+  const owns = (pending: ReviewMarks["pending"]) =>
+    pending === null ||
+    column.removals ||
+    (pending.anchor.new ? column.side === "new" : column.side === "old")
+
+  return ViewPlugin.fromClass(
+    class {
+      constructor(readonly view: EditorView) {
+        this.schedule()
+      }
+
+      update(update: ViewUpdate) {
+        // Geometry as well as the marks: scrolling the diff moves the range
+        // under a box that would otherwise stay where it was.
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          update.geometryChanged ||
+          update.startState.field(reviewMarks) !== update.state.field(reviewMarks) // prettier-ignore
+        ) {
+          this.schedule()
+        }
+      }
+
+      private schedule() {
+        this.view.requestMeasure({
+          read: (view) => {
+            const marks = view.state.field(reviewMarks)
+            return owns(marks.pending) ? spotOf(view) : undefined
+          },
+          write: (spot) => {
+            if (spot !== undefined) column.locate(spot)
+          },
+        })
+      }
+    }
+  )
+}
+
+/**
+ * The rectangle around every pending row this editor currently draws.
+ *
+ * Null when none of them is on screen, which is a real state rather than a
+ * failure: a range picked and then scrolled past has nowhere to hang a box, and
+ * the caller falls back to the strip at the foot of the pane. Partly scrolled is
+ * not — what is left visible is what the box points at.
+ *
+ * `left` is the code's own left edge rather than the editor's, so the box lines
+ * up with the lines and not with the gutters; `right` is the scroller's, which
+ * is what its width is measured against.
+ */
+function spotOf(view: EditorView): ReviewSpot | null {
+  const rows = view.contentDOM.querySelectorAll(
+    ".cm-reviewLine-pending, .cm-reviewLine-pendingFirst, .cm-reviewLine-pendingLast, .cm-reviewLine-pendingSolo"
+  )
+  if (rows.length === 0) return null
+
+  let top = Infinity
+  let bottom = -Infinity
+  for (const row of rows) {
+    const box = row.getBoundingClientRect()
+    // A row scrolled out of the viewport still has a rectangle, just one outside
+    // the scroller. Clamping is the caller's; what matters here is the extent.
+    if (box.top < top) top = box.top
+    if (box.bottom > bottom) bottom = box.bottom
+  }
+
+  const content = view.contentDOM.getBoundingClientRect()
+  const scroller = view.scrollDOM.getBoundingClientRect()
+  return { top, bottom, left: content.left, right: scroller.right }
 }
 
 /**
@@ -673,7 +1260,7 @@ const removedRowTints = ViewPlugin.fromClass(
  * range picked by shift-clicking its two ends, and an editor that scrolls itself
  * under a held pointer is a range nobody can aim.
  */
-function rowAtY<Row>(
+function rowAtY(
   view: EditorView,
   clientY: number,
   rowOf: (view: EditorView, block: BlockInfo, clientY: number) => Row | null
@@ -690,8 +1277,29 @@ function rowAtY<Row>(
  * control rather than a state of the code, so it is the one thing in this pane
  * drawn in the accent rather than in a diff tint.
  */
-const PENDING_TINT = "color-mix(in oklab, var(--primary) 14%, transparent)"
-const PENDING_EDGE = "inset 2px 0 0 var(--primary)"
+/**
+ * The wash over the rows being picked — **a box-shadow, not a background.**
+ *
+ * It was `backgroundColor`, and that lost on exactly the rows a review is most
+ * often about: `diff-chrome.ts` paints `.cm-changedLine` with `!important` (it
+ * has to — `@codemirror/merge`'s own base theme competes with it at the same
+ * specificity), and `!important` beats any specificity this side can reach. So a
+ * range dragged across a hunk came out tinted on its context lines and bare on
+ * its added ones, which reads as the selection being cut in half rather than as
+ * one band.
+ *
+ * An inset shadow with a spread big enough to fill the row paints **over** the
+ * row's own background instead of replacing it, which is what this always wanted
+ * — a line being picked is still an added or a removed line, and losing that
+ * would take away the thing the comment is about. It is the same bargain
+ * `.cm-reviewLine-has` already made by being an edge rather than a fill.
+ *
+ * Listed **last** in every rule below: earlier shadows paint on top, so the edges
+ * stay crisp over the wash.
+ */
+const BAND_WASH =
+  "inset 0 0 0 9999px color-mix(in oklab, var(--primary) 14%, transparent)"
+const BAND_EDGE = "inset 2px 0 0 var(--primary)"
 
 const reviewTheme = EditorView.theme({
   ".cm-reviewGutter": { cursor: "pointer", overflow: "visible" },
@@ -743,13 +1351,14 @@ const reviewTheme = EditorView.theme({
   // of the range being written about — a column of plus signs down every diff in
   // the app would be the loudest thing in it.
   ".cm-reviewMark-add": { opacity: "0", transition: "opacity 80ms" },
-  /* The row under the pointer, and **only** that row: `>` rather than a
-     descendant, because a removed chunk is one gutter element holding every one
-     of its rows — hovering anywhere in a twenty-line deletion lit all twenty of
-     them. The rows of that column carry their own `:hover` below. */
-  ".cm-reviewGutter .cm-gutterElement:hover > .cm-reviewMark-add": {
-    opacity: "1",
-  },
+  /* Put up by `hoverRow`, which is the whole row of the diff rather than this
+     14px column — see the field. The gutter's own `:hover` is kept beside it so
+     the mark does not blink out in the frame between the pointer entering the
+     column and the transaction that says so landing. */
+  ".cm-reviewMark-shown, .cm-reviewGutter .cm-gutterElement:hover > .cm-reviewMark-add": // prettier-ignore
+    {
+      opacity: "1",
+    },
   /* The rows of a removed chunk. One slot, one row per removed line at the
      pinned height, so the marks line up with the code the widget drew — and the
      hover is per row rather than per slot, since each row is its own control. */
@@ -768,6 +1377,11 @@ const reviewTheme = EditorView.theme({
     height: `${DIFF_ROW_HEIGHT}px`,
   },
   ".cm-reviewRemovedRow:hover .cm-reviewMark-add": { opacity: "1" },
+  /* The mark is 14px and the row is 20: the cell around it is the target, and
+     making the whole of it clickable is the difference between aiming at the
+     glyph and aiming at the row. Nothing is drawn for it — the cursor and the
+     mark that appeared under the pointer are what say it is there. */
+  ".cm-reviewMark, .cm-reviewRemovedRow": { cursor: "pointer" },
   /*
    * The two ends of the range being picked, as handles.
    *
@@ -791,33 +1405,48 @@ const reviewTheme = EditorView.theme({
     position: "relative",
     zIndex: "1",
   },
-  ".cm-reviewCell-pending": { backgroundColor: "color-mix(in oklab, var(--primary) 22%, transparent)" }, // prettier-ignore
-  ".cm-reviewCell-has": { backgroundColor: "color-mix(in oklab, var(--primary) 12%, transparent)" }, // prettier-ignore
-  /* Over the diff's own tint rather than instead of it: a commented line is
+  ".cm-reviewCell-pending, .cm-reviewCell-has": { backgroundColor: "color-mix(in oklab, var(--primary) 22%, transparent)" }, // prettier-ignore
+  /* Over the diff's own tint rather than instead of it: a line in a band is
      still an added or a removed one, and losing that would take away the thing
-     the comment is about. Hence a left edge and a wash rather than a fill. */
-  ".cm-reviewLine-pending": {
-    backgroundColor: PENDING_TINT,
-    boxShadow: PENDING_EDGE,
+     the comment is about. Hence an edge and a wash rather than a fill — see
+     `BAND_WASH`, which is also what makes this survive an `!important`
+     background on the added rows. */
+  ".cm-reviewLine-pending, .cm-reviewLine-has": {
+    boxShadow: `${BAND_EDGE}, ${BAND_WASH}`,
   },
   /* The range as a closed band: the same left edge on every row of it, plus a
      rule across the top of the first and the bottom of the last. Insets rather
      than borders, because a border is a pixel of height and would move the rows
      under the pointer that is still choosing them. */
-  ".cm-reviewLine-pendingFirst": {
-    backgroundColor: PENDING_TINT,
-    boxShadow: `${PENDING_EDGE}, inset 0 1px 0 var(--primary)`,
+  ".cm-reviewLine-pendingFirst, .cm-reviewLine-hasFirst": {
+    boxShadow: `${BAND_EDGE}, inset 0 1px 0 var(--primary), ${BAND_WASH}`,
   },
-  ".cm-reviewLine-pendingLast": {
-    backgroundColor: PENDING_TINT,
-    boxShadow: `${PENDING_EDGE}, inset 0 -1px 0 var(--primary)`,
+  ".cm-reviewLine-pendingLast, .cm-reviewLine-hasLast": {
+    boxShadow: `${BAND_EDGE}, inset 0 -1px 0 var(--primary), ${BAND_WASH}`,
   },
-  ".cm-reviewLine-pendingSolo": {
-    backgroundColor: PENDING_TINT,
-    boxShadow: `${PENDING_EDGE}, inset 0 1px 0 var(--primary), inset 0 -1px 0 var(--primary)`, // prettier-ignore
+  ".cm-reviewLine-pendingSolo, .cm-reviewLine-hasSolo": {
+    boxShadow: `${BAND_EDGE}, inset 0 1px 0 var(--primary), inset 0 -1px 0 var(--primary), ${BAND_WASH}`, // prettier-ignore
   },
-  ".cm-reviewLine-has": {
-    boxShadow:
-      "inset 2px 0 0 color-mix(in oklab, var(--primary) 55%, transparent)",
+  /*
+   * The threads' own block, under the range.
+   *
+   * Indented to where the code starts rather than to the pane's edge, so a
+   * comment reads as belonging to the lines above it rather than as a band across
+   * the diff. `whiteSpace: normal` because everything inside is prose and this
+   * editor's own rule is `pre`, and `userSelect: text` because a reader copying a
+   * remark out of a thread is copying text, not code.
+   */
+  ".cm-reviewThreads": {
+    // Air above and below, so the card reads as sitting *between* two runs of
+    // code rather than as another row of the file. The rows either side are 20px
+    // and this is deliberately not a multiple of that.
+    padding: "10px 16px 12px 0",
+    whiteSpace: "normal",
+    userSelect: "text",
+    cursor: "auto",
+    // The diff's own row height is pinned everywhere else in this pane; a
+    // paragraph is not a row.
+    lineHeight: "normal",
+    fontFamily: "var(--font-sans, inherit)",
   },
 })

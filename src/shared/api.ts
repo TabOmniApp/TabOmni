@@ -43,7 +43,7 @@ export type WorkspaceRecord = {
  * One entry in a directory the Explorer is showing.
  *
  * Addressed by its absolute path rather than by an id, unlike everything else
- * that crosses this contract: a note or a request is a record this app created
+ * that crosses this contract: a request or a card is a record this app created
  * and can name however it likes, while these are the user's own files, already
  * on disk, and the path is the only name they have. It is also what the tab
  * strip uses, so a file has one identity from the tree through to the pane.
@@ -506,6 +506,29 @@ export type AssistantMessage =
    * as one that cost nothing.
    */
   | { id: string; role: "usage"; usage: TurnUsage }
+  /**
+   * The conversation was compacted, written down where it happened.
+   *
+   * A line rather than a state, because it is a thing that happened *at a point
+   * in the chat*: everything above it the model now knows only as a summary, and
+   * a reader scrolling back is owed the boundary. The CLI draws the same
+   * divider, and for the same reason.
+   *
+   * `trigger` is worth keeping apart: an `auto` compaction is the window filling
+   * up on its own, a `manual` one is somebody having typed `/compact`, and the
+   * first of the two is the one that explains why an answer above the line reads
+   * as though it forgot something.
+   */
+  | {
+      id: string
+      role: "compact"
+      trigger: "manual" | "auto"
+      /** What the window held before. */
+      preTokens: number
+      /** And after — absent on a CLI that reports only the one side. */
+      postTokens?: number
+      durationMs?: number
+    }
 
 /**
  * What one turn spent, in the numbers that explain the spending.
@@ -686,6 +709,20 @@ export type AssistantEvent =
    */
   | { type: "usage"; usage: TurnUsage }
   /**
+   * The conversation was compacted — the line, on its way to the pane.
+   *
+   * Paired with the `compact` role the same way `usage` is with its own: main
+   * writes the line to the chat's file and announces it here, so a pane that is
+   * already open gets the divider without re-reading the file.
+   */
+  | {
+      type: "compact"
+      trigger: "manual" | "auto"
+      preTokens: number
+      postTokens?: number
+      durationMs?: number
+    }
+  /**
    * How full the context window is, as of the reply that just arrived.
    *
    * Its own event, and the only one here that is neither a line nor the state
@@ -699,6 +736,57 @@ export type AssistantEvent =
    * reloaded window falls back to the last line rather than to nothing.
    */
   | { type: "context"; tokens: number }
+  /**
+   * The window as the **CLI** accounts for it, asked for once a turn ends.
+   *
+   * The difference from `context` above is the denominator, and it is the whole
+   * reason this exists. `context` is a count read off the last reply's own
+   * usage: it says `19.3k` and cannot say whether that is nothing or nearly
+   * full, because a reply does not carry the size of the window it was answered
+   * in. This is `getContextUsage()` — a control request, no tokens — which
+   * carries `maxTokens`, the auto-compact threshold, and the split by category.
+   *
+   * It is also a **better numerator**: the CLI counts the deferred tool schemas,
+   * the memory files and the skill frontmatter that a reply's usage rolls into
+   * one prompt figure, which is what makes a breakdown worth drawing at all.
+   *
+   * Once a turn rather than while one runs, deliberately: a control request per
+   * reply would be a round trip per content block for a number nobody can act on
+   * mid-answer. `context` is still what moves during a turn.
+   *
+   * Not written down, like `context`: it is the state of a live session, and a
+   * chat read back off disk has no session to ask.
+   */
+  | { type: "window"; window: ChatWindow }
+  /**
+   * The CLI is compacting, or has stopped.
+   *
+   * A state rather than a progress figure, because that is all there is:
+   * compaction is one summarisation call, so the SDK reports `compacting` and
+   * then not, with a `compact_result`. There is no percentage to report and a
+   * determinate bar drawn here would be an animation pretending to measure
+   * something. What *is* measurable is the window either side of it, which
+   * arrives as the `compact` line.
+   *
+   * `error` is set only when it failed, and is the CLI's own sentence.
+   */
+  | { type: "compacting"; compacting: boolean; error: string | null }
+  /**
+   * The chat is called something better than the sentence it was opened with.
+   *
+   * The only event here that changes the **listing** rather than the pane. The
+   * name is not the turn's to produce: the CLI writes one into its own
+   * transcript, off the first message, and nothing on the message stream
+   * carries it — see `retitle` in `main/worktree-chat.ts`, which reads it out.
+   *
+   * It arrives just ahead of `done`, whose re-read of the listing carries the
+   * same name, so this is not usually what draws it. It is what draws it on a
+   * turn that **failed**, where there is no re-read — a chat's first turn can
+   * end in an error and still have been named.
+   *
+   * At most once per chat, and never for one the user has named.
+   */
+  | { type: "title"; title: string }
 
 /** One of the choices in a question the model asked. */
 export type ChatAskOption = {
@@ -1159,6 +1247,108 @@ export type AgentModel = {
 }
 
 /**
+ * What one slice of the context window is, in this app's own vocabulary.
+ *
+ * **Translated rather than passed through.** The CLI names a colour per
+ * category — `promptBorder`, `inactive`, `claude`, `warning`,
+ * `purple_FOR_SUBAGENTS_ONLY` — and those are its *terminal theme's* names, not
+ * anything a stylesheet here can use. They are also not stable: a category
+ * renamed or recoloured in a CLI release would silently become an uncoloured
+ * bar. So the category's **name** is matched to one of these in
+ * `main/claude-agent.ts` and an unrecognised one becomes `other`, which draws
+ * in a neutral tone rather than not at all.
+ */
+export type ChatWindowTone =
+  "system" | "tools" | "memory" | "skills" | "messages" | "free" | "other"
+
+/** One row of the breakdown — a category, what it holds, and how it draws. */
+export type ChatWindowSlice = {
+  /** The CLI's own words: `System tools (deferred)`, `Memory files`. */
+  name: string
+  tokens: number
+  tone: ChatWindowTone
+  /**
+   * An out-of-window tool schema, listed for awareness and **excluded from the
+   * usage arithmetic** — the SDK is explicit about this. Kept as a flag rather
+   * than dropped, because "13.7k of tool definitions you are not paying for" is
+   * worth seeing next to the ones you are.
+   */
+  deferred: boolean
+}
+
+/**
+ * How full a chat's context window is, as the CLI itself accounts for it.
+ *
+ * The structured twin of what `/context` prints, asked for over the SDK's
+ * control channel at the end of a turn (`getContextUsage()`): a control request,
+ * so it costs a round trip and no tokens.
+ *
+ * **Only ever about a live session.** The numbers describe the process the chat
+ * is talking to, so a chat whose session has been closed for idleness has none
+ * until its next turn — which is why this is an event and not a field on the
+ * record. See the `window` event.
+ */
+export type ChatWindow = {
+  /** Estimated tokens in use. May exceed `maxTokens`: the SDK sends it
+   * unclamped, and a window over its limit is the one case worth drawing
+   * honestly rather than pinning to 100. */
+  tokens: number
+  maxTokens: number
+  /** The CLI's own rounding of the two above, 0–100 and occasionally past it. */
+  percentage: number
+  /**
+   * Where auto-compaction kicks in, in tokens, or null when it is switched off.
+   *
+   * The number somebody actually watches for: `2%` means nothing without it, and
+   * a bar with a mark on it answers "how long have I got" in one glance.
+   */
+  autoCompactAt: number | null
+  /** The main-loop model the figures were computed for — a window is per model,
+   * so a chat switched from Haiku to Opus is measured against a different one. */
+  model: string
+  slices: ChatWindowSlice[]
+}
+
+/**
+ * One slash command the user's own `claude` would run — a built-in, a project's
+ * `.claude/commands/` file, a skill, or a plugin's.
+ *
+ * Asked of the CLI for the reason `AgentModel` is: this app installs none of
+ * them, so the only list it could write down would be a guess at what the CLI
+ * finds for itself in that directory. `supportedCommands()` is the same control
+ * channel `agentModels` uses — a `claude` process, no tokens, no turn.
+ *
+ * `name` is without the leading slash, and may be namespaced
+ * (`figma:figma-use`). `aliases` are the CLI's own short forms — `review` for
+ * `code-review` — and are matched by the composer's menu but never shown as
+ * rows of their own, since a row per alias is one command listed twice.
+ */
+export type AgentCommand = {
+  name: string
+  description: string
+  /** `[low|medium|high] [--fix]` where the command declares one, empty string
+   * otherwise. Drawn beside the name so the menu says a command takes an
+   * argument before somebody sends it without one. */
+  argumentHint: string
+  aliases: string[]
+}
+
+/**
+ * The commands found in one directory, or why they could not be asked for.
+ *
+ * Shaped like `McpListing` and for the same reason: an empty list and a `claude`
+ * that would not start are the same thing to a menu, and only one of the two is
+ * something the user can act on.
+ */
+export type AgentCommandListing = {
+  /** Where they were asked for — a command set is per directory, since a
+   * project's own `.claude/commands/` is only there. */
+  cwd: string
+  commands: AgentCommand[]
+  error: string | null
+}
+
+/**
  * What the picker draws when the CLI could not be asked, and until it answers.
  *
  * **Aliases the CLI resolves, and nothing else.** This list grew a set of
@@ -1272,6 +1462,34 @@ export type ClaudeProfile = {
    * to report, not this app's to anticipate.
    */
   configDir: string
+}
+
+/**
+ * Whether a profile's directory is actually signed in, and as whom — what
+ * Settings › Claude draws beside each row, and the one thing a list of paths
+ * cannot say for itself.
+ *
+ * A directory is a weak thing to name an identity with: it can be a typo, it
+ * can be one somebody logged out of, and on macOS it can name an account whose
+ * token lives in a keychain that no longer has it. So this is asked of `claude`
+ * itself (`main/claude-auth.ts`) rather than parsed out of the CLI's own files.
+ */
+export type ClaudeAccount = {
+  /** The directory asked about, `~` expanded — empty for the default login. */
+  configDir: string
+  /**
+   * `missing` is the directory not existing, kept apart from `signedOut`
+   * because it is the typo case and its fix is different; `error` is this app
+   * failing to ask at all, and carries the CLI's own sentence.
+   */
+  state: "signedIn" | "signedOut" | "missing" | "error"
+  email: string | null
+  organization: string | null
+  /** `claude.ai`, `apiKey`, … — the CLI's own word for how it authenticates. */
+  method: string | null
+  /** The subscription, when there is one: `team`, `max`, `pro`. */
+  plan: string | null
+  error: string | null
 }
 
 /**
@@ -1401,6 +1619,23 @@ export type ChatPlace = {
 }
 
 /**
+ * A chat that has been on screen for a while, being written down for the first
+ * time — see `createWorktreeChat`.
+ *
+ * Everything here is something that can have happened to a tab before its first
+ * message: the toolbar moved, `/rename` was typed. Without them, writing the
+ * chat down at the first message would be the moment it quietly forgot what it
+ * had been set to.
+ */
+export type ChatSeed = {
+  /** The id the tab has been using, which is also the CLI's session id. */
+  id: string
+  /** `"Untitled"` unless the tab was named before anything was said in it. */
+  title?: string
+  options?: WorktreeChatOptions
+}
+
+/**
  * The place a record names, as the id everything keyed by place uses.
  *
  * Read through this rather than off the field, the way `chatOptions` is: a chat
@@ -1457,6 +1692,168 @@ export type WorktreeChat = {
 /** One of those events, tagged with the chat it belongs to: several chats can
  * be answering at once, so a listener has to know which one this is. */
 export type WorktreeChatEvent = AssistantEvent & { chatId: string }
+
+/**
+ * What a review comment's `Ask Claude` came back with — see
+ * `replyToReviewComment`.
+ *
+ * A union rather than a nullable string, because the failure has to be shown:
+ * the button is pressed on a thread and something has to appear under it, and
+ * "nothing happened" is the one answer a reviewer cannot act on. The error is
+ * whatever the CLI said, drawn in the thread and not written into it as a note.
+ */
+export type ReviewReplyAnswer = { text: string } | { error: string }
+
+/** What `reviewChanges` came back with. An empty list is a real answer — the
+ * change is sound — and is said as one. */
+export type ReviewChangesAnswer =
+  { findings: ReviewFinding[] } | { error: string }
+
+/**
+ * One line of a whole-diff review's activity, while it is running — a tool
+ * call read off one of the turns `review-agent.ts` runs `reviewChanges` on
+ * (`Read src/main/ipc.ts`, `Grep TODO`), so a reviewer watching the bar can
+ * tell *which* files it is reading rather than staring at a spinner until it
+ * answers. There is a turn per changed file and several run at once, so a line
+ * is prefixed with the file whose turn made the call, and a `3/58` line lands
+ * as each of them finishes.
+ *
+ * Pushed rather than polled, the way a chat's own lines are
+ * (`WorktreeChatEvent`) — the turn is main's, and nothing here is worth a
+ * round trip per line. No id and no ordering guarantee beyond arrival order:
+ * this is a transcript nobody keeps, cleared the moment the next review
+ * starts (`reviewAll` in `lib/files/review.ts`).
+ */
+export type ReviewProgressEvent = { text: string }
+
+/**
+ * Who wrote one note on a review thread.
+ *
+ * Two: the person reading the diff, and Claude, which is called into a thread by
+ * name — see `AGENT_MENTION` in `lib/files/review.ts`. A thread whose author is
+ * not said is a thread that reads as the reviewer's own once there are two of
+ * them in a pane.
+ */
+export type ReviewAuthor = "you" | "agent"
+
+/**
+ * Which file a thread's line numbers are in.
+ *
+ * `new` is the working file — the diff's right-hand side, and every kept or
+ * added line. `old` is the commit, which is where a deleted line still exists:
+ * in the unified diff those rows are the merge extension's block widgets, and in
+ * the split one they are the left-hand editor.
+ */
+export type ReviewSide = "new" | "old"
+
+/** A run of one file's lines, inclusive of both ends. A single line is
+ * `fromLine === toLine`. */
+export type LineRange = { fromLine: number; toLine: number }
+
+/**
+ * What one comment is about, in one or both files.
+ *
+ * At least one of the two is set — an anchor naming nothing is not a comment.
+ * Both being set is a remark about a hunk: these lines went, those replaced
+ * them, and the opinion is about the swap rather than about either half.
+ *
+ * Two ranges rather than a list of rows, which is what a truly faithful record of
+ * a selection would be. A diff's rows are contiguous per side within any
+ * selection somebody can make by dragging, so the extremes are the whole of it,
+ * and two pairs of numbers is what a heading and a `Read` call can both use.
+ */
+export type ReviewAnchor = {
+  /** Lines of the committed file — what the change removed. */
+  old: LineRange | null
+  /** Lines of the working file — kept, or added. */
+  new: LineRange | null
+}
+
+/**
+ * The lines an anchor quoted, per side, as they read when the thread was opened.
+ *
+ * Kept apart rather than run together, because the two are lines of different
+ * files and a reader — human or model — that could not tell which was which
+ * would be reading a diff with the signs rubbed off.
+ */
+export type ReviewSnippet = {
+  old: string | null
+  new: string | null
+}
+
+/** One thing said in a thread. */
+export type ReviewNote = {
+  id: string
+  author: ReviewAuthor
+  body: string
+}
+
+/**
+ * A range of a diff's lines, and the conversation about it.
+ *
+ * **Written to disk**, in `REVIEW_FILE` — which is why these types are in the
+ * contract rather than in the renderer that draws them. A review used to be a
+ * sitting: nothing was kept, on the argument that what a review was *for* was
+ * the chat at the end of it. There is no chat at the end any more, so there was
+ * nothing keeping it. `docs/design.md` § Changes has the reversal.
+ */
+export type ReviewThread = {
+  id: string
+  /** `FileRoot.id`: the checkout this review is of. */
+  rootId: string
+  /** Absolute, as every path in the Explorer is. */
+  path: string
+  /** Which lines of which of the two files — see `ReviewAnchor`. */
+  anchor: ReviewAnchor
+  /**
+   * The lines as they read when the thread was opened.
+   *
+   * Kept rather than resolved when it is read back, and that is deliberate
+   * twice over. It is what an agent is told the reviewer was looking at — lines
+   * move, and a snippet read later would quote something the remark was never
+   * about. And now that a thread outlives the app, it is the thread's **real**
+   * address: `settle` in `lib/files/review.ts` finds these lines again in the
+   * file and puts the comment back on them, or says the code has gone.
+   *
+   * Capped, so a comment on a 400-line block is still a prompt.
+   */
+  snippet: ReviewSnippet
+  /** At least one, oldest first: a thread is opened by something being said. */
+  notes: ReviewNote[]
+  /**
+   * Whether the lines this was written about are still findable in the file.
+   *
+   * Absent on a thread that has not been checked, and on every thread written
+   * before there was anything to check — a review kept across a restart is read
+   * back against a file that has moved on, and `settle` sets this when the
+   * snippet is nowhere to be found. Drawn as *outdated* rather than deleted: a
+   * remark whose code has gone is still something somebody said, and quietly
+   * dropping it would be this app deciding a review was finished.
+   */
+  stale?: boolean
+}
+
+/**
+ * One thing a whole-diff review found, before it is a thread.
+ *
+ * Deliberately smaller than `ReviewThread`: a model returns a place and a
+ * sentence, and everything else a thread carries — its id, the lines it quotes,
+ * who said it — is added on this side, where those are already known. What comes
+ * back over the wire is the part that had to be *decided*.
+ *
+ * Only the **working file's** lines. A thread can be about the commit's, but
+ * nothing turning a patch into a position has the commit's text to hand, and a
+ * remark about a deletion belongs on the lines that replaced it anyway.
+ */
+export type ReviewFinding = {
+  /** Relative to the checkout, as the diff names it. */
+  path: string
+  /** Inclusive, counting from 1, in the file as it is now. */
+  fromLine: number
+  toLine: number
+  /** The remark, as markdown. */
+  body: string
+}
 
 /**
  * The hues a board column can be marked with.
@@ -1541,7 +1938,7 @@ export const DEFAULT_BOARD_COLUMNS: {
 /**
  * One card on a project's board.
  *
- * A **project's**, like a chat and unlike a note: the thing a card is about is
+ * A **project's**, like a chat and unlike a request: the thing a card is about is
  * work in one repository, and a card whose chat ran in a different one is a
  * link across two working trees that nothing in this app could draw honestly.
  * `folderId` is what makes it per project, and it is the same id a chat's
@@ -1555,9 +1952,8 @@ export const DEFAULT_BOARD_COLUMNS: {
  * are and what was refused beside them — an assignee, comments, attachments —
  * is `docs/design.md` § Board.
  *
- * The whole collection is one file and one save, the shape `NoteRecord`'s
- * listing has — a card is small and bounded, so there is no body to keep out of
- * the list, and **order within the list is order within the column**, which is
+ * The whole collection is one file and one save — a card is small and bounded,
+ * so there is no body to keep out of the list, and **order within the list is order within the column**, which is
  * what makes a drag one write.
  */
 export type BoardCard = {
@@ -1619,84 +2015,28 @@ export type BoardCard = {
 }
 
 /**
- * A group of notes, nested arbitrarily deep.
- *
- * Shaped like `HttpFolder` minus the cascading headers and params, because a
- * note folder inherits nothing down the tree — it is a place to put things and
- * not a set of defaults. Kept as its own type rather than a shared "folder" so
- * that giving one of the two panels something the other has no use for does
- * not mean widening a record both of them store.
- */
-export type NoteFolder = {
-  id: string
-  name: string
-  /** The folder it sits in, or `null` at the top level. */
-  parentId: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-/**
- * One note in the workspace — its listing, not its text.
- *
- * The body lives beside the manifest as its own `.md` file (see
- * `store.ts`'s `NOTES_DIR`) rather than inline here, for two reasons: a note
- * grows without bound and this list is rewritten whenever anything is renamed
- * or moved, and a directory of markdown files is something the user can grep,
- * open in an editor, or put under version control without this app's help.
- */
-export type NoteRecord = {
-  id: string
-  name: string
-  /** The note folder it is filed under, or `null` at the top level. Not a
-   * workspace folder — notes belong to the workspace, not to a repository. */
-  folderId: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-/**
- * The language a note's fenced block carries when it holds a drawing.
+ * The language a fenced block carries when it holds a drawing.
  *
  * A drawing is a scene of shapes and images, which markdown has no syntax for,
- * so the note keeps only the id and the scene lives in its own file. A fence is
- * what that id travels in: it round-trips through any markdown parser
+ * so the document keeps only the id and the scene lives in its own file. A
+ * fence is what that id travels in: it round-trips through any markdown parser
  * untouched, and a plain reader sees a short code block rather than a wall of
- * JSON. Shared because the renderer writes these and the store deletes the
- * files behind them.
+ * JSON. Shared because the renderer writes these and the store keeps the files
+ * behind them.
  */
 export const DRAWING_LANGUAGE = "drawing"
 
 /**
- * A note's body, and which of the two formats it is in.
- *
- * A note is BlockNote's block model, written as JSON — the editor's own
- * document rather than a markdown rendering of it, because BlockNote's markdown
- * export is lossy by its own documentation and a note kept as markdown would
- * have been passed through that converter on every keystroke.
- *
- * `markdown` is what a note written by an older build still holds. The store
- * hands it over as it found it and says so, because the conversion needs a
- * parser that only the renderer has; the renderer converts once and the next
- * write leaves JSON behind. The markdown file is *not* deleted — it is the
- * user's own text and the migration is not the moment to be sure.
- */
-export type NoteBody = {
-  format: "blocks" | "markdown"
-  text: string
-}
-
-/**
- * One block of a note's document — BlockNote's own model, as it is on disk.
+ * One block of a block document — BlockNote's own model, as it is on disk.
  *
  * Deliberately structural rather than BlockNote's `Block`: everything that
  * walks a document does so without caring what is in it, and `Block` carries
  * the schema's three type parameters through every signature it touches.
  *
- * Here rather than beside the renderer's walks over it because the main
- * process reads the same file now — the preview server renders a note to HTML
- * itself (`main/note-html.ts`), so the shape of a note is no longer one side's
- * private business. It does not cross a channel; both sides read the format.
+ * Here rather than beside the renderer's walk over it because the main process
+ * read the same file while the note preview server existed. It does not cross a
+ * channel; it is the shape of a file on disk, and `.note` files in the
+ * workspace's folders are still written in it.
  */
 export type NoteBlock = {
   id?: string
@@ -1811,6 +2151,18 @@ export type DesktopApi = {
 
   /** Subscribes to the File menu. Returns an unsubscribe function. */
   onMenuCommand: (listener: (command: MenuCommand) => void) => () => void
+
+  /**
+   * Opens a panel in a window of its own, or focuses the one already open.
+   *
+   * The windows this app has besides the studio. Each loads the same renderer
+   * with `?view=<panel>`, so what it draws is the panel this app already has
+   * rather than a second implementation of it — and neither holds a
+   * subscription, because everything these two panels ask for (`db:query`,
+   * `databases:list`, `docker:status`, `http:*`) is a call and an answer. Main
+   * still sends its push events to the studio window alone.
+   */
+  openPanelWindow: (view: PanelWindowView) => Promise<void>
 
   /** Whether Docker is available, and why not when it is not — used when
    * creating a Docker-managed database. */
@@ -2066,6 +2418,22 @@ export type DesktopApi = {
    */
   agentModels: () => Promise<AgentModel[]>
   /**
+   * The slash commands that same `claude` has in a project's directory, for the
+   * composer's `/` menu — what pressing `/` in the CLI lists.
+   *
+   * `folderId` because a command set is per directory: a repository's own
+   * `.claude/commands/` and its skills are only there. Null, or a project that
+   * has left the workspace, asks in the user's home directory, which is the
+   * user-scope half and nothing repository-specific.
+   *
+   * **Held per directory for the run**, unlike `installedMcpServers`: a menu
+   * opening is not a reason to spawn a process, and `/reload-skills` exists
+   * precisely because the CLI's own list does not move under a live session
+   * either. A failure is not cached, so a CLI that was missing at launch is
+   * found once it is installed.
+   */
+  agentCommands: (folderId: string | null) => Promise<AgentCommandListing>
+  /**
    * The MCP servers the user's own `claude` has in a project's directory, for
    * the MCP section of Settings — what `/mcp` in the CLI lists.
    *
@@ -2109,14 +2477,54 @@ export type DesktopApi = {
   /** Replaces the whole collection: the renderer owns the list, the same way
    * it owns `HttpEnvironment`'s. */
   saveClaudeProfiles: (profiles: ClaudeProfile[]) => Promise<void>
+  /**
+   * Whether one of those directories is signed in, and as whom — `claude auth
+   * status` run with that `CLAUDE_CONFIG_DIR`, and with none at all for the
+   * empty string, which is the account a chat with no profile picked uses.
+   *
+   * Asked per directory rather than for the whole list, so a row rechecked
+   * after a `claude login` in a terminal costs one process and not one per
+   * profile. Nothing caches it: a login is exactly the thing that changes
+   * while somebody is looking at this section.
+   */
+  claudeAccount: (configDir: string) => Promise<ClaudeAccount>
   /** Every chat in every project — the listing; the lines are read one chat
    * at a time. */
   listWorktreeChats: () => Promise<WorktreeChat[]>
-  /** A new, empty chat in a checkout or in a project's own working tree. Made
-   * up front so the tab exists before anything has been said in it. */
-  createWorktreeChat: (place: ChatPlace) => Promise<WorktreeChat>
+  /**
+   * A chat in a project's own working tree, written down.
+   *
+   * **Called on the first thing said in a chat, not on the `+` that opened it.**
+   * The tab still appears at once — the renderer makes the chat there and holds
+   * it (`unsaved` in `lib/worktree-chat/store.ts`) — but a `+` somebody thought
+   * better of used to leave an `Untitled` row in the project's list and a file
+   * on disk for ever, and there is nothing in an unused chat worth keeping.
+   *
+   * `seed` is what that tab already knows, and is absent only for a chat this
+   * call is the origin of. Its `id` is not a suggestion: a chat's id **is** the
+   * CLI's session id, and one minted here instead would be a different chat to
+   * the one on screen.
+   */
+  createWorktreeChat: (
+    place: ChatPlace,
+    seed?: ChatSeed
+  ) => Promise<WorktreeChat>
   readWorktreeChat: (id: string) => Promise<AssistantMessage[]>
   deleteWorktreeChat: (id: string) => Promise<void>
+  /**
+   * Empties a chat and closes the CLI behind it — the composer's `/clear`.
+   *
+   * **Not `delete` plus `create`.** The chat keeps its id, its tab, its title
+   * and its options: what `/clear` means in the terminal is a new context in the
+   * conversation you are in, not a different conversation. A chat's id *is* the
+   * CLI's session id, so the session has to go with the lines — otherwise the
+   * next message would `resume` into the very context this call was asked to
+   * throw away. `started` is dropped with it, which is what makes that message
+   * open a session rather than resume one.
+   *
+   * A turn in flight is ended by the close, the way `delete` ends one.
+   */
+  clearWorktreeChat: (id: string) => Promise<void>
   /** What a chat is called. Its title is the first thing asked in it until
    * somebody names it, and a name is what it is found by later. An empty one is
    * ignored rather than blanking the row. */
@@ -2156,6 +2564,33 @@ export type DesktopApi = {
   ) => () => void
 
   /**
+   * One review comment, answered by a read-only turn in that checkout.
+   *
+   * **Not a chat**, and the difference is the whole of why it is its own call:
+   * there is no id, no transcript and nothing to send a second message to. The
+   * session is opened for the question and closed on the answer, which lands in
+   * the thread as a note by `agent` — see `src/main/review-agent.ts` for what
+   * that turn may do, and why it is allowed to exist beside the "the only
+   * `claude` this app spawns" rule in `ipc.ts`.
+   *
+   * Resolves either way rather than rejecting: a reply that failed is a sentence
+   * to draw in the thread, and the renderer has one path for it.
+   *
+   * `model`, `effort` and `profileId` are the same three a chat's toolbar picks
+   * from — see `WorktreeChatOptions` — because a review turn is billed to an
+   * account and thinks at a level exactly the way a chat's does. `profileId` is
+   * resolved to a `CLAUDE_CONFIG_DIR` on the main side, the same as a chat's.
+   */
+  replyToReviewComment: (
+    /** The checkout's own directory — the cwd the turn reads in. */
+    cwd: string,
+    prompt: string,
+    model: string | null,
+    effort: ChatEffort | null,
+    profileId: string | null
+  ) => Promise<ReviewReplyAnswer>
+
+  /**
    * Every board card in every project.
    *
    * One call for the whole workspace rather than per project, the way the chat
@@ -2164,42 +2599,48 @@ export type DesktopApi = {
    * opened.
    */
   listBoardCards: () => Promise<BoardCard[]>
-  /** Replaces the whole collection — the renderer owns the list and its order,
-   * the same way it owns the notes'. */
+  /** Replaces the whole collection — the renderer owns the list and its
+   * order, the same way it owns the requests'. */
   saveBoardCards: (cards: BoardCard[]) => Promise<void>
-  /** Every project's columns. Their own file rather than a field on a card, for
-   * the reason a note folder is not a field on a note: they are renamed,
-   * recoloured and reordered without any card changing. */
-  listBoardColumns: () => Promise<BoardColumn[]>
-  saveBoardColumns: (columns: BoardColumn[]) => Promise<void>
-
-  /** Every note in the workspace, and the folders they are filed under —
-   * their listings only; a body is read one at a time. */
-  listNotes: () => Promise<NoteRecord[]>
-  saveNotes: (notes: NoteRecord[]) => Promise<void>
-  listNoteFolders: () => Promise<NoteFolder[]>
-  saveNoteFolders: (folders: NoteFolder[]) => Promise<void>
-
-  /** One note's body. Empty for a note whose file does not exist yet — which
-   * is every note until the first thing is typed into it. */
-  readNote: (id: string) => Promise<NoteBody>
-  /** Takes the format too, so that copying a note an older build wrote — which
-   * `duplicate` does before anything has converted it — lands as the markdown
-   * it still is rather than as markdown in a file named `.json`. */
-  writeNote: (id: string, body: NoteBody) => Promise<void>
-  /** Deletes those notes' bodies. Takes a list because deleting a folder
-   * takes every note under it, and one call is one pass over the directory. */
-  deleteNotes: (ids: string[]) => Promise<void>
+  /**
+   * Every changed file in a checkout, reviewed by one read-only turn.
+   *
+   * The findings come back rather than the threads: this side turns each one
+   * into a thread, because that is where the file's own text is to hand to quote
+   * from — see `reviewAll` in `lib/files/review.ts`.
+   *
+   * Resolves either way rather than rejecting, the same as
+   * `replyToReviewComment`. `model`, `effort` and `profileId` are the same
+   * three that call takes, for the same reason.
+   */
+  reviewChanges: (
+    cwd: string,
+    model: string | null,
+    effort: ChatEffort | null,
+    profileId: string | null
+  ) => Promise<ReviewChangesAnswer>
+  /** A whole-diff review's activity while it runs — see `ReviewProgressEvent`.
+   * Returns an unsubscribe. */
+  onReviewProgress: (
+    listener: (event: ReviewProgressEvent) => void
+  ) => () => void
 
   /**
-   * Where this note can be read outside the studio — a loopback URL to paste
-   * into a browser, or to hand to something that reads pages.
+   * Every review thread in the workspace.
    *
-   * Asking for it is what starts the server, so a workspace whose notes are
-   * never shared never binds a port. The URL carries a secret this run
-   * generated, so it is only guessable by whoever was given it.
+   * One call for the lot rather than per project, the way the board's cards are:
+   * the pane has to know a review exists in a file nobody has opened, and the
+   * whole collection is a few dozen short records.
    */
-  notePreviewUrl: (id: string) => Promise<string>
+  listReviewThreads: () => Promise<ReviewThread[]>
+  /** Replaces the whole collection — the renderer owns the list and its order,
+   * the same bargain the board's cards make. */
+  saveReviewThreads: (threads: ReviewThread[]) => Promise<void>
+
+  /** Every project's columns. Their own file rather than a field on a card:
+   * they are renamed, recoloured and reordered without any card changing. */
+  listBoardColumns: () => Promise<BoardColumn[]>
+  saveBoardColumns: (columns: BoardColumn[]) => Promise<void>
 
   /**
    * One drawing's scene, as the text of its `.excalidraw` file — Excalidraw's
@@ -2212,28 +2653,24 @@ export type DesktopApi = {
    */
   readDrawing: (id: string) => Promise<string>
   writeDrawing: (id: string, scene: string) => Promise<void>
-  /** Deletes those drawings' scenes — what deleting the note holding them
-   * takes with it. */
-  deleteDrawings: (ids: string[]) => Promise<void>
   /**
    * The drawing as a picture, written beside its scene whenever the scene is
    * saved.
    *
-   * For the preview server, which renders a note in the main process and so
-   * has no Excalidraw to draw a scene with — turning one into an image needs a
-   * canvas and a font stack, which is a renderer. This is that export, done
-   * once by the side that already has the editor loaded. Always the light
-   * rendering: the preview page is one page and does not follow the studio's
-   * theme toggle.
+   * Written by the side that has the editor loaded, since turning a scene into
+   * an image needs a canvas and a font stack. Always the light rendering. It
+   * was the note preview server that read these; nothing does today, and it is
+   * kept because the picture beside the scene is what any future reader of a
+   * drawing outside the editor would ask for.
    */
   writeDrawingSvg: (id: string, svg: string) => Promise<void>
 
   /**
-   * A file dropped into a note — a picture, in practice — kept in the workspace
-   * so the note still has it once the file it came from has moved.
+   * A file dropped into a block document — a picture, in practice — kept in the
+   * workspace so the document still has it once the file it came from has moved.
    *
    * The name is the renderer's, `<uuid>.<ext>`, and is checked before it becomes
-   * a filename for the same reason a note id is. The bytes cross as a
+   * a filename. The bytes cross as a
    * `Uint8Array` rather than base64: this is the one call in the contract that
    * carries a file's contents, and structured clone already moves bytes without
    * a third of them being spent on the encoding.
@@ -2242,11 +2679,6 @@ export type DesktopApi = {
    * are files rather than data URLs in the document.
    */
   writeNoteFile: (fileName: string, bytes: Uint8Array) => Promise<void>
-  /** Copies one — what duplicating a note does, so that the copy and the
-   * original do not share a file either of them can delete. */
-  copyNoteFile: (fromName: string, toName: string) => Promise<void>
-  /** Deletes them, along with the notes that held them. */
-  deleteNoteFiles: (fileNames: string[]) => Promise<void>
 
   /**
    * Sends one request from the main process rather than the renderer, which
@@ -2328,6 +2760,24 @@ export type MenuCommand =
   | "toggle-terminal"
   | "open-settings"
 
+/**
+ * The panels that can be opened in a window of their own.
+ *
+ * The two lists the left column no longer draws (`SIDEBAR_SECTIONS` is
+ * `projects` and nothing else), and the two panels that hold nothing arriving
+ * over a push event — see `openPanelWindow`. It is a `view=` in the renderer's
+ * own URL, so `isPanelWindowView` below is what main checks a value against
+ * before building one: a string from the renderer names a window this app is
+ * about to open.
+ */
+export type PanelWindowView = "database" | "api"
+
+export const PANEL_WINDOW_VIEWS: PanelWindowView[] = ["database", "api"]
+
+export function isPanelWindowView(value: unknown): value is PanelWindowView {
+  return PANEL_WINDOW_VIEWS.includes(value as PanelWindowView)
+}
+
 /** IPC channel names, shared so main and preload cannot drift apart. */
 export const IPC = {
   getWorkspace: "workspace:get",
@@ -2340,6 +2790,7 @@ export const IPC = {
   readImageDataUrl: "files:read-image-data-url",
   clipboardImagePath: "files:clipboard-image-path",
   menuCommand: "menu:command",
+  openPanelWindow: "window:open-panel",
   dockerStatus: "docker:status",
   listDatabases: "databases:list",
   createDatabase: "databases:create",
@@ -2387,39 +2838,36 @@ export const IPC = {
   saveCookies: "http:save-cookies",
   httpSend: "http:send",
   agentModels: "agent:models",
+  agentCommands: "agent:commands",
   installedMcpServers: "mcp:installed",
   removeMcpServer: "mcp:remove",
   listClaudeProfiles: "claude-profiles:list",
   saveClaudeProfiles: "claude-profiles:save",
+  claudeAccount: "claude-profiles:account",
   listWorktreeChats: "worktree-chats:list",
   createWorktreeChat: "worktree-chats:create",
   readWorktreeChat: "worktree-chats:read",
   deleteWorktreeChat: "worktree-chats:delete",
+  clearWorktreeChat: "worktree-chats:clear",
   renameWorktreeChat: "worktree-chats:rename",
   setWorktreeChatOptions: "worktree-chats:options",
   answerWorktreeChatAsk: "worktree-chats:answer",
   sendWorktreeChat: "worktree-chats:send",
   stopWorktreeChat: "worktree-chats:stop",
   worktreeChatEvent: "worktree-chats:event",
+  replyToReviewComment: "review:reply",
+  reviewChanges: "review:changes",
+  reviewProgress: "review:progress",
+  listReviewThreads: "review:list",
+  saveReviewThreads: "review:save",
   listBoardCards: "board:list",
   saveBoardCards: "board:save",
   listBoardColumns: "board:list-columns",
   saveBoardColumns: "board:save-columns",
-  listNotes: "notes:list",
-  saveNotes: "notes:save",
-  listNoteFolders: "notes:list-folders",
-  saveNoteFolders: "notes:save-folders",
-  readNote: "notes:read",
-  writeNote: "notes:write",
-  deleteNotes: "notes:delete",
-  notePreviewUrl: "notes:preview-url",
   readDrawing: "drawings:read",
   writeDrawing: "drawings:write",
-  deleteDrawings: "drawings:delete",
   writeDrawingSvg: "drawings:write-svg",
   writeNoteFile: "note-files:write",
-  copyNoteFile: "note-files:copy",
-  deleteNoteFiles: "note-files:delete",
   startProcess: "process:start",
   stopProcess: "process:stop",
   processOutput: "process:output",

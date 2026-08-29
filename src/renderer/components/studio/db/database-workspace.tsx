@@ -102,8 +102,7 @@ function tabsFor(selected: Relation): { id: Tab; label: string }[] {
 /**
  * The open tables and query consoles, one pane each.
  *
- * Stacked and hidden rather than swapped, the way the Notes and Explorer panes
- * do it — and, for the tables, the reason the store keeps a `RelationView` per
+ * Stacked and hidden rather than swapped, the way the Explorer's panes do it — and, for the tables, the reason the store keeps a `RelationView` per
  * tab. Between the two, coming back to a table is the screen it was left on:
  * the same page, order and filters, the same rows, scrolled where they were.
  * A query console keeps its editor (and so its undo history), the height it

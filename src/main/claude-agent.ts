@@ -5,7 +5,14 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 
-import type { AssistantMessage, ChatTodo, TurnUsage } from "../shared/api"
+import type {
+  AssistantMessage,
+  ChatTodo,
+  ChatWindow,
+  ChatWindowSlice,
+  ChatWindowTone,
+  TurnUsage,
+} from "../shared/api"
 import { claudeBinary } from "./claude-bin"
 import { environment, locate } from "./shell-env"
 
@@ -254,6 +261,46 @@ export type AgentHandlers = {
    * working. A caller that only wants the record can ignore it.
    */
   onContext: (tokens: number) => void
+  /**
+   * The window as the CLI accounts for it, once a turn has ended.
+   *
+   * Apart from `onContext` because it is a different measurement, not the same
+   * one arriving twice. `onContext` is a count read off a reply's own usage —
+   * live, free, and with no denominator. This is `getContextUsage()`: a control
+   * request that carries `maxTokens`, the auto-compact threshold and the split
+   * by category, which is what turns a number into a percentage.
+   *
+   * Once a turn, after `onUsage` and before `onTurn`. A control request per
+   * reply would be a round trip per content block for a figure nobody can act on
+   * mid-answer.
+   *
+   * **Not called when the ask fails**, and that is deliberate: the caller keeps
+   * the last window it had rather than being handed a zeroed one. A CLI too old
+   * to answer this simply never moves the meter off whatever the last turn said.
+   */
+  onWindow: (window: ChatWindow) => void
+  /**
+   * The CLI has started or finished compacting.
+   *
+   * A state and not a fraction, because a fraction does not exist: compaction is
+   * one summarisation call, and what the SDK reports is `status: 'compacting'`
+   * and then `status: null` with a `compact_result`. `error` is the CLI's own
+   * sentence and is set only on a failure.
+   */
+  onCompacting: (compacting: boolean, error: string | null) => void
+  /**
+   * A compaction happened, with the window either side of it.
+   *
+   * The measurable half of the pair above, and the one worth writing down: the
+   * boundary is a point in the conversation, and everything before it is
+   * something the model now knows only as a summary.
+   */
+  onCompacted: (compacted: {
+    trigger: "manual" | "auto"
+    preTokens: number
+    postTokens?: number
+    durationMs?: number
+  }) => void
   /**
    * Whether the CLI is working on something right now.
    *
@@ -522,6 +569,25 @@ export async function startAgentSession(
    * is. */
   let answering = true
 
+  /**
+   * The window, asked of the CLI once a turn has ended.
+   *
+   * **Every failure is swallowed on purpose.** This is a meter, not the
+   * conversation: a CLI too old to answer the request, a session closed for
+   * idleness between the result and this landing, a request that times out — all
+   * of them mean "no new number", and the caller keeps the last one it had. A
+   * turn that worked must not report an error because a decoration could not be
+   * refreshed.
+   */
+  async function askWindow(): Promise<void> {
+    try {
+      const usage = await conversation.getContextUsage()
+      handlers.onWindow(readWindow(usage))
+    } catch {
+      // Deliberately silent — see above.
+    }
+  }
+
   /** Resolved with whether the CLI came up at all — see the note above. */
   let settle: (running: boolean) => void = () => {}
   const running = new Promise<boolean>((resolve) => {
@@ -549,6 +615,43 @@ export async function startAgentSession(
           // rather than over, and a composer that said otherwise would invite a
           // second message on top of a question nobody has answered.
           handlers.onBusy(message.state !== "idle")
+          continue
+        }
+
+        /*
+         * Compaction, which the CLI reports in two halves.
+         *
+         * `status` is the spinner's half — on, then off — and carries whether it
+         * worked. There is no third value and no fraction: one summarisation
+         * call either finishes or does not.
+         */
+        if (message.type === "system" && message.subtype === "status") {
+          const compacting = message.status === "compacting"
+          handlers.onCompacting(
+            compacting,
+            message.compact_result === "failed"
+              ? (message.compact_error ?? "Compaction failed.")
+              : null
+          )
+          continue
+        }
+
+        // …and `compact_boundary` is the measurable half, which becomes a line.
+        if (
+          message.type === "system" &&
+          message.subtype === "compact_boundary"
+        ) {
+          const meta = message.compact_metadata
+          handlers.onCompacted({
+            trigger: meta.trigger === "manual" ? "manual" : "auto",
+            preTokens: meta.pre_tokens,
+            ...(meta.post_tokens !== undefined
+              ? { postTokens: meta.post_tokens }
+              : {}),
+            ...(meta.duration_ms !== undefined
+              ? { durationMs: meta.duration_ms }
+              : {}),
+          })
           continue
         }
 
@@ -584,6 +687,15 @@ export async function startAgentSession(
           if (!reportsState) handlers.onBusy(false)
           handlers.onTurn(errorOf(message, interrupted))
           interrupted = false
+          /*
+           * The window, measured rather than counted — see `onWindow`.
+           *
+           * Deliberately **not** awaited: this loop is what delivers every
+           * message of the next turn, and a control request in the middle of it
+           * would hold the whole conversation for its round trip. A message
+           * queued behind this result is already being answered.
+           */
+          void askWindow()
           continue
         }
 
@@ -977,6 +1089,85 @@ export function usageOf(
  * usage at all, so a caller can keep the last number it had rather than draw a
  * zero as an empty window.
  */
+/**
+ * The CLI's context report, narrowed to what a meter draws.
+ *
+ * Field by field for the reason `readModel` and `readServer` are, and with one
+ * extra reason of its own: this crosses into the renderer as something a bar is
+ * sized from, so a missing `maxTokens` has to become a window with no
+ * denominator rather than a division by zero.
+ *
+ * **The colours are dropped and the names are matched instead.** The CLI sends
+ * a `color` per category, but those are its terminal theme's tokens —
+ * `promptBorder`, `inactive`, `claude`, `warning`,
+ * `purple_FOR_SUBAGENTS_ONLY` — which no stylesheet here can use, and which
+ * carry no meaning a renderer could map: two unrelated categories share
+ * `promptBorder`. So `toneOf` reads the name, and anything unrecognised becomes
+ * `other`. That is the field most likely to move in a CLI release, and an
+ * unfamiliar category then draws in a neutral tone rather than disappearing.
+ *
+ * Exported for `test/chat-window.ts`.
+ */
+export function readWindow(raw: unknown): ChatWindow {
+  const usage = (raw ?? {}) as Record<string, unknown>
+  const threshold = usage.autoCompactThreshold
+
+  return {
+    tokens: number(usage.totalTokens),
+    // `rawMaxTokens` rather than `maxTokens`: the SDK documents the percentage
+    // as being measured against the raw window, and a bar whose denominator
+    // disagreed with the number printed beside it is worse than either alone.
+    maxTokens: number(usage.rawMaxTokens) || number(usage.maxTokens),
+    percentage: number(usage.percentage),
+    // Only when auto-compaction is actually on: a threshold drawn on the bar of
+    // a session that will never act on it is a mark promising something.
+    autoCompactAt:
+      usage.isAutoCompactEnabled === true && typeof threshold === "number"
+        ? threshold
+        : null,
+    model: typeof usage.model === "string" ? usage.model : "",
+    slices: Array.isArray(usage.categories)
+      ? usage.categories.map(readSlice)
+      : [],
+  }
+}
+
+function readSlice(raw: unknown): ChatWindowSlice {
+  const category = (raw ?? {}) as Record<string, unknown>
+  const name = typeof category.name === "string" ? category.name : "Other"
+  return {
+    name,
+    tokens: number(category.tokens),
+    tone: toneOf(name),
+    deferred: category.isDeferred === true,
+  }
+}
+
+/**
+ * Which tone a category draws in, from its name.
+ *
+ * Matched on a substring rather than on the whole string because the names
+ * carry qualifiers the match has no business caring about — `System tools` and
+ * `System tools (deferred)` are one tone and two rows. Order matters: `System
+ * tools` has to be tested before `System prompt`'s bare `system`, or both land
+ * on the same tone.
+ */
+function toneOf(name: string): ChatWindowTone {
+  const lower = name.toLowerCase()
+  if (lower.includes("free")) return "free"
+  if (lower.includes("tool")) return "tools"
+  if (lower.includes("memory")) return "memory"
+  if (lower.includes("skill")) return "skills"
+  if (lower.includes("message")) return "messages"
+  if (lower.includes("system") || lower.includes("prompt")) return "system"
+  return "other"
+}
+
+/** A number the CLI sent, or zero for anything that is not one. */
+function number(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
+}
+
 export function contextOf(usage: ReplyUsage | undefined): number | null {
   if (!usage) return null
   const total =

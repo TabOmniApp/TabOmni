@@ -1,6 +1,6 @@
 import { create } from "zustand"
 
-import { MCP_DISABLED_TOOLS_KEY } from "@shared/api"
+import { MCP_DISABLED_TOOLS_KEY, type ChatEffort } from "@shared/api"
 import { recall, remember } from "./tab-memory"
 import { getSetting, setSetting } from "./workspace"
 
@@ -20,6 +20,23 @@ type Stored = {
    */
   diffSideBySide: boolean
   diffWhitespace: boolean
+  /**
+   * `--model`, `--effort` and the `CLAUDE_CONFIG_DIR` profile the review's own
+   * turns run on — `reviewChanges` and `replyToReviewComment` in
+   * `lib/files/review.ts`.
+   *
+   * A setting rather than a picker on the review pane's own toolbar: unlike a
+   * chat, a review turn is not something anybody sits in front of for the
+   * length of a conversation — it is a button pressed once in a while, or a
+   * mention typed in passing — so a picker beside it is a control mostly seen
+   * once and then in the way. Chosen here instead, the way an account is
+   * chosen for the workspace's databases, and left alone until it is changed
+   * again. Null on both is the same "leave it alone" a chat's `Inherit` row
+   * means.
+   */
+  reviewModel: string | null
+  reviewEffort: ChatEffort | null
+  reviewProfileId: string | null
 }
 
 function isStored(value: unknown): value is Stored {
@@ -38,7 +55,16 @@ function isStored(value: unknown): value is Stored {
     (record.diffSideBySide === undefined ||
       typeof record.diffSideBySide === "boolean") &&
     (record.diffWhitespace === undefined ||
-      typeof record.diffWhitespace === "boolean")
+      typeof record.diffWhitespace === "boolean") &&
+    (record.reviewModel === undefined ||
+      record.reviewModel === null ||
+      typeof record.reviewModel === "string") &&
+    (record.reviewEffort === undefined ||
+      record.reviewEffort === null ||
+      typeof record.reviewEffort === "string") &&
+    (record.reviewProfileId === undefined ||
+      record.reviewProfileId === null ||
+      typeof record.reviewProfileId === "string")
   )
 }
 
@@ -66,6 +92,10 @@ type SettingsState = Stored & {
   setGroupTabs: (group: boolean) => void
   setDiffSideBySide: (sideBySide: boolean) => void
   setDiffWhitespace: (show: boolean) => void
+  /** Sets the model and its effort together, the way a chat's `ModelMenu`
+   * hands them over. */
+  setReviewModel: (model: string | null, effort: ChatEffort | null) => void
+  setReviewProfileId: (profileId: string | null) => void
   /** Replaces the whole list — the pure `with*` helpers in
    * `lib/worktree-chat/mcp-servers.ts` work out what it should be. */
   setMcpDisabledTools: (tools: string[]) => void
@@ -114,8 +144,22 @@ export const useSettings = create<SettingsState>((set, get) => {
    * preference silently undone by changing an unrelated one.
    */
   const save = () => {
-    const { groupTabs, diffSideBySide, diffWhitespace } = get()
-    remember(SETTINGS_KEY, { groupTabs, diffSideBySide, diffWhitespace })
+    const {
+      groupTabs,
+      diffSideBySide,
+      diffWhitespace,
+      reviewModel,
+      reviewEffort,
+      reviewProfileId,
+    } = get()
+    remember(SETTINGS_KEY, {
+      groupTabs,
+      diffSideBySide,
+      diffWhitespace,
+      reviewModel,
+      reviewEffort,
+      reviewProfileId,
+    })
   }
 
   return {
@@ -124,6 +168,9 @@ export const useSettings = create<SettingsState>((set, get) => {
     // toolbar is one click away for a pane too narrow to hold them.
     diffSideBySide: true,
     diffWhitespace: false,
+    reviewModel: null,
+    reviewEffort: null,
+    reviewProfileId: null,
     mcpDisabledTools: [],
     loaded: false,
 
@@ -139,6 +186,16 @@ export const useSettings = create<SettingsState>((set, get) => {
 
     setDiffWhitespace(diffWhitespace) {
       set({ diffWhitespace })
+      save()
+    },
+
+    setReviewModel(reviewModel, reviewEffort) {
+      set({ reviewModel, reviewEffort })
+      save()
+    },
+
+    setReviewProfileId(reviewProfileId) {
+      set({ reviewProfileId })
       save()
     },
 

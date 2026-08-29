@@ -60,8 +60,7 @@ const METHOD_ITEMS = METHODS.map((method) => ({
 /**
  * The open requests, one editor and one response pane each.
  *
- * Stacked and hidden rather than swapped, the way the Notes and Explorer panes
- * do it. A single pane keyed by request id rebuilt everything a tab click
+ * Stacked and hidden rather than swapped, the way the Explorer's panes do it. A single pane keyed by request id rebuilt everything a tab click
  * should not touch: which of Params/Headers/Body was open, the split between
  * the request and its response, the response's own tab, and the scroll position
  * of a body long enough to need one. The drafts were never the reason for the

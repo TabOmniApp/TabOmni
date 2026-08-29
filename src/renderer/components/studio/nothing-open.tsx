@@ -16,18 +16,20 @@ import type { Pane } from "@/lib/store"
  *
  * The Explorer is the panel on the **right** and the projects are the column on
  * the **left**, so a hint saying "the sidebar" would be pointing at whichever of
- * the two the reader was not looking at. The other three have no list on screen
- * at all while `SIDEBAR_SECTIONS` is `Projects` alone — their panes and tabs
- * still work, so the honest thing to name is the way in that is still there:
- * `⌘P`, which indexes every table, request and note.
+ * the two the reader was not looking at.
+ *
+ * `database` and `api` are unreachable here — this window draws neither pane
+ * (`PANES` in `lib/store.ts`) — and their lines are kept because `Pane` still
+ * holds both. They name the window each panel opens in, which is the only way
+ * in there is; a hint pointing at `⌘P` would be wrong, since the palette
+ * stopped listing tables and requests for the same reason.
  */
 const HINTS: Record<Pane, string> = {
   files: "Pick a file from the Explorer on the right.",
   changes:
     "Pick a file under Changes in the Explorer to read what this project has changed.",
-  database: "Find a table with ⌘P, or open a query tab.",
-  api: "Find a request with ⌘P.",
-  note: "Find a note with ⌘P.",
+  database: "Open the Database window from the footer of the left column.",
+  api: "Open the API window from the footer of the left column.",
   worktree:
     "Pick a chat under a project on the left, or start one from its row.",
   board: "Open a project's board from its row on the left.",
@@ -40,7 +42,7 @@ const HINTS: Record<Pane, string> = {
  * The tab strip belongs to the workbench and not to a panel, so "nothing is on
  * screen" is a fact about the workbench. Each panel answering it separately
  * meant the Database panel's "No table selected" spoke for all of them —
- * telling somebody who had come to read a note to pick a table, because
+ * telling somebody who had come to read a request to pick a table, because
  * `database` is the pane a fresh launch starts on.
  *
  * Two things to say, and which one depends on the strip rather than on the

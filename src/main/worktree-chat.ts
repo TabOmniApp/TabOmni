@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto"
+import { readdir, readFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join } from "node:path"
 
 import {
   chatOptions,
@@ -8,6 +11,7 @@ import {
   type ChatEffort,
   type ChatPermission,
   type ChatPlace,
+  type ChatSeed,
   type ClaudeProfile,
   type WorktreeChat,
   type WorktreeChatAnswer,
@@ -40,12 +44,24 @@ import { expandHome } from "./shell-env"
  * the one thing print mode could not: hand a permission request back to the
  * host. See `claude-agent.ts`.
  *
- * This is the **only** `claude` the app runs. There was a workspace assistant
- * beside it — one conversation, read-only, in no folder at all — and it was
- * removed; what `CLAUDE.md` has always refused is something else and still is:
- * features calling the CLI as a helper, an AI filter or an import button,
- * because a helper turn is a turn nobody asked for. This is a conversation
- * somebody is having.
+ * `retitle` is the **one** read of that transcript, and it is not a tail: it
+ * takes the one thing the CLI writes there and sends nowhere — the name it gave
+ * the conversation — once, at the end of a chat's first turn. Everything the
+ * pane draws still arrives on the message stream.
+ *
+ * This is the only `claude` the app runs as a **conversation**. There was a
+ * workspace assistant beside it — one conversation, read-only, in no folder at
+ * all — and it was removed; what `CLAUDE.md` has always refused is something
+ * else and still is: features calling the CLI as a helper, an AI filter or an
+ * import button, because a helper turn is a turn nobody asked for. This is a
+ * conversation somebody is having.
+ *
+ * `review-agent.ts` is the one other place a session is opened, and it is
+ * deliberately not this class: a review reply is one read-only turn, opened for
+ * a question and closed on the answer, with no transcript, no resume and nothing
+ * to send a second message to. It is not a helper turn either — it is a button
+ * on a comment, pressed by the person who wrote it — and the argument for it is
+ * at the top of that file.
  *
  * **What it may do, and why.** A chat runs in the user's own working tree,
  * which is the case the isolation argument does *not* cover: there was a
@@ -96,6 +112,10 @@ type Live = {
   /** What the CLI was given as arguments — see `signatureOf`. A session whose
    * signature no longer matches the chat is closed and opened again. */
   signature: string
+  /** Which `CLAUDE_CONFIG_DIR` this session's transcript is under, so `retitle`
+   * can find the file the CLI is writing. Part of the signature already, and
+   * kept whole here rather than parsed back out of it. */
+  configDir: string | null
   /** What the session is *currently* on, so `retune` can tell a real change
    * from the same value being written back. Both start as whatever opened it. */
   model: string | null
@@ -377,6 +397,17 @@ export class WorktreeChats {
    */
   private readonly started = new Set<string>()
 
+  /**
+   * Chats `append` named after their first message and `retitle` has not yet
+   * renamed — the only ones the CLI's own title may overwrite.
+   *
+   * In memory rather than a flag on the record, because it is only ever true of
+   * a chat whose first turn is running *now*: the CLI writes its title during
+   * that turn and never again. An entry leaves on the rename that lands, on the
+   * user's own rename, and with the chat.
+   */
+  private readonly autoTitled = new Set<string>()
+
   /** Each chat's lines, held so a turn's events can be appended and written
    * without reading the file back on every one of them. Dropped when a chat is
    * deleted; kept otherwise, since a chat somebody is switching between is a
@@ -415,24 +446,43 @@ export class WorktreeChats {
   }
 
   /**
-   * A new, empty chat in a project's own working tree.
+   * A chat in a project's own working tree, written down.
    *
-   * Made up front rather than on the first message, because the row has to exist
-   * for somebody to type into: the tab is opened by clicking `+`, and a tab that
-   * only appears once you have said something is a `+` that does nothing.
+   * **Not what the `+` calls.** This used to be made up front, on the reasoning
+   * that the row has to exist for somebody to type into — a tab that only
+   * appears once you have said something is a `+` that does nothing. That is
+   * still true and is still how it behaves; what changed is that the tab is the
+   * *renderer's* until the first message, so the `+` nobody used costs no row in
+   * the project's list and no file on disk. See `unsaved` in
+   * `lib/worktree-chat/store.ts`.
+   *
+   * So `seed` is the usual case rather than the exception: the chat has been on
+   * screen, and its id, name and toolbar came from there. The id especially —
+   * it is the CLI's session id, and minting a new one here would write down a
+   * different chat to the one somebody is looking at.
+   *
+   * An id already in the listing is **returned as it stands**. Two messages sent
+   * before the first write landed would otherwise be two records of one chat,
+   * and the second would overwrite the lines of the first.
    */
-  async create(place: ChatPlace): Promise<WorktreeChat> {
+  async create(place: ChatPlace, seed?: ChatSeed): Promise<WorktreeChat> {
+    const chats = await this.source.chats()
+    const held = seed && chats.find((chat) => chat.id === seed.id)
+    if (held) return held
+
     const now = new Date().toISOString()
     const chat: WorktreeChat = {
-      id: randomUUID(),
+      id: seed?.id ?? randomUUID(),
       folderId: place.folderId,
-      // Named by its first message, once there is one. Until then this is what
-      // the tab says — Conductor's own new tab says the same thing.
-      title: "Untitled",
+      // Named by its first message, once there is one — `titleOf`, and then the
+      // CLI's own name for it in `retitle`. Until then this is what the tab
+      // says; Conductor's own new tab says the same thing.
+      title: seed?.title?.trim() || "Untitled",
+      ...(seed?.options ? { options: seed.options } : {}),
       createdAt: now,
       updatedAt: now,
     }
-    await this.source.saveChats([...(await this.source.chats()), chat])
+    await this.source.saveChats([...chats, chat])
     this.messages.set(chat.id, [])
     return chat
   }
@@ -447,6 +497,48 @@ export class WorktreeChats {
     return messages
   }
 
+  /**
+   * Empties a chat and closes the CLI behind it — the composer's `/clear`.
+   *
+   * **The session goes with the lines, and that is the whole point.** A chat's
+   * id is the CLI's session id, and `started` is what decides whether the next
+   * message opens a session or `resume`s one. Wiping the transcript alone would
+   * leave a chat that looks empty and answers out of the context it was asked to
+   * forget — the CLI's own `/clear` is a new session, not an edited one.
+   *
+   * The close is the same one `delete` does, in the same order and for the same
+   * reason: out of the map first, so the `onExit` it causes reads as the
+   * expected end it is rather than as a CLI that died.
+   *
+   * A chat paused on a permission card is the case the `asks` loop is for. That
+   * card is a promise the turn is awaiting, and closing the process out from
+   * under it would leave the question on screen with nothing behind it — the
+   * same settle `dispose` does at shutdown, narrowed to this chat.
+   *
+   * Nothing is emitted for the lines: the renderer empties its own copy, the way
+   * it does for `delete`, and there is no event a chat's *absence* of lines
+   * could be. The busy flag is, because it is main's to say and a chat cleared
+   * mid-turn would otherwise spin for the rest of the run.
+   */
+  async clear(id: string): Promise<void> {
+    const live = this.live.get(id)
+    this.live.delete(id)
+    if (live?.idle) clearTimeout(live.idle)
+    live?.session?.close()
+
+    for (const [askId, pending] of [...this.asks]) {
+      if (pending.ask.chatId !== id) continue
+      this.asks.delete(askId)
+      pending.answered({ allow: false, message: "That chat was cleared." })
+    }
+
+    this.messages.set(id, [])
+    this.started.delete(id)
+    this.setBusy(id, false)
+
+    await this.source.writeChat(id, [])
+  }
+
   async delete(id: string): Promise<void> {
     const live = this.live.get(id)
     // Out of the map before the close, so the `onExit` it causes reads as the
@@ -457,6 +549,7 @@ export class WorktreeChats {
 
     this.messages.delete(id)
     this.started.delete(id)
+    this.autoTitled.delete(id)
 
     await this.source.saveChats(
       (await this.source.chats()).filter((chat) => chat.id !== id)
@@ -599,6 +692,7 @@ export class WorktreeChats {
       session: null,
       opening: null,
       signature,
+      configDir,
       model: options.model,
       effort: options.effort,
       options,
@@ -759,6 +853,10 @@ export class WorktreeChats {
     const name = title.trim()
     if (!name) return
 
+    // A chat somebody has named is not renamed out from under them, including
+    // by a turn still running — see `retitle`.
+    this.autoTitled.delete(id)
+
     const chats = await this.source.chats()
     if (!chats.some((chat) => chat.id === id)) return
 
@@ -881,6 +979,22 @@ export class WorktreeChats {
         // to watch. A window that reloads mid-turn reads the last line instead.
         onContext: (tokens) =>
           this.emit({ chatId: id, type: "context", tokens }),
+        // Forwarded and not kept, for the same reason as `busy` rather than as
+        // `context`: this is the state of a live process. A chat read back off
+        // disk has no session to have asked, so a stored copy would be a meter
+        // describing a window that no longer exists.
+        onWindow: (window) => this.emit({ chatId: id, type: "window", window }),
+        onCompacting: (compacting, error) =>
+          this.emit({ chatId: id, type: "compacting", compacting, error }),
+        // A line, unlike the two above: a compaction happened *at a point in
+        // the conversation*, and everything above it is something the model now
+        // knows only as a summary. That is worth reading back next week.
+        onCompacted: (compacted) =>
+          void this.append(id, {
+            id: lineId(),
+            role: "compact",
+            ...compacted,
+          }),
         // Forwarded and kept: the renderer draws it, and `reap` needs it to know
         // it is not closing a session mid-turn. Nothing is written down —
         // whether a chat is working is true of a process rather than of a
@@ -1153,7 +1267,63 @@ export class WorktreeChats {
     if (error) {
       void this.append(id, { id: lineId(), role: "error", text: error })
     }
-    this.emit({ chatId: id, type: "done", error })
+    /*
+     * `done` is what the renderer re-reads the listing on, so the name
+     * `retitle` is about to write has to be in the file before it goes out —
+     * otherwise the re-read is a stale title landing on top of the fresh one.
+     *
+     * The wait is a microtask for every turn but a chat's first: `retitle`
+     * returns at the `autoTitled` test without touching the disk, and it never
+     * rejects — a failure there leaves the chat named after its first message,
+     * which is what it was named before any of this existed.
+     */
+    void this.retitle(id).then(() => {
+      this.emit({ chatId: id, type: "done", error })
+    })
+  }
+
+  /**
+   * The name the CLI gave the conversation, once it has given one.
+   *
+   * `append` names a chat after the first thing asked in it, which is a sentence
+   * rather than a name — and a chat found again in the column a week later is
+   * found by what it was *about*. The CLI writes exactly that name for itself:
+   * an `ai-title` entry in the session's own transcript, produced off the first
+   * message by a model of its own, so this costs the chat's session no tokens
+   * and this app no turn of its own — which is the only reason it is here at
+   * all, `CLAUDE.md` refusing features that call the CLI as a helper.
+   *
+   * **The file is the only place it exists.** Nothing on the SDK's message
+   * stream carries it and there is no control request that asks; `getSessionInfo
+   * ()` would answer, but it reads the config directory of *this* process, and a
+   * chat on a profile is under a `CLAUDE_CONFIG_DIR` of its own.
+   *
+   * Read once the turn is over, by which time it has long been written — the CLI
+   * appends it ahead of the turn's first reply. A turn that ends before it lands
+   * simply leaves the sentence in place: `autoTitled` still holds the chat, so
+   * the next turn's end looks again.
+   */
+  private async retitle(id: string): Promise<void> {
+    if (!this.autoTitled.has(id)) return
+
+    try {
+      const title = await aiTitleOf(this.live.get(id)?.configDir ?? null, id)
+      // `delete` rather than a second `has`: the read above was awaited, and a
+      // rename that landed in the meantime is the user naming the chat.
+      if (!title || !this.autoTitled.delete(id)) return
+
+      const chats = await this.source.chats()
+      if (!chats.some((chat) => chat.id === id)) return
+      await this.source.saveChats(
+        chats.map((chat) => (chat.id === id ? { ...chat, title } : chat))
+      )
+
+      this.emit({ chatId: id, type: "title", title })
+    } catch (error) {
+      // The chat keeps the sentence it was named after, which is what it had
+      // before any of this existed.
+      console.error("Could not read the chat's own title", error)
+    }
   }
 
   /**
@@ -1248,7 +1418,16 @@ export class WorktreeChats {
                 ? { chatId: id, type: "thinking", text: message.text }
                 : message.role === "usage"
                   ? { chatId: id, type: "usage", usage: message.usage }
-                  : { chatId: id, type: "text", text: message.text }
+                  : message.role === "compact"
+                    ? {
+                        chatId: id,
+                        type: "compact",
+                        trigger: message.trigger,
+                        preTokens: message.preTokens,
+                        postTokens: message.postTokens,
+                        durationMs: message.durationMs,
+                      }
+                    : { chatId: id, type: "text", text: message.text }
       )
     }
 
@@ -1263,6 +1442,9 @@ export class WorktreeChats {
         existing.title === "Untitled" && message.role === "user"
           ? titleOf(message.text)
           : existing.title
+      // This name is a sentence and stands in for the one the CLI is about to
+      // write — see `retitle`, which only touches a chat named here.
+      if (titled !== existing.title) this.autoTitled.add(id)
 
       await this.source.saveChats(
         chats.map((chat) =>
@@ -1488,4 +1670,74 @@ function titleOf(text: string): string {
   const line = collapse(text)
   if (!line) return "Untitled"
   return line.length > 40 ? `${line.slice(0, 39)}…` : line
+}
+
+/**
+ * The CLI's own name for a session, out of the transcript it keeps.
+ *
+ * **Found by looking rather than by computing where.** The transcript lives in a
+ * folder named for the project — the path with every non-alphanumeric character
+ * replaced by `-` — but applied to the path the CLI *resolved*, so a folder
+ * reached through a symlink lands somewhere this app would have to guess at
+ * (`/tmp` is filed under `-private-tmp` on macOS). A session id is a UUID, so
+ * the file name alone identifies it and the folder does not have to be derived.
+ *
+ * The **last** entry wins: the CLI appends a fresh line rather than rewriting,
+ * and a conversation that turned out to be about something else is retitled.
+ *
+ * The line-by-line test before parsing is not micro-optimisation — it is what
+ * keeps this off `JSON.parse` for every message of the transcript, which is
+ * where the whole cost of reading the file would otherwise be.
+ */
+async function aiTitleOf(
+  configDir: string | null,
+  sessionId: string
+): Promise<string | null> {
+  const projects = join(configDir ?? join(homedir(), ".claude"), "projects")
+
+  let folders: string[]
+  try {
+    folders = await readdir(projects)
+  } catch {
+    // No transcripts at all — a first run, or a profile pointed somewhere the
+    // CLI has not written yet.
+    return null
+  }
+
+  for (const folder of folders) {
+    let transcript: string
+    try {
+      transcript = await readFile(
+        join(projects, folder, `${sessionId}.jsonl`),
+        "utf8"
+      )
+    } catch {
+      continue
+    }
+
+    let title: string | null = null
+    for (const line of transcript.split("\n")) {
+      if (!line.includes('"ai-title"')) continue
+      try {
+        const entry: unknown = JSON.parse(line)
+        if (
+          entry &&
+          typeof entry === "object" &&
+          "type" in entry &&
+          entry.type === "ai-title" &&
+          "aiTitle" in entry &&
+          typeof entry.aiTitle === "string"
+        ) {
+          const named = collapse(entry.aiTitle)
+          if (named) title = named
+        }
+      } catch {
+        // A line the CLI was still writing when this read it. The turn after
+        // this one looks again.
+      }
+    }
+    return title
+  }
+
+  return null
 }

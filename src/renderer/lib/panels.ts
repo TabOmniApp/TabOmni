@@ -7,7 +7,6 @@ import { useChanges } from "./files/changes"
 import { useFiles } from "./files/store"
 import { fileRoots, rootOfPath, shownRootOf } from "./files/roots"
 import { SETTINGS_TAB_ID, useApi } from "./http/store"
-import { useNotes } from "./note/store"
 import { useProjects } from "./projects"
 import { useSettings } from "./settings"
 import { PANES, useStudio, type Pane } from "./store"
@@ -44,7 +43,7 @@ import { useWorktreeChats } from "./worktree-chat/store"
  * any way to know they were there.
  *
  * So the panels keep what is genuinely theirs — a table's rows, a chat's turn,
- * a note's editor — and the tab logic lives here, once. A panel joins the
+ * a file's buffer — and the tab logic lives here, once. A panel joins the
  * strip by adding an entry to `PANELS`: six small functions, none of which
  * mention any other panel.
  *
@@ -74,11 +73,11 @@ type PanelTabs = {
   reorder: (ids: string[]) => void
   /**
    * Which folder one of this panel's tabs gathers into when the strip is
-   * grouping them. A panel without one is never grouped; all five have one.
+   * grouping them. A panel without one is never grouped; all four have one.
    *
    * What a folder *is* differs: the workspace folder a file sits in, the
    * project a chat is having its conversation in, the folder in the panel's
-   * own tree a request or a note is filed under, the schema a table belongs to.
+   * own tree a request is filed under, the schema a table belongs to.
    * `NO_GROUP` is the tab that is under none of them.
    */
   groupOf?: (id: string) => string
@@ -87,8 +86,8 @@ type PanelTabs = {
    * null when the tab is not in one.
    *
    * What makes the strip per project. A panel that leaves this off is a panel
-   * whose tabs belong to the *workspace*: a table, a saved request and a note
-   * are the workspace's by deliberate design, so they stay in the strip
+   * whose tabs belong to the *workspace*: a table and a saved request are the
+   * workspace's by deliberate design, so they stay in the strip
    * whatever project is being worked in, and a half-written query does not
    * vanish because somebody clicked another one. Only the two panels whose tabs
    * are genuinely a project's have one — a file, and a chat that edits it.
@@ -113,7 +112,6 @@ const NO_GROUP = ""
 type ExplorerState = ReturnType<typeof useExplorer.getState>
 type FilesState = ReturnType<typeof useFiles.getState>
 type ApiState = ReturnType<typeof useApi.getState>
-type NoteState = ReturnType<typeof useNotes.getState>
 
 /** No database open means no tabs: they belong to the connection, not to the
  * panel, and the ones on screen went with it. */
@@ -132,11 +130,6 @@ const fileActive = (state: FilesState): string | null =>
     : null
 
 const apiActive = (state: ApiState): string | null =>
-  state.selectedId && state.openIds.includes(state.selectedId)
-    ? state.selectedId
-    : null
-
-const noteActive = (state: NoteState): string | null =>
   state.selectedId && state.openIds.includes(state.selectedId)
     ? state.selectedId
     : null
@@ -193,9 +186,6 @@ const dbGroupOf = (id: string): string => {
   if (selected && relationId(selected) === id) return selected.schema
   return NO_GROUP
 }
-
-const noteGroupOf = (id: string): string =>
-  useNotes.getState().notes.find((note) => note.id === id)?.folderId ?? NO_GROUP
 
 /** The chat the strip has selected. */
 const worktreeChatActive = (
@@ -330,16 +320,6 @@ const PANELS: Record<Pane, PanelTabs> = {
     // `changes` above, and for the same reason.
     rootOf: (id) => id,
   },
-  note: {
-    open: () => useNotes.getState().openIds,
-    active: () => noteActive(useNotes.getState()),
-    select: (id) => useNotes.getState().select(id),
-    close: (id) => useNotes.getState().close(id),
-    closeOthers: (id) => useNotes.getState().closeOthers(id),
-    closeAll: () => useNotes.getState().closeAll(),
-    reorder: (ids) => useNotes.getState().reorder(ids),
-    groupOf: noteGroupOf,
-  },
 }
 
 /**
@@ -350,7 +330,6 @@ const STORES = {
   changes: useChanges,
   database: useExplorer,
   api: useApi,
-  note: useNotes,
   worktree: useWorktreeChats,
   board: useBoard,
 } as const
@@ -814,7 +793,6 @@ function usePanelActive(pane: Pane): string | null {
     database: useExplorer(dbActive),
     api: useApi(apiActive),
     worktree: useWorktreeChats(worktreeChatActive),
-    note: useNotes(noteActive),
     board: useBoard(boardActive),
   }[pane]
 }
@@ -859,8 +837,6 @@ function useGrouping() {
   useApi((state) => state.openIds)
   useApi((state) => state.requests)
   useApi((state) => state.folders)
-  useNotes((state) => state.openIds)
-  useNotes((state) => state.notes)
   useWorktreeChats((state) => state.chats)
   useWorktreeChats((state) => state.openIds)
 }
@@ -927,13 +903,14 @@ export function useHasOpenTabs(): boolean {
   useApi((state) => state.openIds)
   useWorktreeChats((state) => state.openIds)
   useWorktreeChats((state) => state.chats)
-  useNotes((state) => state.openIds)
 
   // Every pane in `PANES`, and the reason this is worth saying: a panel left out
-  // here can never be drawn. The workbench only shows a pane once the strip has
-  // a tab, so a missing one reads as a row that does nothing — a chat's
-  // chat opened, selected and invisible until some *other* panel happened to
-  // have a tab of its own.
+  // of that list can never be drawn. The workbench only shows a pane once the
+  // strip has a tab, so a missing one reads as a row that does nothing — a chat
+  // opened, selected and invisible until some *other* panel happened to have a
+  // tab of its own. `database` and `api` are left out on purpose (they have
+  // windows of their own); the subscriptions above stay so that putting either
+  // back is the one line in `PANES` and nothing else.
   return PANES.some((pane) => openInScope(pane).length > 0)
 }
 

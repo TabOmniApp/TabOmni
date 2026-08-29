@@ -38,6 +38,8 @@ import { useProjects } from "@/lib/projects"
 import { useSettings } from "@/lib/settings"
 import { useStudio } from "@/lib/store"
 import {
+  accountCaption,
+  accountLabel,
   nextProfileName,
   useClaudeProfiles,
 } from "@/lib/worktree-chat/claude-profiles"
@@ -52,8 +54,10 @@ import {
   withServerOff,
   withToolOff,
 } from "@/lib/worktree-chat/mcp-servers"
+import { useAgentModels } from "@/lib/worktree-chat/models"
 import { IconButton } from "./icon-button"
 import { serverMark } from "./worktree/chat-marks"
+import { ModelMenu, ProfileMenu } from "./worktree/chat-composer"
 
 /**
  * The studio's preferences — **Settings…** in the application menu, ⌘,.
@@ -245,10 +249,18 @@ function TabsSection() {
  * the model and the effort are — this section only holds the list, the same
  * split `EnvironmentDialog` has from the environment picker in the API panel's
  * own toolbar.
+ *
+ * **Each row says whether that directory is actually signed in, and as whom.**
+ * A path is a weak thing to name an identity with — a profile called "Work"
+ * pointing at a directory nobody ever logged into looks exactly like one that
+ * works, right up until a turn fails — so the account is asked of `claude`
+ * itself (`claudeAccount`). Checked on open and on demand rather than watched:
+ * a login happens in a terminal, and there is nothing here to notice it.
  */
 function ClaudeSection() {
   const profiles = useClaudeProfiles((state) => state.profiles)
   const refresh = useClaudeProfiles((state) => state.refresh)
+  const check = useClaudeProfiles((state) => state.check)
   const create = useClaudeProfiles((state) => state.create)
   const rename = useClaudeProfiles((state) => state.rename)
   const setConfigDir = useClaudeProfiles((state) => state.setConfigDir)
@@ -261,42 +273,101 @@ function ClaudeSection() {
     void refresh()
   }, [refresh])
 
+  // The default login, checked on open on its own: it is the account every
+  // chat with no profile picked runs under, and the one the rest are being
+  // told apart from. The profiles' own directories are not checked here — that
+  // would be a `claude` per row on every open of Settings, and most of the
+  // time somebody is here for one of them.
+  useEffect(() => {
+    void check("")
+  }, [check])
+
+  const models = useAgentModels()
+  const reviewModel = useSettings((state) => state.reviewModel)
+  const reviewEffort = useSettings((state) => state.reviewEffort)
+  const reviewProfileId = useSettings((state) => state.reviewProfileId)
+  const setReviewModel = useSettings((state) => state.setReviewModel)
+  const setReviewProfileId = useSettings((state) => state.setReviewProfileId)
+
   return (
     <div className="space-y-4">
       <Card>
+        {/* The one turn in the app with no toolbar of its own — a whole-diff
+            `Review` and a `@claude-review` reply both run on whatever is
+            picked here rather than on something asked per turn, since neither
+            is a conversation somebody sits in front of. See
+            `lib/files/review.ts`. */}
+        <Row
+          title="Review turns"
+          description="Which model, effort and account the review pane's `Review` button and `@claude-review` replies run on."
+        >
+          <div className="flex items-center gap-1.5">
+            <ModelMenu
+              models={models}
+              model={reviewModel}
+              effort={reviewEffort}
+              onPick={setReviewModel}
+            />
+            {profiles.length > 0 && (
+              <ProfileMenu
+                profiles={profiles}
+                profileId={reviewProfileId}
+                onPick={setReviewProfileId}
+              />
+            )}
+          </div>
+        </Row>
+      </Card>
+
+      <Card>
+        <AccountRow configDir="" name="Default" />
+      </Card>
+
+      <Card>
         {profiles.length === 0 ? (
           <p className="p-4 text-xs text-muted-foreground">
-            No profiles yet. A chat with none picked runs under whichever
-            account your own <code className="font-mono">claude</code> is
-            already signed into.
+            No profiles yet. A chat with none picked runs under the default
+            account above.
           </p>
         ) : (
           profiles.map((profile) => (
-            <div key={profile.id} className="flex items-center gap-2 p-4">
-              <Input
-                value={profile.name}
-                onChange={(event) => rename(profile.id, event.target.value)}
-                placeholder="Name"
-                aria-label="Profile name"
-                className="h-7 w-32 shrink-0 text-xs md:text-xs"
-              />
-              <Input
-                value={profile.configDir}
-                onChange={(event) =>
-                  setConfigDir(profile.id, event.target.value)
-                }
-                placeholder="~/.claude-group/hung"
-                spellCheck={false}
-                aria-label="CLAUDE_CONFIG_DIR"
-                className="h-7 flex-1 font-mono text-xs md:text-xs"
-              />
-              <IconButton
-                label="Remove profile"
-                className="hover:text-destructive"
-                onClick={() => remove(profile.id)}
-              >
-                <Trash2 />
-              </IconButton>
+            <div key={profile.id} className="space-y-2 p-4">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={profile.name}
+                  onChange={(event) => rename(profile.id, event.target.value)}
+                  placeholder="Name"
+                  aria-label="Profile name"
+                  className="h-7 w-32 shrink-0 text-xs md:text-xs"
+                />
+                <Input
+                  value={profile.configDir}
+                  onChange={(event) =>
+                    setConfigDir(profile.id, event.target.value)
+                  }
+                  placeholder="~/.claude-group/hung"
+                  spellCheck={false}
+                  aria-label="CLAUDE_CONFIG_DIR"
+                  className="h-7 flex-1 font-mono text-xs md:text-xs"
+                />
+                <IconButton
+                  label="Remove profile"
+                  className="hover:text-destructive"
+                  onClick={() => remove(profile.id)}
+                >
+                  <Trash2 />
+                </IconButton>
+              </div>
+              {/* Nothing to check until there is a path: asking with an empty
+                  `CLAUDE_CONFIG_DIR` answers for the default account, which is
+                  the one thing this row must not be mistaken for. */}
+              {profile.configDir.trim() ? (
+                <AccountStatus configDir={profile.configDir} />
+              ) : (
+                <p className="text-[0.7rem] text-muted-foreground">
+                  No directory set — this profile cannot run a turn yet.
+                </p>
+              )}
             </div>
           ))
         )}
@@ -321,6 +392,72 @@ function ClaudeSection() {
         <code className="font-mono">claude</code> run with that variable set
         will create.
       </p>
+    </div>
+  )
+}
+
+/** The default login as a row of its own: a name this app chose, and the same
+ * status line every profile gets. Its directory is `~/.claude` and there is
+ * nothing to edit about it, so there are no inputs. */
+function AccountRow({ configDir, name }: { configDir: string; name: string }) {
+  return (
+    <div className="space-y-2 p-4">
+      <p className="flex items-center gap-2 text-sm leading-none font-medium">
+        <span className="truncate">{name}</span>
+        <span className="truncate font-mono text-[0.7rem] font-normal text-muted-foreground">
+          ~/.claude
+        </span>
+      </p>
+      <AccountStatus configDir={configDir} />
+    </div>
+  )
+}
+
+/**
+ * Whether a directory is signed in, and the button that asks.
+ *
+ * **Asked, never assumed**: nothing is drawn as good until `claude` has said
+ * so, which is why the unchecked state is its own quiet badge rather than an
+ * optimistic one. The button is the only thing that spawns a process — a row
+ * per keystroke would be a `claude` per keystroke, and the path is being typed
+ * for most of the time this section is open.
+ */
+function AccountStatus({ configDir }: { configDir: string }) {
+  const key = configDir.trim()
+  const account = useClaudeProfiles((state) => state.accounts[key])
+  const busy = useClaudeProfiles((state) => state.checking.includes(key))
+  const check = useClaudeProfiles((state) => state.check)
+
+  const { label, tone } = accountLabel(account)
+  const caption = accountCaption(account)
+
+  return (
+    <div className="flex items-center gap-2">
+      <StateBadge
+        label={busy ? "Checking" : label}
+        tone={busy ? "waiting" : tone}
+      />
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-[0.7rem]",
+          account?.error ? "text-destructive" : "text-muted-foreground"
+        )}
+        title={account?.error ?? caption}
+      >
+        {account?.error ?? caption}
+      </span>
+      <Button
+        size="xs"
+        variant="ghost"
+        disabled={busy}
+        onClick={() => void check(key)}
+      >
+        <RefreshCw
+          data-icon="inline-start"
+          className={cn(busy && "animate-spin")}
+        />
+        Check
+      </Button>
     </div>
   )
 }

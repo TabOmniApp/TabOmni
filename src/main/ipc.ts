@@ -14,10 +14,12 @@ import {
 
 import {
   IPC,
+  isPanelWindowView,
   MCP_DISABLED_TOOLS_KEY,
   type BoardCard,
   type BoardColumn,
   type ChatPlace,
+  type ChatSeed,
   type ClaudeProfile,
   type DatabaseConnectionInput,
   type FileDiff,
@@ -29,13 +31,14 @@ import {
   type HttpRequestRecord,
   type HttpSendInput,
   type NewDatabaseInput,
-  type NoteBody,
-  type NoteFolder,
-  type NoteRecord,
+  type PanelWindowView,
+  type ReviewThread,
   type WorktreeChatAnswer,
   type WorktreeChatOptions,
 } from "../shared/api"
+import { agentCommands } from "./agent-commands"
 import { agentModels } from "./agent-models"
+import { claudeAccount } from "./claude-auth"
 import { WorktreeChats } from "./worktree-chat"
 import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
@@ -54,8 +57,8 @@ import {
 } from "./git"
 import { sendHttp } from "./http"
 import { installedMcpServers, removeMcpServer } from "./mcp-servers"
-import { NotePreview } from "./preview"
 import { ProcessManager } from "./process"
+import { reviewChanges, reviewReply } from "./review-agent"
 import { expandHome } from "./shell-env"
 import { systemUsage } from "./system-usage"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
@@ -126,17 +129,23 @@ async function clipboardImagePath(): Promise<string | null> {
  * Wires every renderer-callable method onto `ipcMain`.
  *
  * Handlers are registered once for the whole app rather than per window, and
- * process output is sent to whichever window is current — this is a
- * single-window app, and a second window would need its own manager anyway.
+ * process output is sent to the **studio** window — the one `getWindow`
+ * answers with. A panel window (`openPanelWindow`) can call every handler here,
+ * since a call and its answer go back to whoever made it, but no push event is
+ * sent to it: nothing the Database or API panel draws arrives that way. A
+ * window that needed one would need its own manager, which is why these
+ * deliberately do not.
  */
-export function registerIpc(getWindow: () => BrowserWindow | null): {
+export function registerIpc(
+  getWindow: () => BrowserWindow | null,
+  openPanelWindow: (view: PanelWindowView) => void
+): {
   processes: ProcessManager
   /** Exposed so a turn in flight can be killed on quit. */
   worktreeChats: WorktreeChats
   sqlConnections: SqlConnections
   docker: DockerRuntime
   terminals: TerminalManager
-  preview: NotePreview
   tsServers: TsServers
   watchers: DirectoryWatchers
   noteFilePath: (fileName: string) => string
@@ -166,27 +175,62 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     exit: (event) => send(IPC.terminalExit, event),
   })
 
-  // Reads the workspace's own files and nothing else — the preview is a view
-  // of what is on disk, so it is handed the four reads it needs rather than
-  // the store.
-  const preview = new NotePreview({
-    notes: () => store.listNotes(),
-    folders: () => store.listNoteFolders(),
-    body: (id) => store.readNote(id),
-    drawingSvg: (id) => store.readDrawingSvg(id),
-    // Which of these two a file goes through — inlined into the page, or served
-    // on a request of its own — is the preview's decision, not this file's.
-    noteFile: (name) => store.readNoteFile(name),
-    hasNoteFile: (name) => store.hasNoteFile(name),
-  })
+  /**
+   * Settings › MCP's switched-off tools.
+   *
+   * A malformed or absent setting reads as "nothing switched off" rather than
+   * throwing: this decides what a turn may call, and a parse error is not a
+   * reason to refuse every MCP tool the user has — nor to refuse none silently,
+   * which is why it is logged.
+   *
+   * Hoisted out of the source object below because a review reply needs the same
+   * list (`review-agent.ts`): a tool the workspace turned off has no business
+   * being in that model's list either.
+   */
+  const disabledTools = async (): Promise<string[]> => {
+    const raw = await store.getSetting(MCP_DISABLED_TOOLS_KEY)
+    if (!raw) return []
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      return Array.isArray(parsed)
+        ? parsed.filter((entry): entry is string => typeof entry === "string")
+        : []
+    } catch (error) {
+      console.error(`Could not read ${MCP_DISABLED_TOOLS_KEY}`, error)
+      return []
+    }
+  }
+
+  /**
+   * A picked `profileId` as a `CLAUDE_CONFIG_DIR`, for a review turn.
+   *
+   * The same resolve `worktree-chat.ts` does at send time (`profileConfigDir`
+   * there), asked here instead because a review reply and a whole-diff review
+   * have no chat and no `WorktreeChats` record to resolve it on. Looked up by id
+   * rather than trusted from the renderer, same reason: a profile can be
+   * renamed or deleted between the picker being drawn and the button being
+   * pressed.
+   */
+  const configDirOf = async (
+    profileId: string | null
+  ): Promise<string | null> => {
+    if (!profileId) return null
+    const profile = (await store.listClaudeProfiles()).find(
+      (entry) => entry.id === profileId
+    )
+    return profile ? expandHome(profile.configDir) : null
+  }
 
   /*
    * A project's chats: one agent turn at a time, in that project's directory.
    *
-   * The only `claude` this app spawns. What the old "no second one" rule was
-   * about is still refused — a feature calling the CLI as a helper, an AI filter
-   * or an import button — because a helper turn is a turn nobody asked for. This
-   * is a conversation somebody is having.
+   * The larger of the two `claude`s this app spawns, and the only one that is a
+   * conversation. What the old "no second one" rule was about is still refused —
+   * a feature calling the CLI as a helper, an AI filter or an import button —
+   * because a helper turn is a turn nobody asked for. `replyToReviewComment`
+   * below is the one turn beside these, and it is not one of those either: it is
+   * a button on a comment, pressed by the person who wrote it. See the top of
+   * `review-agent.ts`.
    */
   const worktreeChats = new WorktreeChats(
     {
@@ -196,28 +240,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       folderDir: (folderId) =>
         store.resolveFolderDir(folderId).catch(() => null),
       // Asked per turn rather than held — Settings can add, rename or delete a
-      // profile between two messages in the same chat. Same for the switched-off
-      // MCP tools below.
+      // profile between two messages in the same chat. The same is true of
+      // `disabledTools`, which is why both are functions rather than lists.
       claudeProfiles: () => store.listClaudeProfiles(),
-      // A malformed or absent setting reads as "nothing switched off" rather
-      // than throwing: this decides what a turn may call, and a parse error is
-      // not a reason to refuse every MCP tool the user has — nor to refuse none
-      // silently, which is why it is logged.
-      disabledTools: async () => {
-        const raw = await store.getSetting(MCP_DISABLED_TOOLS_KEY)
-        if (!raw) return []
-        try {
-          const parsed: unknown = JSON.parse(raw)
-          return Array.isArray(parsed)
-            ? parsed.filter(
-                (entry): entry is string => typeof entry === "string"
-              )
-            : []
-        } catch (error) {
-          console.error(`Could not read ${MCP_DISABLED_TOOLS_KEY}`, error)
-          return []
-        }
-      },
+      disabledTools,
       chats: () => store.listWorktreeChats(),
       saveChats: (chats) => store.saveWorktreeChats(chats),
       readChat: (id) => store.readWorktreeChat(id),
@@ -231,6 +257,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // `agent-models.ts`. Not a handler that touches any of the managers above,
   // which is why it takes no argument and keeps no state here.
   ipcMain.handle(IPC.agentModels, () => agentModels())
+
+  /*
+   * The slash commands that `claude` has, asked in a project's directory — see
+   * `agent-commands.ts`. The directory is resolved here for the reason every
+   * other `folderId` call resolves it here: a project is an id in the manifest,
+   * and the path behind it is the store's to say.
+   */
+  ipcMain.handle(IPC.agentCommands, async (_event, folderId: unknown) =>
+    agentCommands(await folderDirOf(folderId))
+  )
 
   /*
    * The MCP servers that same `claude` has, asked in a project's directory —
@@ -288,10 +324,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     )
   )
 
+  ipcMain.handle(IPC.claudeAccount, (_event, configDir: string) =>
+    claudeAccount(configDir)
+  )
+
   ipcMain.handle(IPC.listWorktreeChats, () => worktreeChats.list())
 
-  ipcMain.handle(IPC.createWorktreeChat, (_event, place: ChatPlace) =>
-    worktreeChats.create(place)
+  ipcMain.handle(
+    IPC.createWorktreeChat,
+    (_event, place: ChatPlace, seed?: ChatSeed) =>
+      worktreeChats.create(place, seed)
   )
 
   ipcMain.handle(IPC.readWorktreeChat, (_event, id: string) =>
@@ -300,6 +342,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.deleteWorktreeChat, (_event, id: string) =>
     worktreeChats.delete(id)
+  )
+
+  ipcMain.handle(IPC.clearWorktreeChat, (_event, id: string) =>
+    worktreeChats.clear(id)
   )
 
   ipcMain.handle(IPC.renameWorktreeChat, (_event, id: string, title: string) =>
@@ -326,6 +372,37 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.stopWorktreeChat, (_event, id: string) => {
     worktreeChats.stop(id)
   })
+
+  /*
+   * One review comment answered, in the checkout it is about.
+   *
+   * Not `worktreeChats`', and not a chat — see the top of `review-agent.ts` for
+   * why a second `claude` is allowed to exist here at all, and why it is not a
+   * method on that class.
+   *
+   * `model`, `effort` and `profileId` are picked from a toolbar of their own in
+   * the review pane, mirroring a chat's — see `WorktreeChatOptions` and
+   * `configDirOf` above for the profile's resolve.
+   */
+  ipcMain.handle(
+    IPC.replyToReviewComment,
+    async (
+      _event,
+      cwd: string,
+      prompt: string,
+      model: string | null,
+      effort: string | null,
+      profileId: string | null
+    ) =>
+      reviewReply({
+        cwd,
+        prompt,
+        model,
+        effort,
+        configDir: await configDirOf(profileId),
+        disabledTools: await disabledTools(),
+      })
+  )
 
   /** The account a Docker-managed database is created with. */
   const DB_USER = "tabomni"
@@ -425,6 +502,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.removeFolder, (_event, id: string) =>
     store.removeFolder(id)
   )
+
+  // Checked rather than trusted, and returning nothing on purpose: the window
+  // is main's, a handle to it is no use to the renderer, and the string that
+  // arrives names a window this process is about to open.
+  ipcMain.handle(IPC.openPanelWindow, (_event, view: unknown) => {
+    if (!isPanelWindowView(view)) throw new Error(`Unknown panel: ${view}`)
+    openPanelWindow(view)
+  })
 
   ipcMain.handle(IPC.dockerStatus, () => {
     // Re-probe rather than trusting a cached "no": Docker may have been
@@ -905,6 +990,37 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     sendHttp(input)
   )
 
+  /*
+   * The whole diff, reviewed in one turn — the same `claude` a comment's reply
+   * runs on, told to look at everything rather than at one remark. See
+   * `review-agent.ts`; the argument for a second CLI covers both. `model`,
+   * `effort` and `profileId` are the same three `replyToReviewComment` takes.
+   */
+  ipcMain.handle(
+    IPC.reviewChanges,
+    async (
+      _event,
+      cwd: string,
+      model: string | null,
+      effort: string | null,
+      profileId: string | null
+    ) =>
+      reviewChanges({
+        cwd,
+        model,
+        effort,
+        configDir: await configDirOf(profileId),
+        disabledTools: await disabledTools(),
+        onProgress: (text) => send(IPC.reviewProgress, { text }),
+      })
+  )
+
+  ipcMain.handle(IPC.listReviewThreads, () => store.listReviewThreads())
+
+  ipcMain.handle(IPC.saveReviewThreads, (_event, threads: ReviewThread[]) =>
+    store.saveReviewThreads(threads)
+  )
+
   ipcMain.handle(IPC.listBoardCards, () => store.listBoardCards())
 
   ipcMain.handle(IPC.saveBoardCards, (_event, cards: BoardCard[]) =>
@@ -917,36 +1033,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     store.saveBoardColumns(columns)
   )
 
-  ipcMain.handle(IPC.listNotes, () => store.listNotes())
-
-  ipcMain.handle(IPC.saveNotes, (_event, notes: NoteRecord[]) =>
-    store.saveNotes(notes)
-  )
-
-  ipcMain.handle(IPC.listNoteFolders, () => store.listNoteFolders())
-
-  ipcMain.handle(IPC.saveNoteFolders, (_event, folders: NoteFolder[]) =>
-    store.saveNoteFolders(folders)
-  )
-
-  ipcMain.handle(IPC.readNote, (_event, id: string) => store.readNote(id))
-
-  ipcMain.handle(IPC.writeNote, (_event, id: string, body: NoteBody) =>
-    store.writeNote(id, body)
-  )
-
-  ipcMain.handle(IPC.deleteNotes, (_event, ids: string[]) =>
-    store.deleteNotes(ids)
-  )
-
   ipcMain.handle(IPC.readDrawing, (_event, id: string) => store.readDrawing(id))
 
   ipcMain.handle(IPC.writeDrawing, (_event, id: string, scene: string) =>
     store.writeDrawing(id, scene)
-  )
-
-  ipcMain.handle(IPC.deleteDrawings, (_event, ids: string[]) =>
-    store.deleteDrawings(ids)
   )
 
   ipcMain.handle(IPC.writeDrawingSvg, (_event, id: string, svg: string) =>
@@ -964,16 +1054,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
         bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
       )
   )
-
-  ipcMain.handle(IPC.copyNoteFile, (_event, from: string, to: string) =>
-    store.copyNoteFile(from, to)
-  )
-
-  ipcMain.handle(IPC.deleteNoteFiles, (_event, fileNames: string[]) =>
-    store.deleteNoteFiles(fileNames)
-  )
-
-  ipcMain.handle(IPC.notePreviewUrl, (_event, id: string) => preview.urlOf(id))
 
   ipcMain.handle(
     IPC.terminalCreate,
@@ -1011,7 +1091,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     sqlConnections,
     docker,
     terminals,
-    preview,
     tsServers,
     watchers,
     /** For the `note-file://` handler, which is not an IPC call and so cannot

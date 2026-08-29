@@ -17,10 +17,18 @@
  * menu of two dozen table names is a menu without the file they meant in it.
  * See `docs/design.md`.
  *
- * So a mention is plain text, and the highlight is drawn behind it from the
- * index: what is tinted is a path the workspace still holds, which means a path
- * typed by hand lights up as well as one picked from the menu, and one whose
- * file has been deleted stops being tinted once the index is walked again.
+ * So a mention is plain text — `@` and the path — and the highlight is drawn
+ * behind it from the index: what is tinted is an `@path` the workspace still
+ * holds, which means one typed by hand lights up as well as one picked from the
+ * menu, and one whose file has been deleted stops being tinted once the index is
+ * walked again.
+ *
+ * **The `@` is kept rather than replaced by the path.** It used to be dropped on
+ * insertion, which made a mention indistinguishable from any other word and left
+ * the tint with nothing to go on but the lookup — so a message that merely used
+ * the word `test` or `api` lit up because the repository has a folder by that
+ * name. Keeping the sigil is what lets the tint mean "this was meant as a path"
+ * rather than "these letters happen to be one".
  */
 
 /** A folder or a file — the two things the index holds. */
@@ -58,6 +66,16 @@ export type MentionQuery = { from: number; filter: string }
  */
 const QUERY = /(?:^|\s)@([\w./:@-]*)$/
 
+/** What marks a word as meant to be a path, both on the way in and on the way
+ * back out of `markMentions`. */
+export const MENTION_SIGIL = "@"
+
+/** A path as a draft should carry it. Every caller inserting a path goes through
+ * this, or the tint has nothing to recognise it by. */
+export function mentionOf(path: string): string {
+  return MENTION_SIGIL + path
+}
+
 /** The mention query the caret is sitting in, or null when it is not in one. */
 export function mentionQuery(text: string, caret: number): MentionQuery | null {
   const match = QUERY.exec(text.slice(0, caret))
@@ -67,8 +85,13 @@ export function mentionQuery(text: string, caret: number): MentionQuery | null {
 }
 
 /**
- * The draft with the typed `@query` replaced by the path, and where the caret
+ * The draft with the typed `@query` replaced by `label`, and where the caret
  * lands.
+ *
+ * `label` goes in verbatim, sigil and all — the chat's rows are inserted through
+ * `mentionOf` and the review panel's one mention is `@claude-review`, which
+ * carries its own. Adding the `@` here would double whichever of the two was
+ * already carrying it.
  *
  * A space follows, so the next word is not typed onto the end of the path — and
  * so the tint, which ends at the path, does not appear to swallow it. Not a
@@ -177,10 +200,6 @@ export function pathMentions(entries: readonly IndexedPath[]): PlainMention[] {
 /** A run of the draft, tinted when it names a path the workspace holds. */
 export type MentionSegment = { text: string; kind: PlainMentionKind | null }
 
-/** A one-character path would tint every `a` in the message. Two is the
- * shortest that can be meant. */
-const MIN_LABEL = 2
-
 /** Punctuation a path can be wrapped in without stopping being one: a path in
  * brackets, or at the end of a sentence. A full stop is only shed from the end,
  * so `src/main/ipc.ts` keeps its extension. */
@@ -190,13 +209,20 @@ const CLOSERS = ")'\"`]}>,;:!?."
 /**
  * The draft cut into tinted and untinted runs.
  *
+ * **Only a word starting with `@` is a candidate**, and the `@` is part of the
+ * tinted run. Tinting any word that happened to be in the index meant that in a
+ * repository holding `src/api` or `test`, a sentence using either of those words
+ * lit up as if a file had been pointed at — the tint claimed an intent the text
+ * never had. The sigil is the intent, and it survives to the CLI, which reads
+ * `@path` as a file reference itself.
+ *
  * Word by word against a lookup, rather than the one regexp of every known name
  * this used to build: the catalogue was a few dozen table names and the index is
  * twenty thousand paths, so a pattern rebuilt on every keystroke is the one
  * thing here that would be felt while typing.
  *
- * Matched whole and case-sensitively — `src/main` does not tint the `src/main`
- * inside `src/main/ipc.ts`, which is its own row and tints as itself.
+ * Matched whole and case-sensitively — `@src/main` does not tint the `src/main`
+ * inside `@src/main/ipc.ts`, which is its own row and tints as itself.
  */
 export function markMentions(
   text: string,
@@ -204,7 +230,6 @@ export function markMentions(
 ): MentionSegment[] {
   const kinds = new Map<string, PlainMentionKind>()
   for (const mention of known) {
-    if (mention.label.length < MIN_LABEL) continue
     if (!kinds.has(mention.label)) kinds.set(mention.label, mention.kind)
   }
   if (text === "" || kinds.size === 0) return [{ text, kind: null }]
@@ -213,7 +238,8 @@ export function markMentions(
   let at = 0
   for (const match of text.matchAll(/\S+/g)) {
     const { value, offset } = unwrap(match[0])
-    const kind = kinds.get(value)
+    if (!value.startsWith(MENTION_SIGIL)) continue
+    const kind = kinds.get(value.slice(MENTION_SIGIL.length))
     if (!kind) continue
 
     const start = match.index + offset

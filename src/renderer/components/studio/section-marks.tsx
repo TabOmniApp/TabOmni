@@ -1,21 +1,21 @@
 import type { ComponentType } from "react"
-import { Database, FolderTree, NotebookPen, Send } from "lucide-react"
+import { Database, FolderTree, Send } from "lucide-react"
 
 import { SECTION_IDS, type Section } from "@/lib/sections"
 
 /**
- * The four ways into the studio, and how each is drawn.
+ * The three ways into the studio, and how each is drawn.
  *
  * Data rather than a component, and its own module because six other files
  * want the hues and the icons — the pane's empty states, the sidebar headers,
  * the Settings dialog. It has now outlived two bars that were named after it:
  * the activity rail, and the row of tabs on the right-hand panel that replaced
- * it. The lists live in two places today — Database, Notes and API are sections
- * of the left column, the Explorer is the right-hand panel — and a hue that
- * says "this is a table" is the same hue wherever the table is listed.
+ * it. The lists live in three places today — the Explorer is the right-hand
+ * panel, Database and API have a window each — and a hue that says "this is a
+ * table" is the same hue wherever the table is listed.
  *
  * Ordered the way the work goes: the folders themselves, then the data and the
- * endpoints behind them, then the notes about all of it.
+ * endpoints behind them.
  *
  * **There is no Terminal section**, and there is no Terminal panel either: a
  * shell is a tab of the dock, pointed at whichever project was last clicked,
@@ -24,8 +24,7 @@ import { SECTION_IDS, type Section } from "@/lib/sections"
  *
  * Explorer is first because it is the workspace's own contents — the folders
  * every other panel is about — and because it is the section somebody reaches
- * for without having decided what they are doing yet. Notes sit last because
- * they are about all of the others rather than beside any one of them.
+ * for without having decided what they are doing yet.
  *
  * `Icon` is typed by the one prop the tabs pass rather than as a Lucide icon,
  * so a hand-drawn mark could sit beside the glyphs. The ids themselves are
@@ -40,7 +39,6 @@ const SECTION_MARKS: Record<
   files: { label: "Explorer", Icon: FolderTree },
   database: { label: "Database", Icon: Database },
   api: { label: "API", Icon: Send },
-  note: { label: "Notes", Icon: NotebookPen },
 }
 
 export const SECTIONS: {
@@ -62,5 +60,4 @@ export const SECTION_ACCENT: Record<Section, string> = {
   files: "var(--section-files)",
   database: "var(--section-database)",
   api: "var(--section-api)",
-  note: "var(--section-note)",
 }

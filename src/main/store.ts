@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto"
 import {
-  copyFile,
   mkdir,
   readFile,
   realpath,
@@ -14,6 +13,7 @@ import type {
   AssistantMessage,
   BoardCard,
   BoardColumn,
+  ReviewThread,
   ClaudeProfile,
   DatabaseRecord,
   DbEngine,
@@ -22,9 +22,6 @@ import type {
   HttpEnvironment,
   HttpFolder,
   HttpRequestRecord,
-  NoteBody,
-  NoteFolder,
-  NoteRecord,
   WorktreeChat,
   UpdateDatabaseInput,
   WorkspaceFolder,
@@ -137,28 +134,30 @@ export const BOARD_FILE = "board.json"
  * reordered without a card changing, which is why they are not on one. */
 export const BOARD_COLUMNS_FILE = "board-columns.json"
 
-/** The workspace's notes — their listing; each body is a file of its own. */
-export const NOTES_FILE = "notes.json"
-
-/** The groups those notes are filed under. */
-export const NOTE_FOLDERS_FILE = "note-folders.json"
-
 /**
- * Where each note's markdown is kept, one `<id>.md` per note.
+ * The review's own threads, across every project.
  *
- * Apart from the listing so that typing into a note rewrites only that note:
- * a body inline in `notes.json` would mean rewriting every note's text on
- * every keystroke in one of them. It also leaves a directory of plain markdown
- * that grep, an editor or git can read without going through this app.
+ * One file for the workspace rather than one per project, the way the board's
+ * cards are: a thread carries the `rootId` it belongs to, and the pane reads the
+ * lot once at boot to know a review exists in a file nobody has opened.
+ *
+ * This exists at all because a review stopped being a sitting — see
+ * `docs/design.md` § Changes. What it holds is not only line numbers: the lines
+ * themselves are in each thread, which is what lets a comment be put back where
+ * it belongs after the file has moved under it.
  */
-export const NOTES_DIR = "notes"
+export const REVIEW_FILE = "review.json"
 
 /**
- * Where a note's drawings are kept, one `<id>.excalidraw` per drawing.
+ * Where drawings are kept, one `<id>.excalidraw` per drawing.
  *
- * Beside the notes rather than under one of them: the file is Excalidraw's own
- * format, and a flat directory of them is something the editor's own app can
- * open. The note keeps only the id, in a fenced block.
+ * Flat rather than filed under the document that holds one: the file is
+ * Excalidraw's own format, a flat directory of them is something the editor's
+ * own app can open, and the document keeps only the id, in a fenced block.
+ *
+ * `notes.json`, `note-folders.json` and `notes/` were beside these until the
+ * Notes panel was deleted. Nothing here reads them any more and nothing deletes
+ * them either — see `docs/design.md` § Notes, removed.
  */
 export const DRAWINGS_DIR = "drawings"
 
@@ -649,78 +648,20 @@ export class Store {
     return this.writeList(BOARD_FILE, cards)
   }
 
+  listReviewThreads(): Promise<ReviewThread[]> {
+    return this.readList(REVIEW_FILE)
+  }
+
+  saveReviewThreads(threads: ReviewThread[]): Promise<void> {
+    return this.writeList(REVIEW_FILE, threads)
+  }
+
   listBoardColumns(): Promise<BoardColumn[]> {
     return this.readList(BOARD_COLUMNS_FILE)
   }
 
   saveBoardColumns(columns: BoardColumn[]): Promise<void> {
     return this.writeList(BOARD_COLUMNS_FILE, columns)
-  }
-
-  listNotes(): Promise<NoteRecord[]> {
-    return this.readList(NOTES_FILE)
-  }
-
-  saveNotes(notes: NoteRecord[]): Promise<void> {
-    return this.writeList(NOTES_FILE, notes)
-  }
-
-  listNoteFolders(): Promise<NoteFolder[]> {
-    return this.readList(NOTE_FOLDERS_FILE)
-  }
-
-  saveNoteFolders(folders: NoteFolder[]): Promise<void> {
-    return this.writeList(NOTE_FOLDERS_FILE, folders)
-  }
-
-  /** A note's blocks, the markdown an older build left, or "" for one that has
-   * never been written to — see `NoteBody`. */
-  readNote(id: string): Promise<NoteBody> {
-    return this.readBody(this.noteBodyPath(id), this.legacyNotePath(id))
-  }
-
-  /** Blocks land in `<id>.json`; markdown lands where an older build would
-   * have put it, so a note copied before anything converted it stays a note
-   * this store can read back rather than JSON that is not JSON. */
-  writeNote(id: string, body: NoteBody): Promise<void> {
-    return this.writeOwnFile(
-      body.format === "blocks"
-        ? this.noteBodyPath(id)
-        : this.legacyNotePath(id),
-      body.text
-    )
-  }
-
-  /** Removes those notes' bodies. A body that was never written is not an
-   * error — a note deleted before anything was typed into it has no file. The
-   * markdown an older build wrote goes too: it is this note's text, and a
-   * deleted note should not leave half of itself behind. */
-  deleteNotes(ids: string[]): Promise<void> {
-    return this.deleteOwnFiles(
-      ids.flatMap((id) => [this.noteBodyPath(id), this.legacyNotePath(id)])
-    )
-  }
-
-  /**
-   * A body, preferring the blocks and falling back to what an older build
-   * wrote.
-   *
-   * The fallback is a read of a second file that is almost never there, which
-   * is the cheap half of the trade: the alternative is a migration pass over
-   * the whole directory at startup, which would have to be right about every
-   * note before the user has opened any of them.
-   */
-  private async readBody(
-    blocksPath: string,
-    legacyPath: string
-  ): Promise<NoteBody> {
-    const blocks = await this.readOwnFile(blocksPath)
-    if (blocks) return { format: "blocks", text: blocks }
-
-    const markdown = await this.readOwnFile(legacyPath)
-    return markdown
-      ? { format: "markdown", text: markdown }
-      : { format: "blocks", text: "" }
   }
 
   /** A drawing's scene, or "" for one that has never been saved. */
@@ -732,22 +673,9 @@ export class Store {
     return this.writeOwnFile(this.drawingPath(id), scene)
   }
 
-  /** The drawing as a picture, or "" for one the studio has not exported since
-   * the preview server was added. */
-  readDrawingSvg(id: string): Promise<string> {
-    return this.readOwnFile(this.drawingSvgPath(id))
-  }
-
+  /** The drawing as a picture, written beside the scene it is an export of. */
   writeDrawingSvg(id: string, svg: string): Promise<void> {
     return this.writeOwnFile(this.drawingSvgPath(id), svg)
-  }
-
-  /** The scene and the picture of it go together: the export is derived from
-   * the scene and means nothing without it. */
-  deleteDrawings(ids: string[]): Promise<void> {
-    return this.deleteOwnFiles(
-      ids.flatMap((id) => [this.drawingPath(id), this.drawingSvgPath(id)])
-    )
   }
 
   /**
@@ -777,65 +705,12 @@ export class Store {
     })
   }
 
-  /**
-   * Whether the workspace still holds this file, without reading it.
-   *
-   * For the preview server's render pass: a video is fetched on a request of its
-   * own, so the page only needs to know the file is there to put a player
-   * around it — and reading a 60 MB file to find that out would happen on every
-   * render of the page.
-   */
-  hasNoteFile(fileName: string): Promise<boolean> {
-    const file = this.noteFilePath(fileName)
-    return this.enqueue(async () => {
-      try {
-        return (await stat(file)).isFile()
-      } catch (error) {
-        if (isNotFound(error)) return false
-        throw error
-      }
-    })
-  }
-
   writeNoteFile(fileName: string, bytes: Uint8Array): Promise<void> {
     const file = this.noteFilePath(fileName)
     return this.enqueue(async () => {
       await mkdir(path.dirname(file), { recursive: true })
       await writeFile(file, bytes)
     })
-  }
-
-  /** Copied here rather than read and written back through the renderer: the
-   * bytes have no business crossing the bridge twice to end up in a second file
-   * of ours. */
-  copyNoteFile(fromName: string, toName: string): Promise<void> {
-    const from = this.noteFilePath(fromName)
-    const to = this.noteFilePath(toName)
-    return this.enqueue(async () => {
-      await mkdir(path.dirname(to), { recursive: true })
-      try {
-        await copyFile(from, to)
-      } catch (error) {
-        // A duplicate of a note whose picture is already missing is still a
-        // duplicate. The copy has nothing to point at, which is the state the
-        // original was in.
-        if (!isNotFound(error)) throw error
-      }
-    })
-  }
-
-  deleteNoteFiles(fileNames: string[]): Promise<void> {
-    return this.deleteOwnFiles(fileNames.map((name) => this.noteFilePath(name)))
-  }
-
-  /** One note's blocks. */
-  private noteBodyPath(id: string): string {
-    return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.json`)
-  }
-
-  /** Where the same note's text was kept when a note was markdown. */
-  private legacyNotePath(id: string): string {
-    return path.join(this.workspaceDir, NOTES_DIR, `${ownId(id)}.md`)
   }
 
   /** One drawing's scene, in Excalidraw's own file format. */

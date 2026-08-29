@@ -3,10 +3,9 @@
  *
  * The API panel had all of this to itself until the Notes panel wanted the same
  * shape — the same nesting, the same cycle guard on a drag, the same "what does
- * deleting this take with it". Copying it would have been the third time this
- * codebase learned that lesson (see `SideRow` and `PanelHeader`), so it is
- * generic over the two records instead: a folder is anything with a `parentId`,
- * an item anything with a `folderId`, and each panel keeps its own types.
+ * deleting this take with it". It stayed generic when that panel was deleted:
+ * a folder is anything with a `parentId`, an item anything with a `folderId`,
+ * and the panel keeps its own types.
  *
  * Nothing here touches the DOM or a store, which is what lets `test/tree.ts`
  * ask about it without a renderer.

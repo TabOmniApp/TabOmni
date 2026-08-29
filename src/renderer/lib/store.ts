@@ -26,17 +26,25 @@ const STRIP_KEY = "workbench.strip"
  */
 export const RAIL_WIDTH = 36
 
-/** Every pane there is — the list `lib/panels.ts` walks to reach all five
- * panels' tabs without naming any of them. */
-export const PANES: Pane[] = [
-  "files",
-  "changes",
-  "database",
-  "api",
-  "worktree",
-  "note",
-  "board",
-]
+/**
+ * Every pane the **studio** draws — the list `lib/panels.ts` walks to reach the
+ * workbench's tabs without naming any panel.
+ *
+ * `database` and `api` are deliberately absent, and this is the one line that
+ * says so. Both panels live in a window of their own now (`openPanelWindow`),
+ * and both remember their open tabs in the workspace's settings — `db.tabs`,
+ * `http.tabs` — which every window reads. So a table opened in the Database
+ * window came back in the *studio's* strip on the next launch, beside the
+ * chats, in a workbench whose left column has not listed either panel since
+ * `SIDEBAR_SECTIONS` was cut to `Projects`. The memory is per workspace, not per
+ * window; what makes a tab a window's own is which strip draws it, and this is
+ * that list.
+ *
+ * They stay in `Pane` and in `PANELS`: the panes, the stores and the tab
+ * plumbing all still work, so putting either back is adding its id here — the
+ * same one-line bargain `SIDEBAR_SECTIONS` makes.
+ */
+export const PANES: Pane[] = ["files", "changes", "worktree", "board"]
 
 /**
  * `section` is held as a plain string rather than a `Section` on the way in: a
@@ -238,7 +246,9 @@ export const useStudio = create<StudioState>((set, get) => {
       set({
         tabOrder: strip.tabOrder,
         // `terminal` is what an older build may have been left on, and there is
-        // no such pane any more — Explorer is where its sidebar went.
+        // no such pane any more — Explorer is where its sidebar went. The same
+        // narrowing now catches `database` and `api`, which a build that drew
+        // them in the workbench could have been shut on.
         pane: PANES.includes(strip.pane as Pane)
           ? (strip.pane as Pane)
           : "files",
@@ -285,7 +295,9 @@ export const useStudio = create<StudioState>((set, get) => {
     folders: [],
     branches: {},
 
-    pane: "database",
+    // `files`, because a pane the studio does not draw cannot be the one it
+    // starts on — this was `database` while that panel was still in `PANES`.
+    pane: "files",
     sidebar: true,
     explorerTab: "files",
     tabOrder: [],

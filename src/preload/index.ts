@@ -12,6 +12,7 @@ import {
   type MenuCommand,
   type ProcessExit,
   type ProcessOutput,
+  type ReviewProgressEvent,
   type WorktreeChatEvent,
   type TerminalExit,
   type TerminalOutput,
@@ -50,6 +51,8 @@ const api: DesktopApi = {
 
   onMenuCommand: (listener) =>
     subscribe<MenuCommand>(IPC.menuCommand, listener),
+
+  openPanelWindow: (view) => ipcRenderer.invoke(IPC.openPanelWindow, view),
 
   dockerStatus: () => ipcRenderer.invoke(IPC.dockerStatus),
 
@@ -124,17 +127,21 @@ const api: DesktopApi = {
   httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
 
   agentModels: () => ipcRenderer.invoke(IPC.agentModels),
+  agentCommands: (folderId) => ipcRenderer.invoke(IPC.agentCommands, folderId),
   installedMcpServers: (folderId) =>
     ipcRenderer.invoke(IPC.installedMcpServers, folderId),
   removeMcpServer: (input) => ipcRenderer.invoke(IPC.removeMcpServer, input),
   listClaudeProfiles: () => ipcRenderer.invoke(IPC.listClaudeProfiles),
   saveClaudeProfiles: (profiles) =>
     ipcRenderer.invoke(IPC.saveClaudeProfiles, profiles),
+  claudeAccount: (configDir) =>
+    ipcRenderer.invoke(IPC.claudeAccount, configDir),
   listWorktreeChats: () => ipcRenderer.invoke(IPC.listWorktreeChats),
-  createWorktreeChat: (place) =>
-    ipcRenderer.invoke(IPC.createWorktreeChat, place),
+  createWorktreeChat: (place, seed) =>
+    ipcRenderer.invoke(IPC.createWorktreeChat, place, seed),
   readWorktreeChat: (id) => ipcRenderer.invoke(IPC.readWorktreeChat, id),
   deleteWorktreeChat: (id) => ipcRenderer.invoke(IPC.deleteWorktreeChat, id),
+  clearWorktreeChat: (id) => ipcRenderer.invoke(IPC.clearWorktreeChat, id),
   renameWorktreeChat: (id, title) =>
     ipcRenderer.invoke(IPC.renameWorktreeChat, id, title),
   setWorktreeChatOptions: (id, options) =>
@@ -146,32 +153,35 @@ const api: DesktopApi = {
   stopWorktreeChat: (id) => ipcRenderer.invoke(IPC.stopWorktreeChat, id),
   onWorktreeChatEvent: (listener) =>
     subscribe<WorktreeChatEvent>(IPC.worktreeChatEvent, listener),
+  replyToReviewComment: (cwd, prompt, model, effort, profileId) =>
+    ipcRenderer.invoke(
+      IPC.replyToReviewComment,
+      cwd,
+      prompt,
+      model,
+      effort,
+      profileId
+    ),
+  reviewChanges: (cwd, model, effort, profileId) =>
+    ipcRenderer.invoke(IPC.reviewChanges, cwd, model, effort, profileId),
+  onReviewProgress: (listener) =>
+    subscribe<ReviewProgressEvent>(IPC.reviewProgress, listener),
+  listReviewThreads: () => ipcRenderer.invoke(IPC.listReviewThreads),
+  saveReviewThreads: (threads) =>
+    ipcRenderer.invoke(IPC.saveReviewThreads, threads),
   listBoardCards: () => ipcRenderer.invoke(IPC.listBoardCards),
   saveBoardCards: (cards) => ipcRenderer.invoke(IPC.saveBoardCards, cards),
   listBoardColumns: () => ipcRenderer.invoke(IPC.listBoardColumns),
   saveBoardColumns: (columns) =>
     ipcRenderer.invoke(IPC.saveBoardColumns, columns),
-  listNotes: () => ipcRenderer.invoke(IPC.listNotes),
-  saveNotes: (notes) => ipcRenderer.invoke(IPC.saveNotes, notes),
-  listNoteFolders: () => ipcRenderer.invoke(IPC.listNoteFolders),
-  saveNoteFolders: (folders) =>
-    ipcRenderer.invoke(IPC.saveNoteFolders, folders),
-  readNote: (id) => ipcRenderer.invoke(IPC.readNote, id),
-  writeNote: (id, body) => ipcRenderer.invoke(IPC.writeNote, id, body),
-  deleteNotes: (ids) => ipcRenderer.invoke(IPC.deleteNotes, ids),
-  notePreviewUrl: (id) => ipcRenderer.invoke(IPC.notePreviewUrl, id),
 
   readDrawing: (id) => ipcRenderer.invoke(IPC.readDrawing, id),
   writeDrawing: (id, scene) => ipcRenderer.invoke(IPC.writeDrawing, id, scene),
-  deleteDrawings: (ids) => ipcRenderer.invoke(IPC.deleteDrawings, ids),
   writeDrawingSvg: (id, svg) =>
     ipcRenderer.invoke(IPC.writeDrawingSvg, id, svg),
 
   writeNoteFile: (fileName, bytes) =>
     ipcRenderer.invoke(IPC.writeNoteFile, fileName, bytes),
-  copyNoteFile: (from, to) => ipcRenderer.invoke(IPC.copyNoteFile, from, to),
-  deleteNoteFiles: (fileNames) =>
-    ipcRenderer.invoke(IPC.deleteNoteFiles, fileNames),
 
   startProcess: (folderId, command, args) =>
     ipcRenderer.invoke(IPC.startProcess, folderId, command, args),

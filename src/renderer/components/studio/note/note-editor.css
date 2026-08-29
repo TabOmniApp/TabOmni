@@ -1,6 +1,5 @@
 /*
- * The Notes panel's block editor: what it is coloured like, and how it is
- * sized.
+ * The block editor: what it is coloured like, and how it is sized.
  *
  * The palette is the block below. BlockNote paints everything off `--bn-*`
  * variables it defines on `.bn-root`, so pointing those at the tokens the rest

@@ -14,12 +14,12 @@ area's behaviour. When the two disagree, `design.md` is the fuller account.
 ## What this is
 
 **TabOmni**: an Electron studio that collapses a project's tooling into one tab
-strip — its folders, its databases, its HTTP endpoints, its notes, and the agent
+strip — its folders, its databases, its HTTP endpoints, and the agent
 conversations run against them.
 
 There is one **workspace**, holding any number of **folders** — directories
 already on this machine, worked on where they are. It is deliberately not
-switchable. Databases, requests, cookies and notes belong to the workspace;
+switchable. Databases, requests and cookies belong to the workspace;
 what is per folder is what is genuinely per repository — a shell's cwd, a run
 command, a branch name. Sign-in will bring a second workspace; until then
 `DEFAULT_WORKSPACE_ID` is a constant.
@@ -92,11 +92,6 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   daemon over a Unix socket/named pipe with newline-delimited JSON.
   `TerminalManager.killAll()` is awaited on quit and nothing reattaches.
   `daemon.ts` gets its own esbuild entry point and is `asarUnpack`ed.
-- **`preview.ts` + `note-html.ts` + `note-blocks.ts`** — a note served as a
-  finished page on loopback. Server-rendered because the page has to be readable
-  by something that fetches rather than renders, which rules out BlockNote's own
-  HTML export. OS-picked port, per-run secret in the path, link lives only as
-  long as the app run.
 - **`http.ts`** — API requests are sent from the main process, so there is no
   page origin, no CORS preflight, and forbidden headers go out as typed. The
   cookie jar in `cookies.json` is the panel's own, not Chromium's.
@@ -125,7 +120,21 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   see `docs/design.md`. What it does still say about MCP is which _tools_ a chat
   may call, from `MCP_DISABLED_TOOLS_KEY`, handed over as `disallowedTools`.
 
-### `worktree-chat.ts` + `claude-agent.ts` — the only `claude` in the app
+- **`review-agent.ts`** — the **second** `claude`, and the only one that is not a
+  conversation: one read-only turn, opened for a question and closed on the
+  answer, with no transcript, no resume and nothing to send a second message to.
+  Two of them — `reviewReply`, for a comment that says `@claude-review`, and
+  `reviewChanges`, which is **a turn per changed file**, `REVIEW_CONCURRENCY` of
+  them at a time, and turns what comes back into threads. One turn over the whole
+  diff was the first shape and its `PATCH_LIMIT` was a budget for the lot, so a
+  large change was reviewed as far as the alphabet went and no further; each turn
+  is now given its own file's patch, the list of the others as context, and may
+  comment only on its own. The rule below still holds — a feature calling the CLI as a helper is
+  refused — and neither is one: both are asked for out loud, and both answer as
+  comments in the pane the diff is in. `docs/design.md` § Changes has the
+  argument, and `findingsIn` is checked in `test/review.ts`.
+
+### `worktree-chat.ts` + `claude-agent.ts` — the `claude` a conversation runs on
 
 `worktree-chat.ts` is the policy, `claude-agent.ts` the SDK runner under it. A
 chat is `@anthropic-ai/claude-agent-sdk`, not a `spawn` of `claude -p`. Five
@@ -210,6 +219,21 @@ process. A chat's lines are `workspace/worktree-chats/<id>.json`, listed in
 fallback chain: a chat whose folder has left the workspace finishes with a line
 saying so rather than running its next turn in whichever directory is readable.
 
+That id is also how a chat gets its **name**. `append` calls it the first thing
+asked in it; `retitle` then replaces that with the CLI's own `ai-title`, read out
+of the session transcript — the app produces no summary of its own, because a
+turn nobody asked for is what `CLAUDE.md` refuses. It is the one read of that
+file (`worktree-chat.ts` says why), it never touches a chat the user has named,
+and `done` waits on it so the listing's re-read cannot race the write.
+
+**A chat is written down by its first message, not by the `+`.** The tab opens
+at once — the renderer mints the id (which is the session id) and holds the chat
+in `unsaved` — and `createWorktreeChat` is called from `send`, carrying a
+`ChatSeed` of whatever the tab picked up meanwhile: its id, its name, its
+toolbar. So a `+` nobody spoke into leaves no row and no file. A caller that
+records the id elsewhere — the board's `startChat` — asks for `save: true`
+instead, or its card would come back `lost`.
+
 No MCP config is passed, so whatever the user's own `claude` is configured with —
 `~/.claude.json`, a repository's `.mcp.json`, enabled plugins, claude.ai
 connectors — reaches a turn the way it would running plain `claude` in that
@@ -237,8 +261,20 @@ dialog`), not by hand. Vite's root is `src/renderer`, so `index.html` and
 
 The shape, in one pass: the **left column** (`workspace-sidebar.tsx`) is
 `Projects` and nothing else for now — `SIDEBAR_SECTIONS` in `lib/projects.ts` is
-the one line saying which sections are drawn, and putting `Database` / `Notes` /
-`API` back is adding an id to it; those panels, stores and tabs all still work.
+the one line saying which sections are drawn, and putting `Database` / `API`
+back is adding an id to it; those panels, stores and tabs all still work. Its
+footer's two buttons open each of them in a **window of its own**
+(`openPanelWindow` in `main.ts`, `?view=<panel>` read by `App.tsx`,
+`panel-window.tsx` around the panel's own components). That is only affordable
+because neither panel is _pushed_ anything — every event main sends still goes
+to the studio window alone, which is what `getWindow` in `ipc.ts` answers with.
+**Those two panes are out of `PANES`** (`lib/store.ts`), so the studio draws
+neither: their tab memory is the workspace's (`db.tabs`, `http.tabs`, read by
+every window), and while the studio walked them a table opened in the Database
+window came back next launch in the studio's strip beside the chats. Putting one
+back is that one id — but so are the two things that went with it, `⌘P` no
+longer listing tables or requests and the studio's boot no longer reading the
+databases. `docs/design.md` § Panel windows has the argument.
 The **right-hand panel** is Explorer, with `All files` and `Changes` tabs, and it
 is the whole height of its column. **Both columns collapse to a 36px rail**
 rather than to nothing (`explorer-rail.tsx`, `project-rail.tsx`) — one button
@@ -318,7 +354,7 @@ there is no assignee, no comments and no attachments.
 - **`PANELS` in `lib/panels.ts` is where a tab's identity lives.** `rootOf` says
   which project a tab belongs to (it is in the strip only while that project is
   active); `groupOf` says what a folder means per panel when grouping is on. A
-  table, a saved request and a note have no `rootOf` and never leave the strip.
+  table and a saved request have no `rootOf` and never leave the strip.
   `reconcileScope` is called from an effect in `studio.tsx`, not from `setActive`
   — a store reaching into `lib/panels.ts` would be a cycle.
 - **`lib/files/roots.ts` holds two lists and the difference matters**:
@@ -332,13 +368,17 @@ there is no assignee, no comments and no attachments.
   `lib/tree.ts`, which re-exports them.
 - **Excalidraw fonts are served by this app**, not from a CDN — see the
   `excalidraw-fonts` plugin in `vite.config.ts`. A drawing's scene is its own
-  `workspace/drawings/<id>.excalidraw` file and the note holds only the id, in a
-  ```drawing fence; read the comment on `keepDrawingFencesOutOfCodeBlocks`
-  before touching `drawing-node.ts`.
-- **A picture in a note is a file of the workspace's own** under
-  `workspace/note-files/`, addressed by a `note-file://` URL — `shared/note-files.ts`
-  is the shape, `main/protocol.ts` serves it, and the preview server inlines it
-  for a browser that has never heard of the scheme.
+  `workspace/drawings/<id>.excalidraw` file and the document holds only the id,
+  in a ```drawing fence (`adoptDrawingFences` in `lib/note/blocks.ts`).
+- **A picture in a block document is a file of the workspace's own** under
+  `workspace/note-files/`, addressed by a `note-file://` URL —
+  `shared/note-files.ts` is the shape and `main/protocol.ts` serves it. Nothing
+  deletes one: the walks that did were the Notes panel's.
+- **The Notes panel is gone** (`docs/design.md` § Notes, removed) — the store,
+  the list, the pane, the preview server, the `notes:*` channels and the note
+  types with it. What stayed is the **block editor**, because the Explorer's
+  `.note` and `.md` tabs are that editor over a file: `components/studio/note/`
+  and `lib/note/` are named for where they came from and are the editor's now.
 - **Animation is CSS**, in `styles/motion.css`, and an animation added anywhere
   else should go there too.
 
@@ -353,7 +393,9 @@ Logic worth testing is split out from the drawing: `lib/worktree-chat/activity.t
 `lib/files/git-diff.ts` with `main/git.ts`'s own `fileDiff` (`test/git-diff.ts`),
 `lib/files/block-doc.ts`, `lib/worktree-chat/mention-text.ts`
 (`test/chat-mentions.ts`), `lib/worktree-chat/mcp-servers.ts` with
-`main/mcp-servers.ts`'s own `readServer` (`test/mcp-servers.ts`). Put new logic on that side of the line.
+`main/mcp-servers.ts`'s own `readServer` (`test/mcp-servers.ts`),
+`lib/worktree-chat/claude-profiles.ts`'s `accountLabel` / `accountCaption` with
+`main/claude-auth.ts`'s own `readAuthStatus` (`test/claude-account.ts`). Put new logic on that side of the line.
 
 ## Conventions
 

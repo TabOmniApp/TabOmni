@@ -33,8 +33,8 @@ import {
  * is order within a column — `moveCard` in `cards.ts` is the one place that
  * knows it.
  *
- * Nothing here is remembered across launches, unlike the notes' tabs and like
- * the `Changes` tab this copies: a board tab is opened from the project it
+ * Nothing here is remembered across launches, unlike the Explorer's tabs and
+ * like the `Changes` tab this copies: a board tab is opened from the project it
  * belongs to in one click, and restoring one would be restoring a tab for every
  * project somebody glanced at.
  *
@@ -378,7 +378,12 @@ export const useBoard = create<BoardState>((set, get) => {
       if (!place) return
 
       const draft = card.body ? `${card.title}\n\n${card.body}` : card.title
-      const chatId = await useWorktreeChats.getState().create(place, draft)
+      // `save` because the card is about to record the id: a chat that only
+      // exists on screen would leave this card `lost` on the next launch, which
+      // is what a card whose chat was *deleted* says. See `unsaved`.
+      const chatId = await useWorktreeChats
+        .getState()
+        .create(place, { draft, save: true })
       if (!chatId) return
       get().link(id, chatId)
     },

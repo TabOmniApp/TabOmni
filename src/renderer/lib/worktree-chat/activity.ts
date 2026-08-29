@@ -190,16 +190,23 @@ export function rowsOf(lines: AssistantMessage[]): ActivityRow[] {
 /**
  * A line that is never folded.
  *
- * Two of the three are the turn saying it did *less* than was asked, and the
+ * Two of the four are the turn saying it did *less* than was asked, and the
  * third is what it cost — which is not part of the working either: a turn's own
  * price is about the turn rather than in it, and it is on the line for the turns
  * that never got as far as an answer too, which is where the fold would
  * otherwise have swallowed it.
+ *
+ * A **compaction boundary** is the fourth, and the strongest case of the rule:
+ * everything above it is something the model now knows only as a summary, so it
+ * is the one line whose whole meaning is *where in the transcript it sits*.
+ * Folded into a run of tool calls it would be a divider inside a fold, dividing
+ * nothing a reader can see.
  */
 function alwaysShown(line: AssistantMessage): boolean {
   return (
     line.role === "error" ||
     line.role === "usage" ||
+    line.role === "compact" ||
     (line.role === "ask" && refused(line))
   )
 }

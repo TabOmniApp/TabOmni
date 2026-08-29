@@ -4,21 +4,33 @@ import { check, finish, section } from "./harness"
  * A review left on a diff, and the prompt it becomes.
  *
  * The prompt is the only part worth being sure about: everything else in the
- * feature is a gutter cell or a strip, and this is the thing a turn actually
- * reads. So the pure halves are checked here — the range arithmetic, the
- * snippet, and the whole review as one message — with no store, no editor and no
- * chat in the way.
+ * feature is a gutter cell or a widget, and this is the thing a turn actually
+ * reads. So the pure halves are checked here — how an anchor is built and how it
+ * reads, the snippet, and one thread as the question it becomes — with no store,
+ * no editor and no chat in the way.
  */
 const {
+  AGENT_MENTION,
+  anchorLabel,
   commentedLines,
-  extendTo,
-  noteCount,
+  EMPTY_ANCHOR,
+  isDeletedOnly,
+  isEmptyAnchor,
+  mentionsAgent,
   rangeLabel,
-  reviewPrompt,
+  markMention,
+  settle,
   snippetOf,
+  threadPrompt,
   threadsOf,
   useReview,
+  withRow,
 } = await import("../src/renderer/lib/files/review")
+
+/* Main's half of the same feature, paired here the way `test/mcp-servers.ts`
+ * pairs `readServer` with the renderer's: what a whole-diff review comes back
+ * with is a model's output being let into the review, and this is the gate. */
+const { findingsIn } = await import("../src/main/review-agent")
 
 type Author = "you" | "agent"
 
@@ -31,97 +43,399 @@ const thread = (
   said: [Author, string][],
   snippet = "",
   side: "new" | "old" = "new"
-) => ({
-  id: `${path}:${side}:${fromLine}`,
-  rootId: "root",
-  path,
-  side,
-  fromLine,
-  toLine,
-  snippet,
-  notes: said.map(([author, body], at) => ({
-    id: `${path}:${fromLine}:${at}`,
-    author,
-    body,
-  })),
-})
+) =>
+  anchored(
+    path,
+    side === "new"
+      ? { old: null, new: { fromLine, toLine } }
+      : { old: { fromLine, toLine }, new: null },
+    side === "new" ? { old: null, new: snippet } : { old: snippet, new: null },
+    said
+  )
+
+/** The other shape a thread can have: one remark about a hunk, quoting the lines
+ * that went and the lines that replaced them. */
+const hunk = (
+  path: string,
+  before: { fromLine: number; toLine: number },
+  after: { fromLine: number; toLine: number },
+  said: [Author, string][],
+  snippet: { old: string; new: string }
+) => anchored(path, { old: before, new: after }, snippet, said)
+
+const anchored = (
+  path: string,
+  anchor: {
+    old: { fromLine: number; toLine: number } | null
+    new: { fromLine: number; toLine: number } | null
+  },
+  snippet: { old: string | null; new: string | null },
+  said: [Author, string][]
+) => {
+  const at = anchor.new?.fromLine ?? anchor.old?.fromLine ?? 0
+  return {
+    id: `${path}:${at}`,
+    rootId: "root",
+    path,
+    anchor,
+    snippet,
+    notes: said.map(([author, body], index) => ({
+      id: `${path}:${at}:${index}`,
+      author,
+      body,
+    })),
+  }
+}
 
 async function main() {
-  section("picking a range")
+  section("building an anchor row by row")
 
-  const range = {
-    rootId: "r",
-    path: "/w/a.ts",
-    side: "new" as const,
-    fromLine: 10,
-    toLine: 10,
-    settled: true,
-  }
+  /*
+   * This is the arithmetic the store used to do and no longer does: which rows a
+   * gesture covered is a question only the editor can answer, so `review-marks.ts`
+   * walks the rows between two heights and folds each one in through `withRow`.
+   * What is checked here is the folding, which is the part that has to be right
+   * for a range crossing a hunk to come out as one comment about two files.
+   */
+  const walk = (rows: ["new" | "old", number][]) =>
+    rows.reduce((anchor, [side, line]) => withRow(anchor, side, line), EMPTY_ANCHOR) // prettier-ignore
+
+  /** The same walk as the editor's, as the store is handed it: the anchor plus
+   * the two rows the walk saw first and last, which is what the band is closed
+   * at — see `ReviewSelection`. */
+  const pickup = (rows: ["new" | "old", number][]) => ({
+    anchor: walk(rows),
+    first: { side: rows[0]![0], line: rows[0]![1] },
+    last: { side: rows.at(-1)![0], line: rows.at(-1)![1] },
+  })
 
   check(
-    "a shift-click below extends downwards",
-    extendTo(range, 14).fromLine === 10 && extendTo(range, 14).toLine === 14
+    "rows on one side come out as one run, whichever order they arrive in",
+    (() => {
+      const grown = walk([
+        ["new", 10],
+        ["new", 14],
+        ["new", 4],
+      ])
+      return (
+        grown.new?.fromLine === 4 &&
+        grown.new?.toLine === 14 &&
+        grown.old === null
+      )
+    })(),
+    "a walk goes downwards, but a drag that turns back walks upwards"
   )
 
   check(
-    "and one above extends upwards",
-    extendTo(range, 4).fromLine === 4 && extendTo(range, 4).toLine === 10,
-    "a shift-click grows the range: which end it lands on is the reader's"
+    "rows on both sides come out as one anchor naming both",
+    (() => {
+      const across = walk([
+        ["old", 40],
+        ["old", 41],
+        ["new", 12],
+        ["new", 13],
+      ])
+      return (
+        across.old?.fromLine === 40 &&
+        across.old?.toLine === 41 &&
+        across.new?.fromLine === 12 &&
+        across.new?.toLine === 13
+      )
+    })(),
+    "a run through a hunk crosses two files, and is still one remark"
   )
 
   check(
-    "and it is a press like any other, so the box waits for the release",
-    extendTo(range, 14).settled === false
+    "a walk that touched nothing is not a comment",
+    isEmptyAnchor(EMPTY_ANCHOR) && !isEmptyAnchor(walk([["new", 1]])),
+    "every row of the run was a folded bar, which is a line of neither file"
+  )
+
+  section("being called into a thread")
+
+  /*
+   * `@claude-review` in a comment is what asks Claude, in place of a button —
+   * see `AGENT_MENTION`. The boundaries are the whole of the care: a false
+   * positive is a turn nobody asked for, a false negative is a question that
+   * silently went nowhere.
+   */
+  check(
+    "a comment that says the name is addressed to Claude",
+    mentionsAgent(`${AGENT_MENTION} is this actually load bearing?`) &&
+      mentionsAgent(`why is this here, ${AGENT_MENTION}?`) &&
+      mentionsAgent(`(${AGENT_MENTION})`) &&
+      mentionsAgent(`ask ${AGENT_MENTION}`),
+    "addressed and then carried on with is the ordinary shape"
+  )
+
+  check(
+    "and the case it is written in does not matter",
+    mentionsAgent("@Claude-Review what about the null case?")
+  )
+
+  check(
+    "a longer word that starts with it is somebody else",
+    !mentionsAgent("@claude-reviewer should look at this") &&
+      !mentionsAgent("@claude-review-later"),
+    "a note to self is not a summons"
+  )
+
+  check(
+    "and neither is one buried in an address or a path",
+    !mentionsAgent("mail me at bot@claude-review") &&
+      !mentionsAgent("see docs/@claude-review"),
+    "the leading boundary is what keeps those out"
+  )
+
+  check(
+    "a comment that never says it asks nothing",
+    !mentionsAgent("this leaks") && !mentionsAgent("claude-review"),
+    "the @ is the address; without it this is a word in a sentence"
+  )
+
+  /* A note is drawn as markdown, so the mention is marked for that renderer
+   * rather than wrapped in a React node — see `markMention`. The stored text is
+   * untouched, which is what keeps `threadBlock` quoting what was typed. */
+  check(
+    "the mention is marked as code for the markdown renderer",
+    markMention(`hi ${AGENT_MENTION} there`) === `hi \`${AGENT_MENTION}\` there`
+  )
+
+  check(
+    "and a word that only starts with it is left alone",
+    markMention("@claude-reviewer looked") === "@claude-reviewer looked",
+    "the same boundaries the summons uses, or the two would disagree on screen"
+  )
+
+  section("a review read back against a file that moved")
+
+  /*
+   * A review outlives the app now, so a thread comes back addressed by numbers
+   * that were true yesterday. `settle` re-addresses it by the **lines it quoted**,
+   * which is the durable half of what it stores — see the function.
+   */
+  const commented = (fromLine: number, toLine: number, quoted: string) => ({
+    ...anchored(
+      "/w/a.ts",
+      { old: null, new: { fromLine, toLine } },
+      { old: null, new: quoted },
+      [["you", "this leaks"]] as [Author, string][]
+    ),
+  })
+
+  const file = (...lines: string[]) => lines.join("\n")
+
+  check(
+    "a thread whose lines have not moved is handed back untouched",
+    (() => {
+      const one = commented(2, 2, "open(fd)")
+      return settle(one, { old: null, new: file("a", "open(fd)", "b") }) === one
+    })(),
+    "identity, because `showing` runs on every rebuild of the diff and an array of fresh objects would re-render the pane for nothing"
+  )
+
+  check(
+    "a thread follows its lines when something is inserted above",
+    (() => {
+      const moved = settle(commented(2, 3, "open(fd)\nuse(fd)"), {
+        old: null,
+        new: file("added", "a", "open(fd)", "use(fd)", "b"),
+      })
+      return (
+        moved.anchor.new?.fromLine === 3 &&
+        moved.anchor.new?.toLine === 4 &&
+        !moved.stale
+      )
+    })(),
+    "the run keeps its length; only where it starts changed"
+  )
+
+  check(
+    "and when something above it is deleted",
+    (() => {
+      const moved = settle(commented(4, 4, "open(fd)"), {
+        old: null,
+        new: file("a", "open(fd)", "b"),
+      })
+      return moved.anchor.new?.fromLine === 2 && !moved.stale
+    })()
+  )
+
+  check(
+    "a thread whose lines are gone is marked outdated, not dropped",
+    (() => {
+      const gone = settle(commented(2, 2, "open(fd)"), {
+        old: null,
+        new: file("a", "b", "c"),
+      })
+      return gone.stale === true && gone.notes.length === 1
+    })(),
+    "a remark whose code has gone is still something somebody said"
+  )
+
+  check(
+    "a run that now appears twice is outdated rather than guessed at",
+    (() => {
+      const twice = settle(commented(5, 5, "}"), {
+        old: null,
+        new: file("a", "}", "b", "}", "c"),
+      })
+      return twice.stale === true
+    })(),
+    "moving to the first of two identical runs is a comment quietly reattached to the wrong code"
+  )
+
+  check(
+    "a truncated snippet follows on the lines it did keep",
+    (() => {
+      const cut = commented(2, 5, "open(fd)\n… 3 more lines")
+      const here = settle(cut, { old: null, new: file("a", "open(fd)", "b") })
+      const moved = settle(cut, {
+        old: null,
+        new: file("x", "a", "open(fd)", "b"),
+      })
+      return !here.stale && !moved.stale && moved.anchor.new?.fromLine === 3
+    })(),
+    "the `…` line is not in the file, but the prefix above it identifies the start just as well"
+  )
+
+  check(
+    "a side with no text to check against is left where it is",
+    (() => {
+      const deleted = anchored(
+        "/w/a.ts",
+        { old: { fromLine: 7, toLine: 7 }, new: null },
+        { old: "gone()", new: null },
+        [["you", "why did this go?"]] as [Author, string][]
+      )
+      return settle(deleted, { old: null, new: "a\nb" }) === deleted
+    })(),
+    "an unread file is not a missing line"
+  )
+
+  section("what a whole-diff review comes back with")
+
+  const fenced = (body: string) => "Here you go:\n\n```json\n" + body + "\n```"
+
+  check(
+    "a fenced array of findings is read",
+    (() => {
+      const found = findingsIn(
+        fenced(
+          '[{"path":"src/a.ts","fromLine":12,"toLine":14,"body":"this leaks"}]'
+        )
+      )
+      return (
+        found?.length === 1 &&
+        found[0]?.path === "src/a.ts" &&
+        found[0]?.fromLine === 12 &&
+        found[0]?.toLine === 14 &&
+        found[0]?.body === "this leaks"
+      )
+    })()
+  )
+
+  check(
+    "and so is a bare array, for an answer that came back without a fence",
+    findingsIn('[{"path":"a.ts","fromLine":1,"toLine":1,"body":"x"}]')
+      ?.length === 1
+  )
+
+  check(
+    "an empty array is a real answer rather than a failure",
+    findingsIn(fenced("[]"))?.length === 0,
+    "the change is sound, and null is reserved for an answer nothing could read"
+  )
+
+  check(
+    "an answer with no JSON in it at all is null",
+    findingsIn("Looks fine to me.") === null &&
+      findingsIn(fenced("not json")) === null,
+    "which the caller says out loud rather than showing an empty review"
+  )
+
+  check(
+    "a finding missing a field is dropped, not guessed at",
+    (() => {
+      const found = findingsIn(
+        fenced(
+          '[{"path":"a.ts","fromLine":2,"body":"kept"},' +
+            '{"fromLine":3,"toLine":3,"body":"no path"},' +
+            '{"path":"b.ts","toLine":4,"body":"no line"},' +
+            '{"path":"c.ts","fromLine":5,"toLine":5,"body":"   "},' +
+            '{"path":"d.ts","fromLine":0,"toLine":1,"body":"line zero"}]'
+        )
+      )
+      return found?.length === 1 && found[0]?.body === "kept"
+    })(),
+    "the cost of guessing is a comment pinned to the wrong line"
+  )
+
+  check(
+    "a finding with no end reads as one line",
+    (() => {
+      const found = findingsIn(
+        fenced('[{"path":"a.ts","fromLine":9,"body":"x"}]')
+      )
+      return found?.[0]?.fromLine === 9 && found[0]?.toLine === 9
+    })(),
+    "and so does one whose end is above its start — a bad `toLine` is not a reason to lose the remark"
+  )
+
+  section("how an anchor reads")
+
+  check(
+    "one line is one number and a run is two",
+    anchorLabel({ old: null, new: { fromLine: 12, toLine: 12 } }) === "12" &&
+      anchorLabel({ old: null, new: { fromLine: 12, toLine: 18 } }) === "12–18"
+  )
+
+  check(
+    "a hunk leads with the working file's numbers and says what the others were",
+    anchorLabel({
+      old: { fromLine: 8, toLine: 9 },
+      new: { fromLine: 12, toLine: 14 },
+    }) === "12–14 (was 8–9)",
+    "those are the ones somebody can open the file at"
+  )
+
+  check(
+    "only a wholly deleted range is marked deleted",
+    isDeletedOnly({ old: { fromLine: 8, toLine: 9 }, new: null }) &&
+      !isDeletedOnly({
+        old: { fromLine: 8, toLine: 9 },
+        new: { fromLine: 12, toLine: 12 },
+      }),
+    "a hunk has lines in the working file, so its numbers are not the commit's"
   )
 
   section("the store's own picking")
 
   const review = useReview.getState()
-  const place = { rootId: "root", path: "/w/a.ts", side: "new" as const }
-  /** The same file's deleted lines: numbered in the commit, which is what makes
-   * them a different place from `place` despite the same path. */
-  const deleted = { rootId: "root", path: "/w/a.ts", side: "old" as const }
+  const place = { rootId: "root", path: "/w/a.ts" }
+  const oneLine = (line: number) => pickup([["new", line]])
 
-  review.pick(place, 10, false)
+  review.pick(place, oneLine(10))
   check(
     "a press paints one line and does not open the box yet",
-    useReview.getState().pending?.fromLine === 10 &&
-      useReview.getState().pending?.toLine === 10 &&
+    useReview.getState().pending?.anchor.new?.fromLine === 10 &&
+      useReview.getState().pending?.anchor.new?.toLine === 10 &&
       useReview.getState().pending?.settled === false,
     "a box drawn mid-drag takes height off the diff and moves the rows"
   )
 
-  review.pick(place, 14, true)
+  review.stretch(place, pickup([["new", 10], ["new", 16]])) // prettier-ignore
   check(
-    "a shift-click in the same file grows the range",
-    useReview.getState().pending?.fromLine === 10 &&
-      useReview.getState().pending?.toLine === 14,
-    useReview.getState().pending
+    "a drag replaces the range with the whole span it now covers",
+    useReview.getState().pending?.anchor.new?.fromLine === 10 &&
+      useReview.getState().pending?.anchor.new?.toLine === 16
   )
 
-  section("dragging the column")
-
-  review.pick(place, 10, false)
-  review.stretch(place, 10, 16)
+  review.stretch(place, pickup([["new", 10], ["new", 12]])) // prettier-ignore
   check(
-    "a drag downwards takes everything between",
-    useReview.getState().pending?.fromLine === 10 &&
-      useReview.getState().pending?.toLine === 16
-  )
-
-  review.stretch(place, 10, 12)
-  check(
-    "and turning back shrinks it, which is what the anchor is for",
-    useReview.getState().pending?.fromLine === 10 &&
-      useReview.getState().pending?.toLine === 12,
+    "and turning back shrinks it, because the caller recomputes rather than grows",
+    useReview.getState().pending?.anchor.new?.toLine === 12,
     "a range grown from itself could only ever get bigger"
-  )
-
-  review.stretch(place, 10, 6)
-  check(
-    "dragging past the anchor turns the range around",
-    useReview.getState().pending?.fromLine === 6 &&
-      useReview.getState().pending?.toLine === 10
   )
 
   review.settle()
@@ -139,19 +453,15 @@ async function main() {
 
   section("writing one")
 
-  review.pick(place, 10, false)
-  review.settle()
-
-  review.pick({ rootId: "root", path: "/w/b.ts", side: "new" }, 3, true)
+  review.pick({ rootId: "root", path: "/w/b.ts" }, oneLine(3))
   check(
-    "a shift-click in another file starts again",
-    useReview.getState().pending?.path === "/w/b.ts" &&
-      useReview.getState().pending?.fromLine === 3 &&
-      useReview.getState().pending?.toLine === 3,
+    "a pick in another file replaces what was pending",
+    useReview.getState().pending?.path === "/w/b.ts",
     "a comment cannot be about a range that spans two files"
   )
 
-  review.add("  rename this  ", "const x = 1")
+  review.settle()
+  review.add("  rename this  ", { old: null, new: "const x = 1" })
   const saved = useReview.getState()
   check(
     "adding opens a thread, trims the body and clears the range",
@@ -163,47 +473,45 @@ async function main() {
     saved.threads
   )
 
-  review.pick({ rootId: "root", path: "/w/b.ts", side: "new" }, 9, false)
+  review.pick({ rootId: "root", path: "/w/b.ts" }, oneLine(9))
   review.settle()
-  review.add("   ", "")
+  review.add("   ", { old: null, new: "" })
   check(
     "an empty comment is a cancel rather than a blank remark",
     useReview.getState().threads.length === 1 &&
       useReview.getState().pending === null
   )
 
-  section("the deleted side")
+  section("the deleted side, and both at once")
 
-  review.pick(place, 20, false)
-  review.pick(deleted, 772, true)
-  check(
-    "a shift-click on a deleted line starts a range rather than growing the kept one",
-    useReview.getState().pending?.side === "old" &&
-      useReview.getState().pending?.fromLine === 772 &&
-      useReview.getState().pending?.toLine === 772,
-    "the two sides are numbered in different files, so no range spans them"
-  )
-
-  review.pick(deleted, 775, true)
-  check(
-    "and one deleted line extends to another",
-    useReview.getState().pending?.fromLine === 772 &&
-      useReview.getState().pending?.toLine === 775 &&
-      useReview.getState().pending?.side === "old"
-  )
-
+  review.pick(place, pickup([["old", 772], ["old", 775]])) // prettier-ignore
   review.settle()
-  review.add("why did this go?", "  return")
+  review.add("why did this go?", { old: "  return", new: null })
   const removed = useReview.getState().threads.at(-1)
   check(
     "a comment on deleted lines is kept as the commit's",
-    removed?.side === "old" &&
-      removed?.fromLine === 772 &&
+    removed?.anchor.new === null &&
+      removed?.anchor.old?.fromLine === 772 &&
       removed?.notes[0]?.body === "why did this go?",
     removed
   )
 
   review.remove(removed!.id)
+
+  review.pick(place, pickup([["old", 40], ["new", 12], ["new", 13]])) // prettier-ignore
+  review.settle()
+  review.add("this swap is wrong", { old: "gone()", new: "kept()\nadded()" })
+  const both = useReview.getState().threads.at(-1)
+  check(
+    "and a comment on a hunk keeps both halves",
+    both?.anchor.old?.fromLine === 40 &&
+      both?.anchor.new?.fromLine === 12 &&
+      both?.snippet.old === "gone()" &&
+      both?.snippet.new === "kept()\nadded()",
+    both
+  )
+
+  review.remove(both!.id)
 
   check(
     "a line number means one row on one side and nothing on the other",
@@ -244,12 +552,29 @@ async function main() {
     useReview.getState().threads[0]?.notes.length === 2
   )
 
+  /*
+   * The loop this closes: Claude's answer comes back through `reply`, and one
+   * that quoted the mention while explaining it would ask itself again, for
+   * ever. `asking` is set synchronously by `askAgent` before it awaits anything,
+   * so an id absent from it is a turn that was never started — which is also why
+   * this can be checked without a `window.desktop` to call.
+   */
+  review.reply(opened, `yes, ${AGENT_MENTION} is how you reach me`, {
+    author: "agent",
+    rootPath: "/w",
+  })
+  check(
+    "an agent's own note never summons it again",
+    !useReview.getState().asking.includes(opened) &&
+      useReview.getState().threads[0]?.notes.length === 3,
+    "only what a person said is a summons"
+  )
+
   const byAgent = review.comment({
     rootId: "root",
     path: "/w/c.ts",
-    fromLine: 2,
-    toLine: 3,
-    snippet: "if (x) {}",
+    anchor: { old: null, new: { fromLine: 2, toLine: 3 } },
+    snippet: { old: null, new: "if (x) {}" },
     body: "this branch is unreachable",
     author: "agent",
   })
@@ -263,9 +588,13 @@ async function main() {
   )
 
   check(
-    "the count is of notes rather than of threads",
-    noteCount(threadsOf(useReview.getState(), "root")) === 4,
-    "a thread with three replies is three things said"
+    "the bar counts threads, not the notes in them",
+    (() => {
+      const mine = threadsOf(useReview.getState(), "root")
+      const notes = mine.reduce((sum, one) => sum + one.notes.length, 0)
+      return mine.length === 2 && notes === 5
+    })(),
+    "a thread argued with three times is one place to go and look — and counting notes made asking Claude inflate the review"
   )
 
   section("which box is open")
@@ -333,11 +662,8 @@ async function main() {
 
   section("the prompt")
 
-  const prompt = reviewPrompt(
-    [
-      thread("/w/repo/src/a.ts", 12, 14, [["you", "this leaks"]], "open(fd)"),
-      thread("/w/repo/src/b.ts", 4, 4, [["you", "rename this"]]),
-    ],
+  const prompt = threadPrompt(
+    thread("/w/repo/src/a.ts", 12, 14, [["you", "this leaks"]], "open(fd)"),
     "/w/repo"
   )
 
@@ -358,23 +684,21 @@ async function main() {
 
   check(
     "a comment with nothing quoted carries no empty fence",
-    prompt.includes("### src/b.ts:4\n\nrename this"),
-    prompt
+    threadPrompt(
+      thread("/w/repo/src/b.ts", 4, 4, [["you", "rename this"]]),
+      "/w/repo"
+    ).includes("### src/b.ts:4\n\nrename this")
   )
 
-  check("the count is stated", prompt.includes("2 comments"))
-
-  const gone = reviewPrompt(
-    [
-      thread(
-        "/w/repo/src/a.ts",
-        772,
-        773,
-        [["you", "this was load bearing"]],
-        "return\n}",
-        "old"
-      ),
-    ],
+  const gone = threadPrompt(
+    thread(
+      "/w/repo/src/a.ts",
+      772,
+      773,
+      [["you", "this was load bearing"]],
+      "return\n}",
+      "old"
+    ),
     "/w/repo"
   )
 
@@ -386,37 +710,27 @@ async function main() {
 
   check(
     "and the preamble says what to go by instead of the number",
-    gone.includes("Find the code by what is quoted, not by the number."),
+    gone.includes("the quoted lines are what was meant"),
     "a turn that opened the working file at 772 would be reading whatever moved up into the gap"
   )
 
   check(
-    "and one comment is not stated as 1 comments",
-    reviewPrompt(
-      [thread("/w/repo/a.ts", 1, 1, [["you", "x"]])],
-      "/w/repo"
-    ).includes("— 1 comment below")
-  )
-
-  check(
     "a thread with one note is that note, unattributed",
-    prompt.includes("### src/b.ts:4\n\nrename this"),
+    prompt.includes("\n\nthis leaks"),
     "naming an author in a conversation with one voice is noise"
   )
 
-  const argued = reviewPrompt(
-    [
-      thread(
-        "/w/repo/src/a.ts",
-        3,
-        3,
-        [
-          ["agent", "this is unreachable"],
-          ["you", "no, x is set above"],
-        ],
-        "if (x) {}"
-      ),
-    ],
+  const argued = threadPrompt(
+    thread(
+      "/w/repo/src/a.ts",
+      3,
+      3,
+      [
+        ["agent", "this is unreachable"],
+        ["you", "no, x is set above"],
+      ],
+      "if (x) {}"
+    ),
     "/w/repo"
   )
 
@@ -427,10 +741,112 @@ async function main() {
     "who said what is the whole content of a disagreement"
   )
 
+  section("a comment on a hunk")
+
+  const swap = threadPrompt(
+    hunk(
+      "/w/repo/src/a.ts",
+      { fromLine: 8, toLine: 9 },
+      { fromLine: 12, toLine: 13 },
+      [["you", "this swap loses the null check"]],
+      { old: "if (!x) return\nuse(x)", new: "use(x)\nlog(x)" }
+    ),
+    "/w/repo"
+  )
+
   check(
-    "the order is the order they were written",
-    prompt.indexOf("src/a.ts") < prompt.indexOf("src/b.ts"),
-    "which is the order the diff was read in"
+    "its heading names the working file's lines and what they replaced",
+    swap.includes("### src/a.ts:12–13 (was 8–9)"),
+    "the leading numbers are the ones an agent can open the file at"
+  )
+
+  check(
+    "and it is not marked deleted, because half of it is in the file",
+    !swap.includes("(deleted"),
+    "that mark means the numbers are the commit's, which here they are not"
+  )
+
+  check(
+    "the two halves are quoted separately and labelled",
+    swap.includes("Removed (lines 8–9 of the committed file):") &&
+      swap.includes("if (!x) return") &&
+      swap.includes("Now (lines 12–13 of the working file):") &&
+      swap.includes("log(x)"),
+    "one fence holding both would be the commit's lines read as if in the file"
+  )
+
+  check(
+    "the removed half is quoted above the half that replaced it",
+    swap.indexOf("Removed (lines") < swap.indexOf("Now (lines"),
+    "which is the order the reviewer saw them in"
+  )
+
+  check(
+    "and the preamble explains that heading",
+    swap.includes("`12–14 (was 8–9)`"),
+    "a shape a turn has not been told about is a shape it will guess at"
+  )
+
+  check(
+    "a one-sided thread is quoted with no such labels",
+    prompt.includes("```\nopen(fd)\n```") && !prompt.includes("Removed (lines"),
+    "there is nothing beside it to tell it apart from"
+  )
+
+  section("one thread as a question")
+
+  const asked = threadPrompt(
+    thread(
+      "/w/repo/src/a.ts",
+      12,
+      14,
+      [["you", "is this actually load bearing?"]],
+      "if (x) {\n  go()\n}"
+    ),
+    "/w/repo"
+  )
+
+  check(
+    "carries the heading, the lines and the remark",
+    asked.includes("### src/a.ts:12–14") &&
+      asked.includes("```\nif (x) {\n  go()\n}\n```") &&
+      asked.includes("is this actually load bearing?"),
+    "one block, built by the same function, so the two prompts cannot drift"
+  )
+
+  check(
+    "and asks for an answer rather than for the change to be made",
+    asked.startsWith("A comment left on this checkout") &&
+      asked.includes("Answer it.") &&
+      !asked.includes("Address every one of them"),
+    "the reply lands in the thread; `Ask AI to fix…` is the other button"
+  )
+
+  const followUp = threadPrompt(
+    thread("/w/repo/src/a.ts", 12, 12, [
+      ["you", "why is this here?"],
+      ["agent", "it guards the null case"],
+      ["you", "x cannot be null on this path"],
+    ]),
+    "/w/repo"
+  )
+
+  check(
+    "asking again carries the argument so far, attributed",
+    followUp.includes("**Assistant:** it guards the null case") &&
+      followUp.includes("**Reviewer:** x cannot be null on this path"),
+    "or the second ask is the first question again rather than a follow-up"
+  )
+
+  const removedSide = threadPrompt(
+    thread("/w/repo/src/a.ts", 7, 7, [["you", "why did this go?"]], "log(x)", "old"), // prettier-ignore
+    "/w/repo"
+  )
+
+  check(
+    "a deleted range says so in its heading",
+    removedSide.includes("### src/a.ts:7 (deleted — numbers are the commit's)"),
+    "there is nothing at line 7 of the working file to read"
   )
 
   finish()

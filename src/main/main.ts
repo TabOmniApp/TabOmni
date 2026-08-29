@@ -10,6 +10,7 @@ import {
   serveApp,
   serveNoteFiles,
 } from "./protocol"
+import type { PanelWindowView } from "../shared/api"
 
 /** Set by scripts/dev.mjs; absent in a packaged app. */
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
@@ -77,6 +78,108 @@ function isHome(url: string): boolean {
 
 let mainWindow: BrowserWindow | null = null
 
+/** The panel windows that are open, by the view each was opened for. */
+const panelWindows = new Map<PanelWindowView, BrowserWindow>()
+
+/** Where the renderer is, with `search` appended — see `openPanelWindow`. */
+function rendererUrl(search = ""): string {
+  return `${DEV_SERVER_URL ?? `${APP_ORIGIN}/index.html`}${search}`
+}
+
+/**
+ * The two ways a window can leave the studio, both handed to the browser.
+ *
+ * Shared by both windows rather than written twice: what a link in an agent's
+ * answer or a docs link should do is the app's policy, not one window's.
+ */
+function keepInside(window: BrowserWindow): void {
+  // The studio's previews and docs links belong in the user's browser, not in
+  // a second app window with no chrome.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url)
+    return { action: "deny" }
+  })
+
+  /**
+   * A link click, which is a different event from the `window.open` above.
+   *
+   * An `<a href>` with no `target` — which is every link the transcript's
+   * markdown renderer produces, since ProseMirror's serializer emits a bare
+   * anchor — is a *navigation*: left alone, the window itself leaves the studio
+   * for that URL, and with no browser chrome and no history there is nothing to
+   * come back with. The studio's own navigation is let through untouched (a
+   * dev-server reload is one of these), and everything else is handed to the
+   * browser, which is where a link in a chat log was always meant to open.
+   */
+  window.webContents.on("will-navigate", (details) => {
+    if (isHome(details.url)) return
+    details.preventDefault()
+    openExternal(details.url)
+  })
+}
+
+/** What each panel window is called and how big it opens. */
+const PANEL_WINDOWS: Record<
+  PanelWindowView,
+  { title: string; width: number; height: number }
+> = {
+  database: { title: "Database", width: 1200, height: 780 },
+  // Narrower: a request is a form and a response beside it, where a table is a
+  // grid that keeps getting wider.
+  api: { title: "API", width: 1080, height: 760 },
+}
+
+/**
+ * A panel in a window of its own, or the one already open.
+ *
+ * The same renderer under `?view=<panel>`, which `App.tsx` reads: the list and
+ * the workspace this app already has, drawn without the workbench around them.
+ * One window per panel — a second copy would be two views of one store in two
+ * renderer processes, each remembering over the other.
+ *
+ * Native frame, including on macOS: `hiddenInset` is worth its cost only where
+ * a header stands in for the title bar, and these windows have no such header.
+ */
+function openPanelWindow(view: PanelWindowView): void {
+  const open = panelWindows.get(view)
+  if (open && !open.isDestroyed()) {
+    if (open.isMinimized()) open.restore()
+    open.focus()
+    return
+  }
+
+  const { title, width, height } = PANEL_WINDOWS[view]
+  const window = new BrowserWindow({
+    width,
+    height,
+    minWidth: 720,
+    minHeight: 480,
+    title,
+    backgroundColor: "#111218",
+    show: false,
+    ...(DEV_SERVER_URL && process.platform !== "darwin"
+      ? { icon: DEV_ICON }
+      : {}),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  panelWindows.set(view, window)
+
+  window.once("ready-to-show", () => window.show())
+  window.on("closed", () => {
+    // Only if it is still this one: a window closed after another was opened
+    // for the same view would otherwise drop the live one from the map.
+    if (panelWindows.get(view) === window) panelWindows.delete(view)
+  })
+  keepInside(window)
+
+  void window.loadURL(rendererUrl(`?view=${view}`))
+}
+
 // Privileges have to be declared before the app is ready, so this runs at
 // module scope rather than inside `whenReady`.
 registerAppScheme()
@@ -86,12 +189,11 @@ const {
   sqlConnections,
   docker,
   terminals,
-  preview,
   worktreeChats,
   tsServers,
   watchers,
   noteFilePath,
-} = registerIpc(() => mainWindow)
+} = registerIpc(() => mainWindow, openPanelWindow)
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -138,29 +240,7 @@ function createWindow(): void {
     mainWindow = null
   })
 
-  // The studio's previews and docs links belong in the user's browser, not in
-  // a second app window with no chrome.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    openExternal(url)
-    return { action: "deny" }
-  })
-
-  /**
-   * A link click, which is a different event from the `window.open` above.
-   *
-   * An `<a href>` with no `target` — which is every link the transcript's
-   * markdown renderer produces, since ProseMirror's serializer emits a bare
-   * anchor — is a *navigation*: left alone, the window itself leaves the studio
-   * for that URL, and with no browser chrome and no history there is nothing to
-   * come back with. The studio's own navigation is let through untouched (a
-   * dev-server reload is one of these), and everything else is handed to the
-   * browser, which is where a link in a chat log was always meant to open.
-   */
-  mainWindow.webContents.on("will-navigate", (details) => {
-    if (isHome(details.url)) return
-    details.preventDefault()
-    openExternal(details.url)
-  })
+  keepInside(mainWindow)
 
   // In dev, the renderer's own console — including an uncaught exception,
   // which Chromium logs as a `console.error` before the page goes blank —
@@ -181,7 +261,7 @@ function createWindow(): void {
     })
   }
 
-  void mainWindow.loadURL(DEV_SERVER_URL ?? `${APP_ORIGIN}/index.html`)
+  void mainWindow.loadURL(rendererUrl())
 }
 
 void app.whenReady().then(() => {
@@ -201,8 +281,10 @@ void app.whenReady().then(() => {
   createWindow()
 
   app.on("activate", () => {
-    // macOS: clicking the dock icon with no windows open reopens one.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    // macOS: clicking the dock icon reopens the studio. The *studio* rather
+    // than "any window", because a panel window can outlive it, and the dock
+    // icon has to lead back to the app itself and not to a panel of it.
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow()
   })
 })
 
@@ -246,13 +328,10 @@ app.on("before-quit", (event) => {
       // rather than this process, so this is what ends them — and it is
       // awaited, since an Electron that exits first would leave them running
       // with nobody to reattach them to.
-      // The note preview holds a port, and outliving the app would leave the
-      // workspace's notes being served by a process nobody can see.
       Promise.allSettled([
         terminals.killAll(),
         docker.stopAll(),
         sqlConnections.closeAll(),
-        preview.stop(),
         // A turn in flight is a `claude` this app spawned; it goes with the app
         // rather than being left talking to a window that has gone.
         worktreeChats.dispose(),

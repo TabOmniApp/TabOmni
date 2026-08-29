@@ -11,6 +11,8 @@ import {
 import {
   ArrowUp,
   AtSign,
+  Slash,
+  Terminal,
   Eye,
   File,
   Folder,
@@ -34,9 +36,12 @@ import {
   CHAT_PERMISSIONS,
   chatEfforts,
   DEFAULT_CHAT_OPTIONS,
+  type AgentCommand,
   type AgentModel,
+  type ChatWindow,
   type ChatEffort,
   type ChatPermission,
+  type ClaudeAccount,
   type ClaudeProfile,
   type WorktreeChatOptions,
 } from "@shared/api"
@@ -56,17 +61,38 @@ import { useGitStatus } from "@/lib/files/git-status"
 import { iconFor } from "@/lib/files/icons"
 import { useFiles } from "@/lib/files/store"
 import { cn } from "@/lib/utils"
-import { useClaudeProfiles } from "@/lib/worktree-chat/claude-profiles"
+import {
+  accountLine,
+  useClaudeProfiles,
+} from "@/lib/worktree-chat/claude-profiles"
 import {
   defaultModelAlias,
   effortFor,
   orderedModels,
   useAgentModels,
 } from "@/lib/worktree-chat/models"
+import { useAgentCommands } from "@/lib/worktree-chat/commands"
+import {
+  commandQuery,
+  insertCommand,
+  LOCAL_COMMANDS,
+  rankCommands,
+  type CommandQuery,
+} from "@/lib/worktree-chat/command-text"
 import { chatMentions, primeMentions } from "@/lib/worktree-chat/mentions"
+import { compact } from "@/lib/worktree-chat/usage"
+import {
+  bandOf,
+  remainingOf,
+  windowDetail,
+  windowLabel,
+  windowSlices,
+  WINDOW_TONES,
+} from "@/lib/worktree-chat/window"
 import {
   insertMention,
   markMentions,
+  mentionOf,
   mentionQuery,
   rankPlainMentions,
   PLAIN_LABELS,
@@ -78,7 +104,16 @@ import {
 import { IconButton } from "../icon-button"
 
 /**
- * A chat's composer, with an `@` menu over the checkout's folders and files.
+ * A chat's composer, with two menus: `@` over the checkout's folders and files,
+ * and `/` over the commands the user's own `claude` would run here.
+ *
+ * **`/` is the CLI's list, not this app's.** The commands are asked for over the
+ * SDK's control channel in the project's own directory (`main/agent-commands.ts`),
+ * so a skill added to a repository or a plugin installed this morning is in the
+ * menu without a release. What is picked goes to the CLI as the message and is
+ * run by the CLI — with two exceptions, `/clear` and `/rename`, which are about
+ * the conversation rather than the code and are this app's to answer; see
+ * `lib/worktree-chat/command-text.ts`.
  *
  * A mention is the path and nothing else — the turn runs in this checkout with
  * `Read`, so a path is already something the agent can open, and it is what the
@@ -105,6 +140,46 @@ import { IconButton } from "../icon-button"
 
 /** Rows past this are a keystroke away from a shorter list. */
 const MAX_ROWS = 40
+
+/**
+ * The composer's one menu: the `@` over this checkout's paths, or the `/` over
+ * the user's own `claude`'s commands.
+ *
+ * A tagged union rather than two pieces of state, because they cannot both be
+ * open — `/` is only a query at the head of the message — and two would have to
+ * be kept agreeing about that. The `kind` is what the arrow keys, Escape and the
+ * insertion all branch on, once each.
+ */
+type Menu =
+  | {
+      kind: "mention"
+      query: MentionQuery
+      items: PlainMention[]
+      selected: number
+    }
+  | {
+      kind: "command"
+      query: CommandQuery
+      items: AgentCommand[]
+      selected: number
+    }
+
+/**
+ * The new menu, keeping the highlighted row where the query has not changed.
+ *
+ * The caret moving without the filter changing — a click, an arrow along the
+ * line — must not throw away the row somebody has walked down to. A filter that
+ * *has* changed goes back to the top, since the rows under it are different
+ * ones. Clamped, because the new list can be shorter than the old selection.
+ */
+function keepSelection(next: Menu, was: Menu | null): Menu {
+  if (!was || was.kind !== next.kind) return next
+  if (was.query.filter !== next.query.filter) return next
+  return {
+    ...next,
+    selected: Math.max(0, Math.min(was.selected, next.items.length - 1)),
+  }
+}
 
 /**
  * Everything that decides where a character lands, on both the textarea and the
@@ -147,6 +222,8 @@ export function ChatComposer({
   options = DEFAULT_CHAT_OPTIONS,
   onOptions,
   attachRoot,
+  folderId = null,
+  contextWindow,
   initialDraft = "",
   onLeave,
 }: {
@@ -177,6 +254,27 @@ export function ChatComposer({
    */
   attachRoot?: string
   /**
+   * The project the chat is in, for the `/` menu's list of commands.
+   *
+   * The id rather than `attachRoot`'s path: main resolves a project to its
+   * directory, and a command set is per directory — a repository's own
+   * `.claude/commands` and its skills are only in that checkout. Null asks in
+   * the user's home directory, which is the honest answer for a chat with no
+   * project behind it.
+   */
+  folderId?: string | null
+  /**
+   * How full this chat's context window is, for the toolbar's meter.
+   *
+   * Named `contextWindow` rather than `window` on purpose: a prop called
+   * `window` shadows the global inside this component, and `attach()` reaches
+   * for `window.desktop`.
+   *
+   * Undefined until the CLI has been asked, which is once the chat's first turn
+   * has ended — the meter is simply absent until then rather than drawn at zero.
+   */
+  contextWindow?: ChatWindow
+  /**
    * What the field starts with: this chat's unsent draft, or a message written
    * *for* the user — the `Changes` pane's review, which `Ask AI to fix` puts
    * here rather than sending.
@@ -199,11 +297,25 @@ export function ChatComposer({
   onLeave?: (text: string) => void
 }) {
   const [draft, setDraft] = useState(initialDraft)
-  const [menu, setMenu] = useState<{
-    query: MentionQuery
-    items: PlainMention[]
-    selected: number
-  } | null>(null)
+  /**
+   * The one menu, in whichever of its two kinds is open.
+   *
+   * One piece of state rather than two, because the two can never both be open —
+   * `/` is only a query at the head of the message and `@` needs a word boundary
+   * — and two would have to agree about that. It is also what lets the arrow
+   * keys and Escape below be written once for both.
+   */
+  const [menu, setMenu] = useState<Menu | null>(null)
+
+  /**
+   * Latched by the first `/` typed in this field, and never cleared.
+   *
+   * Asking costs a `claude` process (`agent-commands.ts`), so it is not paid for
+   * by every composer that mounts — but a menu that closes is not a reason to
+   * forget an answer already bought, which is why this only ever goes one way.
+   */
+  const [wantsCommands, setWantsCommands] = useState(false)
+  const commands = useAgentCommands(folderId, wantsCommands)
 
   // The user's own `claude`'s list, for the two pickers that need it — the
   // model's rows and, per model, which effort levels exist at all.
@@ -255,10 +367,11 @@ export function ChatComposer({
     // opening over a composer nobody is in would be a list appearing by itself.
     if (!element || document.activeElement !== element) return
     refresh(draft, element.selectionStart)
-    // `refresh` and the draft are the current render's; this fires for the two
-    // reads landing.
+    // `refresh` and the draft are the current render's; this fires for the three
+    // reads landing — the file index, the `git status` that filters it, and the
+    // command list, which arrives a process later than the `/` that asked for it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, ignored])
+  }, [index, ignored, commands.commands, commands.loading, commands.error])
 
   useEffect(() => {
     const caret = pending.current
@@ -268,7 +381,33 @@ export function ChatComposer({
     field.current?.setSelectionRange(caret, caret)
   }, [draft])
 
+  /**
+   * Which menu the caret is in, if either.
+   *
+   * `/` is asked about first because it is the narrower of the two — it only
+   * matches at the head of the message — so a draft that is a command query
+   * cannot also be a mention query, and the order is really only there to say
+   * which one is checked first rather than to resolve a conflict.
+   */
   function refresh(text: string, caret: number) {
+    const command = commandQuery(text, caret)
+    if (command) {
+      setWantsCommands(true)
+      if (dismissed.current) return
+      // Drawn while the list is still being asked for, and drawn empty: the
+      // first `/` of a project waits on a `claude` starting, and a menu that
+      // appeared only once the answer landed would look like a `/` that did
+      // nothing for a second and a half.
+      const items = rankCommands(commands.commands, command.filter, MAX_ROWS)
+      setMenu((was) =>
+        keepSelection(
+          { kind: "command", query: command, items, selected: 0 },
+          was
+        )
+      )
+      return
+    }
+
     const query = mentionQuery(text, caret)
     if (!query) {
       dismissed.current = false
@@ -286,25 +425,30 @@ export function ChatComposer({
       setMenu(null)
       return
     }
-    setMenu((was) => ({
-      query,
-      items,
-      selected:
-        was && was.query.filter === query.filter
-          ? Math.min(was.selected, items.length - 1)
-          : 0,
-    }))
+    setMenu((was) =>
+      keepSelection({ kind: "mention", query, items, selected: 0 }, was)
+    )
   }
 
-  function pick(mention: PlainMention) {
+  function pick(item: PlainMention | AgentCommand) {
     const element = field.current
     if (!element || !menu) return
-    const next = insertMention(
-      draft,
-      menu.query,
-      element.selectionStart,
-      mention.label
-    )
+
+    const next =
+      menu.kind === "command"
+        ? insertCommand(
+            draft,
+            menu.query,
+            element.selectionStart,
+            (item as AgentCommand).name
+          )
+        : insertMention(
+            draft,
+            menu.query,
+            element.selectionStart,
+            mentionOf((item as PlainMention).label)
+          )
+
     pending.current = next.caret
     setDraft(next.text)
     setMenu(null)
@@ -313,8 +457,8 @@ export function ChatComposer({
   /**
    * Files chosen in the OS picker, written into the draft at the caret.
    *
-   * Plain text rather than a mention, and for the same reason the `@` menu
-   * inserts a name: the turn runs in this checkout with `Read`, so a path is
+   * A path written into the text, exactly what the `@` menu inserts and for the
+   * same reason: the turn runs in this checkout with `Read`, so a path is
    * already something the agent can open. There is nothing to attach it *to* —
    * print mode takes a prompt, not an upload.
    */
@@ -332,7 +476,13 @@ export function ChatComposer({
     const caret = element?.selectionStart ?? draft.length
     const written = paths
       .map((path) => (attachRoot ? relativeTo(attachRoot, path) : path))
-      .map(quotePath)
+      .map((path) => {
+        // `@`, so a dropped path is tinted like a picked one — but not on one
+        // that had to be quoted, since the tint matches whole words and a
+        // quoted path is not one.
+        const quoted = quotePath(path)
+        return quoted === path ? mentionOf(path) : quoted
+      })
       .join(" ")
 
     // Spaced off whatever is already there, so a path does not run into the end
@@ -382,6 +532,10 @@ export function ChatComposer({
       switch (event.key) {
         case "ArrowDown":
         case "ArrowUp": {
+          // A command menu is drawn while the list is still being asked for, so
+          // there is a moment when it has no rows to walk. Falling through would
+          // put `NaN` in `selected` for the rest of the query.
+          if (count === 0) break
           const delta = event.key === "ArrowDown" ? 1 : -1
           setMenu({
             ...menu,
@@ -392,9 +546,12 @@ export function ChatComposer({
         }
         case "Enter":
         case "Tab": {
-          const mention = menu.items[menu.selected]
-          if (!mention) break
-          pick(mention)
+          const item = menu.items[menu.selected]
+          // An empty command menu lets Enter through to `submit` below, which is
+          // the right answer for it: `/clear` typed in full is a command whether
+          // or not a list ever arrived to offer it.
+          if (!item) break
+          pick(item)
           event.preventDefault()
           return
         }
@@ -436,14 +593,46 @@ export function ChatComposer({
     refresh(next, caret + lead.length + 1)
   }
 
+  /**
+   * `/` typed for somebody, from the `+` menu.
+   *
+   * At the head of the draft rather than at the caret, unlike `startMention`:
+   * that is the only place a slash command means anything, so putting one
+   * mid-sentence would be the menu offering to insert text that runs as prose.
+   * Whatever was already written stays, after it.
+   */
+  function startCommand() {
+    if (commandQuery(draft, draft.length) !== null) {
+      // Already in one — the field starts with a bare `/`. Nothing to type.
+      field.current?.focus()
+      return
+    }
+    const next = `/${draft.replace(/^\s+/, "")}`
+    dismissed.current = false
+    pending.current = 1
+    setDraft(next)
+    refresh(next, 1)
+  }
+
   const segments = markMentions(draft, chatMentions(attachRoot))
 
   return (
     <div className="relative">
-      {menu && (
+      {menu?.kind === "mention" && (
         <MentionMenu
           items={menu.items}
           selected={menu.selected}
+          onSelect={pick}
+          onHover={(selected) => setMenu({ ...menu, selected })}
+        />
+      )}
+
+      {menu?.kind === "command" && (
+        <CommandMenu
+          items={menu.items}
+          selected={menu.selected}
+          loading={commands.loading}
+          error={commands.error}
           onSelect={pick}
           onHover={(selected) => setMenu({ ...menu, selected })}
         />
@@ -545,6 +734,12 @@ export function ChatComposer({
             </>
           )}
 
+          {/* Only once there is a measurement. A meter reading 0% before the
+              first turn would be claiming an empty window, when what is true is
+              that nobody has asked the CLI yet — and the answer would be ~19k of
+              system prompt, tools and memory files rather than nothing. */}
+          {contextWindow && <WindowMeter of={contextWindow} />}
+
           <div className="ml-auto flex items-center gap-1">
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -576,6 +771,13 @@ export function ChatComposer({
                   Mention a file…
                   <span className="ml-auto text-[0.65rem] text-muted-foreground">
                     @
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={startCommand}>
+                  <Slash />
+                  Run a command…
+                  <span className="ml-auto text-[0.65rem] text-muted-foreground">
+                    /
                   </span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -626,7 +828,7 @@ export function ChatComposer({
  * its props and dropped the rest would open its menu against no anchor at all.
  * See `IconButton`, which was written against the same failure.
  */
-function ToolbarButton({
+export function ToolbarButton({
   icon,
   label,
   on,
@@ -682,7 +884,7 @@ function ToolbarButton({
  * stays because it is a thing somebody can genuinely want, and because chats
  * written before this are on it.
  */
-function ModelMenu({
+export function ModelMenu({
   models,
   model,
   effort,
@@ -966,8 +1168,17 @@ function PermissionMenu({
  * toolbar button that always says the same thing is one nobody asked for.
  * Adding, naming and pointing a profile at a directory is Settings' own —
  * `SettingsDialog`'s Claude section — this is only the picker.
+ *
+ * **Each row says which account it actually is**, because a name somebody typed
+ * is not one: "Claude Hùng" beside "Claude Personal" tells you nothing about
+ * which login either one is, and a directory that was never signed into reads
+ * exactly like one that works until the turn fails. The line under the name is
+ * the address (`accountLine`), asked of `claude` when the menu is first opened
+ * and held for the run — a menu of four profiles must not be four processes
+ * every time it is dropped down, and a login does not change while somebody is
+ * deciding who to send a message as. Re-asking is Settings' Check button.
  */
-function ProfileMenu({
+export function ProfileMenu({
   profiles,
   profileId,
   onPick,
@@ -977,9 +1188,20 @@ function ProfileMenu({
   onPick: (profileId: string | null) => void
 }) {
   const chosen = profiles.find((profile) => profile.id === profileId)
+  const accounts = useClaudeProfiles((state) => state.accounts)
+  const checking = useClaudeProfiles((state) => state.checking)
+  const checkUnknown = useClaudeProfiles((state) => state.checkUnknown)
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        // On open rather than on mount: every chat in the workspace has one of
+        // these toolbars, and none of them is a reason to run `claude`.
+        if (open) {
+          checkUnknown(["", ...profiles.map((profile) => profile.configDir)])
+        }
+      }}
+    >
       <DropdownMenuTrigger
         render={
           <ToolbarButton
@@ -1002,9 +1224,11 @@ function ProfileMenu({
           </div>
           <div className="flex min-w-0 flex-1 flex-col">
             <span className="truncate text-xs font-normal">This account</span>
-            <span className="truncate text-[10px] text-muted-foreground">
-              Whichever your own `claude` is already signed into
-            </span>
+            <AccountLine
+              account={accounts[""]}
+              busy={checking.includes("")}
+              fallback="Whichever your own `claude` is already signed into"
+            />
           </div>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
@@ -1019,13 +1243,63 @@ function ProfileMenu({
                 <CheckIcon className="size-3.5 text-foreground" />
               )}
             </div>
-            <span className="min-w-0 flex-1 truncate text-xs font-normal">
-              {profile.name}
-            </span>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-xs font-normal">
+                {profile.name}
+              </span>
+              {/* A profile with no directory yet would otherwise be drawn as
+                  the default account, since that is what an empty
+                  `CLAUDE_CONFIG_DIR` resolves to — the one thing this row must
+                  not claim to be. */}
+              {profile.configDir.trim() ? (
+                <AccountLine
+                  account={accounts[profile.configDir.trim()]}
+                  busy={checking.includes(profile.configDir.trim())}
+                />
+              ) : (
+                <span className="truncate text-[10px] text-muted-foreground">
+                  No directory set
+                </span>
+              )}
+            </div>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+/**
+ * The line under an account's name in the picker: who it is, or what is wrong.
+ *
+ * Coloured only where it is trouble. A signed-in row is the ordinary case and
+ * four green lines in a four-row menu is noise; what has to catch the eye is
+ * the one profile that will not run — see `accountLine`.
+ */
+function AccountLine({
+  account,
+  busy,
+  fallback,
+}: {
+  account: ClaudeAccount | undefined
+  /** A check in flight, so the row says so rather than "Not checked" for the
+   * fraction of a second the ask takes. */
+  busy?: boolean
+  /** What to say before anything has been asked, for the row that has a
+   * sentence of its own worth keeping. */
+  fallback?: string
+}) {
+  const { text, tone } = accountLine(account)
+
+  return (
+    <span
+      className={cn(
+        "truncate text-[10px]",
+        tone === "bad" && !busy ? "text-destructive" : "text-muted-foreground"
+      )}
+    >
+      {busy && !account ? "Checking…" : !account && fallback ? fallback : text}
+    </span>
   )
 }
 
@@ -1140,6 +1414,221 @@ function Marks({
         )
       )}
     </>
+  )
+}
+
+/**
+ * How full the context window is, in the composer's toolbar.
+ *
+ * **A bar and not a spinner, because this is the number that can actually be
+ * measured.** What the CLI shows while `/compact` runs is a spinner: compaction
+ * is one summarisation call, so there is no fraction of it to report, and a
+ * determinate bar drawn there would be an animation pretending to measure
+ * something. The window either side of it is measurable, and it is the thing
+ * somebody is really watching — see `lib/worktree-chat/window.ts`.
+ *
+ * Read against the **auto-compact threshold** rather than the raw window
+ * (`fractionOf`): on a 1M-context model the CLI compacts at 967k, so a bar drawn
+ * against 1M would sit calm right up to the moment the conversation is
+ * summarised out from under it.
+ *
+ * The breakdown behind it is the same data `/context` prints, which is why the
+ * rows are the CLI's own category names. Their colours are not: those are its
+ * terminal theme's, so `WINDOW_TONES` maps them here.
+ */
+function WindowMeter({ of }: { of: ChatWindow }) {
+  const band = bandOf(of)
+  const slices = windowSlices(of)
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            // The detail on the title as well as in the menu: the meter is a
+            // glance, and hovering should answer the question without a click.
+            title={windowDetail(of)}
+            aria-label={`Context window: ${windowLabel(of)} before auto-compacting`}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[0.7rem]",
+              "transition-colors hover:bg-accent data-[popup-open]:bg-accent",
+              band === "full"
+                ? "text-destructive"
+                : band === "near"
+                  ? "text-amber-600 dark:text-amber-500"
+                  : "text-muted-foreground"
+            )}
+          >
+            {/* The bar **drains** rather than fills, because the label counts
+                down: a bar growing beside a number shrinking would be two
+                readings of one window pointing opposite ways. `remainingOf` is
+                already clamped — there is no less than nothing left. */}
+            <span
+              aria-hidden
+              className="h-1 w-8 overflow-hidden rounded-full bg-border"
+            >
+              <span
+                className="block h-full rounded-full bg-current transition-[width]"
+                style={{ width: `${remainingOf(of) * 100}%` }}
+              />
+            </span>
+            {windowLabel(of)}
+          </button>
+        }
+      />
+      <DropdownMenuContent align="start" className="w-64">
+        <div className="px-2 py-1.5 text-[0.7rem] text-muted-foreground">
+          {windowDetail(of)}
+        </div>
+        <DropdownMenuSeparator />
+        {slices.map((slice) => (
+          <div
+            key={slice.name}
+            className="flex items-center gap-2 px-2 py-1 text-xs"
+          >
+            <span
+              aria-hidden
+              className="size-2 shrink-0 rounded-[2px]"
+              style={{ background: WINDOW_TONES[slice.tone] }}
+            />
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate",
+                // A deferred row is listed and not charged, so it is drawn as an
+                // aside rather than as one of the things filling the window.
+                slice.deferred && "text-muted-foreground"
+              )}
+            >
+              {slice.name}
+            </span>
+            <span className="shrink-0 font-mono text-[0.7rem] text-muted-foreground">
+              {compact(slice.tokens)}
+            </span>
+          </div>
+        ))}
+        {slices.length === 0 && (
+          <div className="px-2 py-1 text-[0.7rem] text-muted-foreground">
+            No breakdown was reported.
+          </div>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * The `/` menu: the commands the user's own `claude` would run in this project.
+ *
+ * Laid out like `MentionMenu` on purpose — same box, same placement above the
+ * composer, same pointer-down rows — because they are one menu in two moods and
+ * two shapes would read as two features. What differs is what a row has to say:
+ * a command is chosen by what it *does*, so the description is the row rather
+ * than a footnote under it, and it is clamped to two lines because a skill's
+ * description is written for a model and runs to a paragraph.
+ *
+ * The three states below the rows are the reason this menu draws at all while
+ * empty. The first `/` of a project waits on a `claude` starting (see
+ * `agent-commands.ts`), and a menu that appeared only once the answer landed
+ * would look like a keystroke that did nothing for a second.
+ */
+function CommandMenu({
+  items,
+  selected,
+  loading,
+  error,
+  onSelect,
+  onHover,
+}: {
+  items: AgentCommand[]
+  selected: number
+  loading: boolean
+  error: string | null
+  onSelect: (command: AgentCommand) => void
+  onHover: (index: number) => void
+}) {
+  const list = useRef<HTMLUListElement>(null)
+
+  useEffect(() => {
+    list.current
+      ?.querySelector('[data-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" })
+  }, [selected])
+
+  return (
+    <ul
+      ref={list}
+      className={cn(
+        "absolute inset-x-0 bottom-full z-20 mb-1 max-h-64 overflow-y-auto overscroll-contain",
+        "rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+      )}
+    >
+      {items.map((command, index) => (
+        <li key={command.name}>
+          <button
+            type="button"
+            data-selected={index === selected}
+            // Pointer *down*, not click: a click lands after the textarea has
+            // lost focus, which is what hides the menu the row is in.
+            onPointerDown={(event) => {
+              event.preventDefault()
+              onSelect(command)
+            }}
+            onPointerEnter={() => onHover(index)}
+            className={cn(
+              "w-full rounded-sm px-2 py-1 text-left text-xs",
+              index === selected && "bg-accent text-accent-foreground"
+            )}
+          >
+            <span className="flex items-start gap-1.5">
+              <Terminal
+                aria-hidden
+                className="mt-px size-3.5 shrink-0 opacity-70"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  <span className="truncate font-mono font-medium">
+                    /{command.name}
+                  </span>
+                  {/* The argument hint beside the name rather than in the
+                      description, because it is part of what you are about to
+                      type: a command taking `[low|medium|high]` should say so
+                      before it is sent without one. */}
+                  {command.argumentHint && (
+                    <span className="truncate font-mono text-[10px] text-muted-foreground/70">
+                      {command.argumentHint}
+                    </span>
+                  )}
+                  {/* Said on the row rather than discovered afterwards: these
+                      two do not reach the CLI at all, and somebody who knows
+                      what `/clear` does in a terminal is owed the difference. */}
+                  {(LOCAL_COMMANDS as readonly string[]).includes(
+                    command.name
+                  ) && (
+                    <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">
+                      this app
+                    </span>
+                  )}
+                </span>
+                {command.description && (
+                  <span className="mt-0.5 line-clamp-2 block text-[0.7rem] leading-snug text-muted-foreground">
+                    {command.description}
+                  </span>
+                )}
+              </span>
+            </span>
+          </button>
+        </li>
+      ))}
+
+      {items.length === 0 && (
+        <li className="px-2 py-1.5 text-[0.7rem] text-muted-foreground">
+          {loading
+            ? "Asking claude what it can run…"
+            : (error ?? "No command matches that.")}
+        </li>
+      )}
+    </ul>
   )
 }
 

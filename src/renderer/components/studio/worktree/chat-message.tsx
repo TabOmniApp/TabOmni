@@ -1,5 +1,6 @@
 import { useState } from "react"
 import {
+  Archive,
   Brain,
   Check,
   Circle,
@@ -18,6 +19,7 @@ import { nameOf } from "@/lib/files/paths"
 import { cn } from "@/lib/utils"
 import { AGENT_TOOL } from "@/lib/worktree-chat/activity"
 import { usageDetail, usageLine } from "@/lib/worktree-chat/usage"
+import { compactLine } from "@/lib/worktree-chat/window"
 import { MarkdownView } from "../markdown-view"
 import { IconButton } from "../icon-button"
 import { MentionText } from "./chat-composer"
@@ -107,6 +109,25 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
       >
         <Coins className="size-3 shrink-0 translate-y-0.5" />
         <span className="truncate">{usageLine(of.usage)}</span>
+      </div>
+    )
+  }
+
+  if (of.role === "compact") {
+    /*
+     * The compaction boundary, drawn as a rule across the conversation.
+     *
+     * A divider rather than another muted row, and that is the point: everything
+     * *above* this line is something the model now knows only as a summary, so
+     * the line has a side. A row would have read as one more event in the
+     * sequence. The CLI draws the same rule for the same reason.
+     */
+    return (
+      <div className="flex items-center gap-2 px-1 py-0.5 text-[0.7rem] text-muted-foreground/80">
+        <span className="h-px flex-1 bg-border" />
+        <Archive className="size-3 shrink-0" />
+        <span className="shrink-0">{compactLine(of)}</span>
+        <span className="h-px flex-1 bg-border" />
       </div>
     )
   }

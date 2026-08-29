@@ -12,13 +12,10 @@ import {
 } from "@blocknote/react"
 import { BlockNoteView } from "@blocknote/shadcn"
 import { useTheme } from "next-themes"
-import { Spinner } from "@/components/ui/spinner"
 
 import { newDrawingId, onDrawingOpened, openDrawing } from "@/lib/note/drawings"
-import type { NoteBody } from "@shared/api"
-import { serializeBody, type NoteBlock } from "@/lib/note/blocks"
+import type { NoteBlock } from "@/lib/note/blocks"
 import { uploadNoteFile } from "@/lib/note/uploads"
-import { blocksOf } from "@/lib/note/from-markdown"
 import { DrawingEditor } from "./drawing-editor"
 import { NoteFilePanel } from "./file-panel"
 import { DRAWING_BLOCK, drawingBlockSpec } from "./drawing-block"
@@ -254,79 +251,5 @@ function DrawingHost({ listening }: { listening: boolean }) {
   if (drawingId === null) return null
   return (
     <DrawingEditor drawingId={drawingId} onClose={() => setDrawingId(null)} />
-  )
-}
-
-/**
- * The editor, held back until the document it starts with has been read.
- *
- * Mounting empty and filling in afterwards would put a document the user never
- * typed through the undo history, so one undo would empty the note.
- */
-export function LoadedBlockEditor({
-  documentId,
-  load,
-  onChange,
-  onAdopt,
-  className,
-  visible = true,
-}: {
-  documentId: string
-  load: (id: string) => Promise<NoteBody>
-  onChange: (body: string) => void
-  /** Handed the blocks a note an older build wrote turned into, so the store
-   * can keep them and the file stops being markdown. Separate from `onChange`
-   * because converting is not editing — see the store's `adoptBlocks`. */
-  onAdopt: (body: string) => void
-  className?: string
-  visible?: boolean
-}) {
-  // The document it belongs to travels with the blocks, so that switching
-  // documents shows a spinner rather than the previous one's words.
-  const [loaded, setLoaded] = useState<{
-    id: string
-    blocks: NoteBlock[]
-  } | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    void load(documentId).then((body) => {
-      if (cancelled) return
-
-      const blocks = blocksOf(body)
-      setLoaded({ id: documentId, blocks })
-      // The conversion is handed back rather than left for the first keystroke
-      // to trigger: a note read and closed again should not have to be parsed
-      // a second time, and the markdown behind it stops being what is read.
-      if (body.format === "markdown") onAdopt(serializeBody(blocks))
-    })
-    return () => {
-      cancelled = true
-    }
-    // `onAdopt` is deliberately not a dependency: it is a fresh closure on
-    // every render, and re-reading the document is exactly what this must not
-    // do while the editor under it is live.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentId, load])
-
-  if (loaded?.id !== documentId) {
-    return (
-      <div className="grid h-full place-items-center">
-        <Spinner className="size-4 text-muted-foreground" />
-      </div>
-    )
-  }
-
-  return (
-    // Keyed on the document, so switching builds a fresh editor rather than
-    // trying to swap a document under a live one — BlockNote takes its content
-    // once, at construction.
-    <BlockEditor
-      key={documentId}
-      initial={loaded.blocks}
-      onChange={(blocks) => onChange(serializeBody(blocks))}
-      className={className}
-      visible={visible}
-    />
   )
 }

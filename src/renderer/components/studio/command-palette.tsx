@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { defaultFilter } from "cmdk"
-import { Columns3, File, FileText, MessageSquare } from "lucide-react"
+import { Columns3, File, MessageSquare } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import {
@@ -15,20 +15,14 @@ import {
 } from "@/components/ui/command"
 import { unfinishedCount } from "@/lib/board/cards"
 import { useBoard } from "@/lib/board/store"
-import { useDatabases } from "@/lib/db/databases-store"
-import { useDbTree } from "@/lib/db/tree-store"
 import { useFiles } from "@/lib/files/store"
 import { shortlist } from "@/lib/files/search"
-import { useApi } from "@/lib/http/store"
 import { nameOf } from "@/lib/files/paths"
-import { useNotes } from "@/lib/note/store"
 import { usePalette } from "@/lib/palette"
 import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio } from "@/lib/store"
 import { PREFIX } from "@/lib/tabs"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
-import { METHOD_TONES } from "./api/request-list"
-import { KIND_ICONS } from "./db/database-tree"
 
 /**
  * One thing the palette can open.
@@ -45,8 +39,15 @@ type Entry = {
   /** Everything a search should match, the label and the hint included. */
   keywords: string[]
   icon: ReactNode
-  /** Opens it, resolving to why it could not be opened, or to null. */
-  open: () => Promise<string | null>
+  /**
+   * Opens it.
+   *
+   * Nothing here can fail any more: opening a file is a read, and a chat or a
+   * board is a `select` on a store. It resolved to *why* it could not be
+   * opened while a table was a row — that one dialled a server first — and the
+   * Database panel has its own window now.
+   */
+  open: () => Promise<void>
 }
 
 /**
@@ -55,8 +56,8 @@ type Entry = {
  * `available` is not `entries.length > 0`: the tab row has to hold still while
  * somebody types, and Files is empty until a query matches something. What
  * decides whether a tab is offered is whether the workspace has that kind of
- * thing at all — no database connected, no `Database` tab — while what is drawn
- * under it is still the query's own answer.
+ * thing at all — no chat started, no `Chats` tab — while what is drawn under it
+ * is still the query's own answer.
  */
 type Group = {
   kind: string
@@ -68,18 +69,22 @@ type Group = {
 /** The tab that narrows to nothing, always first. */
 const ALL = "all"
 
-type Notice = { tone: "muted" | "destructive"; text: string }
+/** The line under the input, for an open that is taking long enough to say so. */
+type Notice = { text: string }
 
 /**
  * Search the workspace, and open what comes back.
  *
- * The studio has one strip of tabs and six sidebars, so the thing being looked
- * for is only ever a few clicks away — but only if the rail is already on the
- * section that lists it. A table in a database whose branch is collapsed, a
- * request three folders deep and a note filed last week are each a trip through
- * a panel the user is not currently in, and none of them is the panel they
- * would go back to afterwards. This is the way in that does not move the
- * sidebar: type a name, get the tab.
+ * The studio has one strip of tabs and two columns, so the thing being looked
+ * for is only ever a few clicks away — but only if the column already has it on
+ * screen. A file nobody has expanded a folder of, a chat from last week and
+ * another project's board are each a trip through a list the user is not
+ * currently in, and none of them is where they would go back to afterwards.
+ * This is the way in that does not move the columns: type a name, get the tab.
+ *
+ * Database and API are not in it, and that is not an oversight: both panels
+ * open in a window of their own, and neither is a pane this window draws — see
+ * `PANES` in `lib/store.ts`.
  *
  * It opens things and nothing more. There is no "commands" half — a palette
  * that also ran actions would be the second place every action is spelled out,
@@ -117,7 +122,7 @@ export function CommandPalette() {
       open={open}
       onOpenChange={setOpen}
       title="Go to"
-      description="Search the workspace's files, tables, requests, sessions and notes."
+      description="Search the workspace's files, chats and boards."
       className="sm:max-w-xl"
     >
       {/* A child of the dialog, so the stores below are subscribed to
@@ -150,9 +155,9 @@ function Palette({ onOpened }: { onOpened: () => void }) {
    */
   const [tab, setTab] = useState(ALL)
   const tabs = groups.filter((group) => group.available)
-  // A tab whose kind has just left the workspace — the last database
-  // disconnected while the palette was open — would otherwise filter every row
-  // away with no tab lit to say why.
+  // A tab whose kind has just left the workspace — the last chat closed while
+  // the palette was open — would otherwise filter every row away with no tab
+  // lit to say why.
   const active = tabs.some((group) => group.kind === tab) ? tab : ALL
   // A heading with nothing under it reads as something having failed to load;
   // cmdk hides a group whose rows are all filtered out, but not one that never
@@ -170,23 +175,16 @@ function Palette({ onOpened }: { onOpened: () => void }) {
 
   async function run(entry: Entry) {
     /*
-     * Every panel's own `select` is synchronous. The exception is a table in a
-     * database the workspace is not on: that one dials a server first, and can
-     * fail with a connection error nothing else here would show — the tree's
-     * "unreachable" dialog belongs to the tree. The wait is so the usual case,
-     * which resolves in a microtask, never flashes a line it did not need.
+     * A chat and a board are a `select` on a store; a file is a read, which is
+     * usually a microtask and occasionally a large file off a slow disk. The
+     * wait is so the usual case never flashes a line it did not need.
      */
     const waiting = setTimeout(() => {
-      setNotice({ tone: "muted", text: `Opening ${entry.label}…` })
+      setNotice({ text: `Opening ${entry.label}…` })
     }, 150)
 
-    const failure = await entry.open()
+    await entry.open()
     clearTimeout(waiting)
-
-    if (failure) {
-      setNotice({ tone: "destructive", text: failure })
-      return
-    }
     onOpened()
   }
 
@@ -207,7 +205,7 @@ function Palette({ onOpened }: { onOpened: () => void }) {
     >
       <CommandInput
         autoFocus
-        placeholder="Search files, tables, requests, sessions and notes…"
+        placeholder="Search files, chats and boards…"
         // A failure is about the row that was picked, so the next keystroke —
         // which is on the way to picking another one — is what clears it.
         onValueChange={(value) => {
@@ -241,22 +239,13 @@ function Palette({ onOpened }: { onOpened: () => void }) {
       )}
 
       {notice && (
-        <p
-          className={cn(
-            "px-3 pt-2 text-xs",
-            notice.tone === "destructive"
-              ? "text-destructive"
-              : "text-muted-foreground"
-          )}
-        >
-          {notice.text}
-        </p>
+        <p className="px-3 pt-2 text-xs text-muted-foreground">{notice.text}</p>
       )}
 
       <CommandList className="max-h-[min(60vh,24rem)]">
         <CommandEmpty className="text-muted-foreground">
           {tabs.length === 0
-            ? "Nothing to open yet. Connect a database, add a request or write a note."
+            ? "Nothing to open yet. Connect a database or add a request."
             : "No match."}
         </CommandEmpty>
 
@@ -302,7 +291,7 @@ function Palette({ onOpened }: { onOpened: () => void }) {
  *
  * The row's `value` is deliberately not scored. It is an id, and cmdk offers no
  * way to filter on keywords alone, so a query of hex letters ("cafe", "dad")
- * would otherwise match whichever note's uuid happened to contain them.
+ * would otherwise match whichever request's uuid happened to contain them.
  */
 function score(_value: string, search: string, keywords?: string[]): number {
   return Math.max(
@@ -317,11 +306,7 @@ function score(_value: string, search: string, keywords?: string[]): number {
  *
  * Read from the panels' own stores rather than from anything kept for this:
  * what the palette lists is what the panels would list, and a second index
- * would be one more thing to hold in step with them. The one consequence worth
- * knowing is that a database's tables are searchable once its branch has been
- * read — before that nothing on this machine knows their names, and reading
- * every database on the chance that ⌘D is pressed would dial every server the
- * workspace has.
+ * would be one more thing to hold in step with them.
  *
  * Files are the exception, and are an index — the only one. A folder's files
  * are not a list any store holds: the Explorer's tree is what has been expanded,
@@ -352,19 +337,10 @@ function useEntries(query: string): Group[] {
     void loadIndex()
   }, [loadIndex])
 
-  const databases = useDatabases((state) => state.databases)
-  const branches = useDbTree((state) => state.branches)
-
-  const requests = useApi((state) => state.requests)
-  const apiFolders = useApi((state) => state.folders)
-
   const chats = useWorktreeChats((state) => state.chats)
   const boardCards = useBoard((state) => state.cards)
   const boardColumns = useBoard((state) => state.columns)
   const folders = useStudio((state) => state.folders)
-
-  const notes = useNotes((state) => state.notes)
-  const noteFolders = useNotes((state) => state.folders)
 
   return useMemo(() => {
     const fileEntries: Entry[] = shortlist(files, query).map((entry) => {
@@ -393,55 +369,6 @@ function useEntries(query: string): Group[] {
           // generally wants to see what is beside it.
           await useFiles.getState().open(entry.path)
           void useFiles.getState().reveal(entry.path)
-          return null
-        },
-      }
-    })
-
-    const tables: Entry[] = databases.flatMap((database) =>
-      (branches[database.id]?.relations ?? []).map((relation) => {
-        const Icon = KIND_ICONS[relation.kind]
-        const name = `${relation.schema}.${relation.name}`
-        return {
-          value: `${PREFIX.database}${database.id}:${name}`,
-          label: name,
-          hint: database.name,
-          keywords: [name, relation.name, database.name],
-          icon: <Icon className="size-3.5 shrink-0" />,
-          // Moves the workspace to the table's own database first, which is
-          // why this is the one entry that can fail.
-          open: () => useDbTree.getState().open(database, relation),
-        }
-      })
-    )
-
-    const apiEntries: Entry[] = requests.map((request) => {
-      const folder = apiFolders.find(
-        (candidate) => candidate.id === request.folderId
-      )
-      return {
-        value: PREFIX.api + request.id,
-        label: request.name,
-        hint: request.url,
-        keywords: [
-          request.name,
-          request.url,
-          request.method,
-          ...(folder ? [folder.name] : []),
-        ],
-        icon: (
-          <span
-            className={cn(
-              "shrink-0 font-mono text-[0.6rem] font-semibold",
-              METHOD_TONES[request.method] ?? "text-muted-foreground"
-            )}
-          >
-            {request.method}
-          </span>
-        ),
-        open: async () => {
-          useApi.getState().select(request.id)
-          return null
         },
       }
     })
@@ -463,7 +390,6 @@ function useEntries(query: string): Group[] {
         icon: <MessageSquare className="size-3.5 shrink-0" />,
         open: async () => {
           useWorktreeChats.getState().select(chat.id)
-          return null
         },
       }
     })
@@ -487,24 +413,6 @@ function useEntries(query: string): Group[] {
         icon: <Columns3 className="size-3.5 shrink-0" />,
         open: async () => {
           useBoard.getState().open(folder.id)
-          return null
-        },
-      }
-    })
-
-    const noteEntries: Entry[] = notes.map((note) => {
-      const folder = noteFolders.find(
-        (candidate) => candidate.id === note.folderId
-      )
-      return {
-        value: PREFIX.note + note.id,
-        label: note.name,
-        hint: folder?.name,
-        keywords: [note.name, ...(folder ? [folder.name] : [])],
-        icon: <FileText className="size-3.5 shrink-0" />,
-        open: async () => {
-          useNotes.getState().select(note.id)
-          return null
         },
       }
     })
@@ -527,18 +435,13 @@ function useEntries(query: string): Group[] {
         entries: fileEntries,
         available: files.length > 0,
       },
-      {
-        kind: "database",
-        heading: "Database",
-        entries: tables,
-        available: databases.length > 0,
-      },
-      {
-        kind: "api",
-        heading: "API",
-        entries: apiEntries,
-        available: apiEntries.length > 0,
-      },
+      /*
+       * No `Database` or `API` group. Both panels open in a window of their own
+       * and neither is a pane the studio draws any more (`PANES` in
+       * `lib/store.ts` says why), so a row here would select a tab into a strip
+       * that never shows it — found, opened, and invisible. Each window has its
+       * own list down its left side, which is the way in that is still there.
+       */
       {
         kind: "chats",
         heading: "Chats",
@@ -551,27 +454,8 @@ function useEntries(query: string): Group[] {
         entries: boardEntries,
         available: boardEntries.length > 0,
       },
-      {
-        kind: "notes",
-        heading: "Notes",
-        entries: noteEntries,
-        available: noteEntries.length > 0,
-      },
     ]
 
     return all
-  }, [
-    files,
-    query,
-    databases,
-    branches,
-    requests,
-    apiFolders,
-    chats,
-    folders,
-    boardCards,
-    boardColumns,
-    notes,
-    noteFolders,
-  ])
+  }, [files, query, chats, folders, boardCards, boardColumns])
 }

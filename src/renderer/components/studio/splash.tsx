@@ -152,9 +152,9 @@ function Mark() {
         style={step(0)}
         className="relative flex h-32 w-52 animate-settle overflow-hidden rounded-xl border bg-muted shadow-2xl"
       >
-        {/* The left column, and the hues that are the app's own colours: four
-            folding sections — the projects, the databases, the notes and the
-            saved requests — which is what the workspace holds. */}
+        {/* The left column, and the hues that are the app's own colours: the
+            projects, the databases and the saved requests — which is what the
+            workspace holds. */}
         <div className="flex w-11 shrink-0 flex-col gap-1.5 border-r p-2">
           {HUES.map((hue, index) => (
             <span key={hue} className="flex items-center gap-1">

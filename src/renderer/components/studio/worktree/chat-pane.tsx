@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from "react"
+import { Archive } from "lucide-react"
 
 import {
   chatOptions,
@@ -138,6 +139,9 @@ function Conversation({
   const sending = useWorktreeChats((state) => state.sending.includes(chatId))
   const startedAt = useWorktreeChats((state) => state.startedAt[chatId])
   const context = useWorktreeChats((state) => state.context[chatId])
+  const contextWindow = useWorktreeChats((state) => state.window[chatId])
+  const compacting = useWorktreeChats((state) => state.compacting[chatId])
+  const compactError = useWorktreeChats((state) => state.compactError[chatId])
   const ask = useWorktreeChats((state) => state.asks[chatId])
   const send = useWorktreeChats((state) => state.send)
   const stop = useWorktreeChats((state) => state.stop)
@@ -354,6 +358,36 @@ function Conversation({
             {ask && (
               <ChatAsk ask={ask} onAnswer={(given) => answer(chatId, given)} />
             )}
+            {/*
+              Compaction, which is a state and never a percentage.
+
+              An indeterminate row on purpose: the CLI reports `compacting` and
+              then not, because one summarisation call has no fraction of itself
+              to report. A determinate bar here would be an animation pretending
+              to measure something — what *is* measurable is the window either
+              side, which lands as the `compact` line above and moves the meter
+              in the composer.
+
+              Above the turn's own spinner, since compaction happens to the
+              conversation rather than as part of the answer.
+            */}
+            {compacting && (
+              <div className="flex items-center gap-2 px-1 text-[0.7rem] text-muted-foreground">
+                <Archive className="size-3 shrink-0 animate-pulse" />
+                <span>Compacting the conversation…</span>
+              </div>
+            )}
+            {/* Kept until the next compaction starts: a failure that vanished
+                with the spinner would leave a window that never shrank and no
+                reason on screen for it. */}
+            {!compacting && compactError && (
+              <div className="flex items-center gap-2 px-1 text-[0.7rem] text-destructive">
+                <Archive className="size-3 shrink-0" />
+                <span className="truncate">
+                  Could not compact: {compactError}
+                </span>
+              </div>
+            )}
             {/* Not while a question is up — the turn is held, not working, and
                 a spinner under the card would say otherwise. */}
             {sending && !ask && <ChatSkeleton startedAt={startedAt} />}
@@ -395,6 +429,11 @@ function Conversation({
             options={options}
             onOptions={(next) => setOptions(chatId, next)}
             attachRoot={root}
+            // The id rather than the path, because main resolves it: a command
+            // set is per directory, and which directory a project is in is the
+            // store's to say — see `agentCommands`.
+            folderId={place?.folderId ?? null}
+            contextWindow={contextWindow}
           />
 
           {/* Said plainly rather than left implicit: a turn here edits files

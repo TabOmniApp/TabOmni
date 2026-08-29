@@ -189,7 +189,26 @@ export function BoardPane() {
         A fixed column width and a horizontal scrollbar is what every board does,
         and for this reason.
       */}
-      <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto p-2">
+      <div
+        // The row's own `gap-2` gutters belong to no column, and neither does
+        // the padding around them — without a handler here the browser refuses
+        // a drop let go between two columns, which is exactly where a hand
+        // aiming *between* them stops. The target is the last one a column
+        // reported, 8px away. Every drop that lands on a column stops before
+        // reaching this, or it would be applied twice.
+        onDragOver={(event) => {
+          if (!drag) return
+          event.preventDefault()
+        }}
+        onDrop={(event) => {
+          if (!drag) return
+          event.preventDefault()
+          if (draggingColumn) dropColumn(columnTarget ?? columns.length)
+          else if (target) dropCard(target.column)
+          else endDrag()
+        }}
+        className="flex min-h-0 flex-1 gap-2 overflow-x-auto p-2"
+      >
         {columns.map((column, at) => {
           const own = cardsOf(cards, allColumns, folderId, column.id)
           const tone = BOARD_TONES[toneOf(column.tone)]
@@ -218,6 +237,9 @@ export function BoardPane() {
                 }}
                 onDrop={(event) => {
                   event.preventDefault()
+                  // The row behind this one catches the gutters; a drop that
+                  // reached a column is already answered here.
+                  event.stopPropagation()
                   if (draggingColumn) dropColumn(at)
                   else dropCard(column.id)
                 }}
@@ -358,6 +380,7 @@ export function BoardPane() {
           onDrop={(event) => {
             if (!draggingColumn) return
             event.preventDefault()
+            event.stopPropagation()
             dropColumn(columns.length)
           }}
           className="flex shrink-0 items-start gap-2 pt-0"

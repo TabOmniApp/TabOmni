@@ -22,19 +22,17 @@ import { BlockEditor, type Editor } from "../note/block-editor"
 import { RAW_HTML_BLOCK } from "../note/raw-html-block"
 
 /**
- * A `.note` or a `.md`, in the Notes panel's own block editor.
+ * A `.note` or a `.md`, in the block editor.
  *
- * The same `BlockEditor` the Notes panel mounts, so there is one prose editor in
- * the studio and one slash menu to keep in step — what differs is where the
- * document lives and what it is written back as. A note in the Notes panel is a
- * record under `~/.tabomni` that the notes store writes as it is typed; these
- * are files in one of the workspace's folders, so they go through the files
- * store like every other tab: typing marks it dirty, ⌘S and the header's Save
- * write it, and closing the tab flushes it. That is the Explorer's bargain
- * rather than the Notes panel's, and it is the right one here — the file is in
- * somebody's repository, beside their source, and a rich-text pane that wrote to
- * it on every keystroke would be committing to their working tree while they
- * thought.
+ * **The only thing left that mounts `BlockEditor`.** It came from the Notes
+ * panel, which kept a record under `~/.tabomni` and wrote it as it was typed;
+ * that panel is gone (`docs/design.md` § Notes, removed) and what it left is
+ * this — a file in one of the workspace's folders, going through the files store
+ * like every other tab: typing marks it dirty, ⌘S and the header's Save write
+ * it, and closing the tab flushes it. That is the Explorer's bargain, and it is
+ * the right one here — the file is in somebody's repository, beside their
+ * source, and a rich-text pane that wrote to it on every keystroke would be
+ * committing to their working tree while they thought.
  *
  * **The two files are not the same bargain, though, and the difference is worth
  * knowing before choosing this over the text editor.** A `.note` holds the

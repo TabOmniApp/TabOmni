@@ -1,16 +1,9 @@
 import { BlockNoteEditor } from "@blocknote/core"
 
-import type { NoteBody } from "@shared/api"
-import { adoptDrawingFences, parseBody, type NoteBlock } from "./blocks"
+import { adoptDrawingFences, type NoteBlock } from "./blocks"
 
 /**
- * Reading a note an older build wrote.
- *
- * Notes were markdown until BlockNote replaced Milkdown, and the ones already
- * on disk are converted the first time they are opened rather than in a pass
- * over the whole directory at startup — a migration that has to be right about
- * every note before the user has opened any of them is a migration that fails
- * loudly at the worst moment.
+ * Reading markdown as blocks.
  *
  * The parser is BlockNote's own, which means an editor: `tryParseMarkdownToBlocks`
  * is a method rather than a function, and there is no lighter way in. One is
@@ -20,12 +13,12 @@ import { adoptDrawingFences, parseBody, type NoteBlock } from "./blocks"
 let parser: BlockNoteEditor | null = null
 
 /**
- * The blocks a markdown note becomes.
+ * The blocks a markdown document becomes.
  *
- * The default schema, not the notes panel's: a fence is a code block to any
+ * The default schema, not the editor's own: a fence is a code block to any
  * parser, and `adoptDrawingFences` is what turns the drawing ones back into
  * drawing blocks afterwards. Keeping the drawing block out of here is what
- * keeps this file — and so the store — clear of the component layer.
+ * keeps this file clear of the component layer.
  *
  * `drawings: false` leaves the fences as the code blocks they parsed to. That
  * is for a `.md` in one of the workspace's folders, which the block editor
@@ -40,11 +33,4 @@ export function blocksFromMarkdown(
   parser ??= BlockNoteEditor.create()
   const blocks = parser.tryParseMarkdownToBlocks(markdown) as NoteBlock[]
   return drawings ? adoptDrawingFences(blocks) : blocks
-}
-
-/** Whichever of the two formats came back, as blocks. */
-export function blocksOf(body: NoteBody): NoteBlock[] {
-  return body.format === "markdown"
-    ? blocksFromMarkdown(body.text)
-    : parseBody(body.text)
 }

@@ -345,6 +345,32 @@ export function removedChunkAt(
   return modelOf(state).removed.get(pos) ?? null
 }
 
+/**
+ * The same map read the other way: where the chunk holding one line of the
+ * commit sits in this document.
+ *
+ * For the one caller that has a line number and needs a position — the review's
+ * inline threads, which have to attach a block widget beneath a comment on
+ * **deleted** lines. Those rows are inside another widget and are not addressable
+ * as document positions, so the nearest thing that is, is the chunk's own
+ * position: the widget lands directly under the rows it is about.
+ *
+ * A linear scan, which is what the shape allows and what the size makes fine: a
+ * file's removed chunks number in the tens, and this is asked once per thread per
+ * redraw of the decorations rather than once per row.
+ */
+export function removedChunkOf(
+  state: EditorState,
+  oldLine: number
+): { pos: number; firstOld: number; lines: number } | null {
+  for (const [pos, chunk] of modelOf(state).removed) {
+    if (oldLine >= chunk.firstOld && oldLine < chunk.firstOld + chunk.lines) {
+      return { pos, ...chunk }
+    }
+  }
+  return null
+}
+
 function rangeOf(first: number, count: number) {
   return Array.from({ length: count }, (_, at) => first + at)
 }
@@ -413,8 +439,28 @@ const hunkBlankSign = new Cell("", SIGN, "cm-diffCell-hunk")
  * collapsed region — so not being the first is being the second.
  */
 function isHunkBar(model: DiffModel, block: BlockInfo): boolean {
+  // Elimination only works over the widgets this module knows about, and the
+  // review's inline threads are a third kind it does not — see `FOREIGN_WIDGET`.
+  if (block.widget && FOREIGN_WIDGET in block.widget) return false
   return !model.removed.has(block.from)
 }
+
+/**
+ * A block widget that belongs to somebody else.
+ *
+ * `isHunkBar` above identifies a collapsed region **by elimination**, which was
+ * exact while this configuration had two kinds of block widget and became wrong
+ * the moment the review added a third: a thread drawn under its lines is not a
+ * removed chunk, so every gutter here decided it was a collapsed bar and drew the
+ * expander beside it — a control that would have tried to uncollapse a region
+ * that is not there.
+ *
+ * A symbol on the widget rather than a class this module imports, because the
+ * import would go the wrong way: `review-marks.ts` already reads this file, and
+ * this file has no business knowing what a review is. Anything adding a block
+ * widget to a diff should carry it.
+ */
+export const FOREIGN_WIDGET: unique symbol = Symbol("not the diff's own widget")
 
 /**
  * The three columns down the left: old number, new number, `+`/`-`.
@@ -657,7 +703,36 @@ export function githubDiffTheme(isDark: boolean): Extension {
       },
       ".cm-diffSign-added": { color: sign.add },
       ".cm-diffSign-removed": { color: sign.del },
-      ".cm-diffRemovedCol": { display: "block" },
+      /*
+       * The columns beside a removed chunk, pinned to the slot rather than left
+       * to flow inside it.
+       *
+       * A removed chunk is **one** gutter element however many rows it draws, so
+       * this column has to line up with rows another piece of code laid out. It
+       * was `display: block` and nothing else, which left two things to chance:
+       * where the column sits inside a slot taller than its content, and how tall
+       * each row is. Both were usually right and visibly wrong when they were not
+       * — the `−` signs drawn a whole row below the lines they belong to, with the
+       * numbers beside them correct, since a number cell and a sign cell resolve
+       * their line boxes differently.
+       *
+       * `alignSelf: stretch` makes the column start at the top of the slot rather
+       * than wherever the gutter's own alignment puts it, and an explicit `height`
+       * per row stops a row's height depending on the glyph in it. That is what
+       * `.cm-reviewRemovedCol` has always done, which is why the review column's
+       * marks lined up beside signs that did not — the same slot, one column with
+       * its geometry stated and one without.
+       */
+      ".cm-diffRemovedCol": {
+        display: "block",
+        alignSelf: "stretch",
+        width: "100%",
+      },
+      ".cm-diffRemovedCol > *": {
+        display: "block",
+        height: `${DIFF_ROW_HEIGHT}px`,
+        lineHeight: `${DIFF_ROW_HEIGHT}px`,
+      },
 
       // An added line, tinted from the sign column across. No inner highlight:
       // the merge extension's word-level marks are off (`highlightChanges`), for

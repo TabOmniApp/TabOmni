@@ -24,7 +24,6 @@ import { nameOf } from "@/lib/files/paths"
 import { isImage, isNote } from "@/lib/files/viewers"
 import { groupRootId } from "@/lib/panels"
 import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
-import { useNotes } from "@/lib/note/store"
 import { relationId, useTabGroups } from "@/lib/panels"
 import { useStudio, type Pane } from "@/lib/store"
 import { groupTabId, PREFIX } from "@/lib/tabs"
@@ -53,10 +52,6 @@ export function useTabItems(): Map<string, TabStripItem> {
 
   const databaseId = useExplorer((state) => state.databaseId)
   const dbTabs = useExplorer((state) => state.openTabs)
-
-  const notes = useNotes((state) => state.notes)
-  const noteFolders = useNotes((state) => state.folders)
-  const noteOpenIds = useNotes((state) => state.openIds)
 
   const chats = useWorktreeChats((state) => state.chats)
   const chatOpenIds = useWorktreeChats((state) => state.openIds)
@@ -254,17 +249,6 @@ export function useTabItems(): Map<string, TabStripItem> {
     })
   }
 
-  for (const id of noteOpenIds) {
-    const note = notes.find((candidate) => candidate.id === id)
-    if (!note) continue
-    add({
-      id: PREFIX.note + id,
-      label: note.name,
-      icon: <FileText className="size-3.5 shrink-0" />,
-      title: note.name,
-    })
-  }
-
   /*
    * And the folders' own tabs, for whichever panels are grouping.
    *
@@ -280,11 +264,7 @@ export function useTabItems(): Map<string, TabStripItem> {
     const front = items.get(PREFIX[pane] + shown) ?? memberItems[0]
     if (!front) continue
 
-    const name = groupName(pane, group, {
-      workspaceFolders,
-      apiFolders,
-      noteFolders,
-    })
+    const name = groupName(pane, group, { workspaceFolders, apiFolders })
 
     add({
       id: groupTabId(pane, group),
@@ -314,7 +294,6 @@ function groupName(
   lists: {
     workspaceFolders: { id: string; name: string }[]
     apiFolders: { id: string; name: string }[]
-    noteFolders: { id: string; name: string }[]
   }
 ): string {
   // A schema is its own name rather than a record to look up — the Database
@@ -334,7 +313,6 @@ function groupName(
   const found = {
     files: lists.workspaceFolders,
     api: lists.apiFolders,
-    note: lists.noteFolders,
     database: [],
     // `Changes` has no `groupOf` either, for the reason a chat's group is
     // never reached: there is one of these per project already.
@@ -371,8 +349,8 @@ function iconOf(filePath: string) {
     return <img src={url} alt="" aria-hidden className="size-3.5 shrink-0" />
   }
   if (isImage(filePath)) return <Image className="size-3.5 shrink-0" />
-  // The glyph the Notes panel's own tabs carry, since a `.note` tab is the
-  // same editor over a file instead of over a record.
+  // A `.note` is the block editor over a file, and this is the glyph that
+  // says so.
   if (isNote(filePath)) return <FileText className="size-3.5 shrink-0" />
   return <File className="size-3.5 shrink-0" />
 }

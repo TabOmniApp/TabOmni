@@ -1,5 +1,3 @@
-import { drawingIdsIn, mapDrawingIds, type NoteBlock } from "./blocks"
-
 /**
  * The drawings a note's blocks point at.
  *
@@ -53,7 +51,7 @@ export function onDrawingChanged(listener: (id: string) => void): () => void {
 
 /**
  * Subscribes to edit requests — what a block's Edit button raises and the
- * Notes panel answers by opening the dialog.
+ * block editor answers by opening the dialog.
  *
  * An event rather than a callback passed down: the button is inside a node view
  * that Milkdown built, several layers below any React component that could have
@@ -149,41 +147,4 @@ async function exportDrawing(id: string, scene: DrawingScene): Promise<void> {
   } catch (error) {
     console.error("Could not export the drawing", error)
   }
-}
-
-/**
- * Copies every drawing a note refers to and rewrites the note to point at the
- * copies — what duplicating a note has to do.
- *
- * Without it the copy and the original would share scenes, so editing the copy
- * would change the original and deleting either would take the other's drawings
- * with it.
- *
- * Which drawings those are is read back out of the document rather than tracked
- * alongside it, because the document is the record: a block deleted with
- * backspace and an undo that brings it back are both answered by looking at
- * what the note actually says now. `drawingIdsIn` in `blocks.ts` is that read;
- * it used to be a regular expression over ```drawing fences and is now a walk,
- * which is the same question asked of a document that is no longer text.
- */
-export async function cloneDrawings(blocks: NoteBlock[]): Promise<NoteBlock[]> {
-  const ids = drawingIdsIn(blocks)
-  if (ids.length === 0) return blocks
-
-  const copies = new Map<string, string>()
-  for (const id of ids) {
-    const scene = await loadDrawing(id)
-    const cloneId = newDrawingId()
-    await saveDrawing(cloneId, scene)
-    copies.set(id, cloneId)
-  }
-
-  return mapDrawingIds(blocks, (id) => copies.get(id) ?? id)
-}
-
-/** Forgets what is cached for drawings that have been deleted. */
-export async function deleteDrawings(ids: string[]): Promise<void> {
-  if (ids.length === 0) return
-  for (const id of ids) cache.delete(id)
-  await window.desktop.deleteDrawings(ids)
 }

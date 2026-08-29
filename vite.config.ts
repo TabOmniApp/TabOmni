@@ -19,8 +19,8 @@ const EXCALIDRAW_FONTS = fileURLToPath(
  * Excalidraw resolves them against `window.EXCALIDRAW_ASSET_PATH` and falls
  * back to esm.sh when that is unset — which is a desktop app quietly reaching
  * the network for a drawing the user has open on a plane, and a set of glyph
- * widths that changes depending on whether it got there. The Notes panel points
- * that variable at `./excalidraw/`, and this puts the files behind it: read
+ * widths that changes depending on whether it got there. The block editor
+ * points that variable at `./excalidraw/`, and this puts the files behind it: read
  * straight out of `node_modules` in dev, emitted into the bundle for a build.
  *
  * Its own plugin rather than a copy into `public/`: `public/` is checked in, and

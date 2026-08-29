@@ -3,6 +3,7 @@ import {
   formatTokens,
   insertMention,
   markMentions,
+  mentionOf,
   mentionQuery,
   pathMentions,
   rankPlainMentions,
@@ -14,11 +15,11 @@ import { check, finish, section } from "./harness"
 /**
  * What `@` does in a chat's composer.
  *
- * Nothing is rewritten on the way out — the path picked is the path sent — so
- * what is worth testing is the things that are silent when they are wrong:
+ * Nothing is rewritten on the way out — `@` and the path picked are what is sent
+ * — so what is worth testing is the things that are silent when they are wrong:
  * which text opens a menu (an email address must not), which paths a filter
  * finds, what a folder claims it would cost, and which runs are tinted. A tint
- * on the wrong run claims the workspace holds a file it does not.
+ * on the wrong run claims a word was meant as a file when it was not.
  */
 
 const file = (relative: string, bytes = 400): IndexedPath => ({
@@ -65,13 +66,17 @@ const draft = "why is @ipc slow?"
 const caret = "why is @ipc".length
 const query = mentionQuery(draft, caret)
 const picked = query
-  ? insertMention(draft, query, caret, "src/main/ipc.ts")
+  ? insertMention(draft, query, caret, mentionOf("src/main/ipc.ts"))
   : null
 
-check("the @query is gone", picked?.text === "why is src/main/ipc.ts slow?")
+check(
+  "the filter is replaced and the @ kept",
+  picked?.text === "why is @src/main/ipc.ts slow?",
+  picked?.text
+)
 check(
   "the caret lands at the end of the path",
-  picked?.caret === "why is src/main/ipc.ts".length
+  picked?.caret === "why is @src/main/ipc.ts".length
 )
 
 const midSentence = mentionQuery("why is @ipc", "why is @ipc".length)
@@ -82,15 +87,24 @@ check(
         "why is @ipc slow?",
         midSentence,
         "why is @ipc".length,
-        "src/main/ipc.ts"
-      ).text === "why is src/main/ipc.ts slow?"
+        mentionOf("src/main/ipc.ts")
+      ).text === "why is @src/main/ipc.ts slow?"
     : false
 )
 
 const only = mentionQuery("@", 1)
 check(
-  "a bare @ becomes the path",
-  only ? insertMention("@", only, 1, "README.md").text === "README.md " : false
+  "a bare @ becomes the mention",
+  only
+    ? insertMention("@", only, 1, mentionOf("README.md")).text === "@README.md "
+    : false
+)
+
+check(
+  "a label already carrying its own sigil is inserted as it stands",
+  only
+    ? insertMention("@", only, 1, "@claude-review").text === "@claude-review "
+    : false
 )
 
 section("a row says what it would cost")
@@ -133,7 +147,7 @@ check(
   pathMentions([file("README.md", 2000)])[0]?.detail === "~500 tokens"
 )
 
-section("what is tinted is a path the workspace holds")
+section("what is tinted is an @path the workspace holds")
 
 const known = [row("src/main/ipc.ts"), row("src/main", "directory")]
 const tinted = (text: string) =>
@@ -147,44 +161,55 @@ check(
   untouched.length === 1 && untouched[0]?.kind === null
 )
 check(
-  "a path in a sentence",
-  tinted("is src/main/ipc.ts big?")[0] === "src/main/ipc.ts"
+  "a mention in a sentence, sigil and all",
+  tinted("is @src/main/ipc.ts big?")[0] === "@src/main/ipc.ts",
+  tinted("is @src/main/ipc.ts big?")
 )
 check(
-  "a path at the end of a sentence keeps its full stop out of it",
-  tinted("look at src/main/ipc.ts.")[0] === "src/main/ipc.ts"
+  "the same path without the @ is just a word",
+  tinted("is src/main/ipc.ts big?").length === 0,
+  tinted("is src/main/ipc.ts big?")
 )
 check(
-  "a path in brackets is still a path",
-  tinted("(src/main/ipc.ts)")[0] === "src/main/ipc.ts"
+  "so a folder's name used as a word is left alone",
+  markMentions("rewrite the main flow", [row("main", "directory")]).length === 1
+)
+check(
+  "a mention at the end of a sentence keeps its full stop out of it",
+  tinted("look at @src/main/ipc.ts.")[0] === "@src/main/ipc.ts"
+)
+check(
+  "a mention in brackets is still a mention",
+  tinted("(@src/main/ipc.ts)")[0] === "@src/main/ipc.ts"
 )
 check(
   "a path is not a prefix of a longer one",
-  tinted("src/main/ipc.ts.map").length === 0,
-  tinted("src/main/ipc.ts.map")
+  tinted("@src/main/ipc.ts.map").length === 0,
+  tinted("@src/main/ipc.ts.map")
 )
 check(
   "a folder is not the file under it",
-  markMentions("src/main/ipc.ts", known)[0]?.kind === "file"
+  markMentions("@src/main/ipc.ts", known)[0]?.kind === "file"
 )
 check(
   "the folder tints as a folder",
-  markMentions("src/main", known)[0]?.kind === "directory"
+  markMentions("@src/main", known)[0]?.kind === "directory"
 )
-check("matching is case-sensitive", tinted("see SRC/MAIN/IPC.TS").length === 0)
+check("matching is case-sensitive", tinted("see @SRC/MAIN/IPC.TS").length === 0)
 check(
   "twice in one line",
-  tinted("src/main/ipc.ts, then src/main/ipc.ts").length === 2
+  tinted("@src/main/ipc.ts, then @src/main/ipc.ts").length === 2
 )
 check(
   "the runs put the text back together",
-  markMentions("a src/main/ipc.ts b", known)
+  markMentions("a @src/main/ipc.ts b", known)
     .map((segment) => segment.text)
-    .join("") === "a src/main/ipc.ts b"
+    .join("") === "a @src/main/ipc.ts b"
 )
 check(
-  "a one-character path would tint every letter, so it does not",
-  markMentions("a b c", [row("a")]).length === 1
+  "a one-character path is a mention now that it needs its @",
+  markMentions("a @a c", [row("a")]).length === 3,
+  markMentions("a @a c", [row("a")])
 )
 check("an empty draft is one empty run", markMentions("", known).length === 1)
 

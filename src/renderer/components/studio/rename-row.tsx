@@ -9,8 +9,7 @@ import { SIDE_ROW_SHAPE, sideRowIndent } from "./side-row"
  * place, the way every editor's tree does it.
  *
  * Every list in the studio renames this way — the Explorer's files and
- * directories, the notes and their folders, the saved requests and theirs, and a
- * session. It used to be a dialog for all of them, which asked for the one thing
+ * directories, the saved requests and their folders, and a session. It used to be a dialog for all of them, which asked for the one thing
  * the row was already showing, in a box over the top of it. What is still a
  * dialog is the two renames that are not a row's own name: a workspace folder,
  * whose name is the studio's label and not the directory on disk and which needs

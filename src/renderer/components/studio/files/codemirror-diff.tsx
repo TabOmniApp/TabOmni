@@ -186,15 +186,18 @@ export default function CodeMirrorFileDiff({
               side,
               removals,
               overlay,
-              pick: (line, extend, at) =>
-                useReview
-                  .getState()
-                  .pick({ rootId, path, side: at }, line, extend),
-              drag: (anchor, line, at) =>
-                useReview
-                  .getState()
-                  .stretch({ rootId, path, side: at }, anchor, line),
+              // The anchor arrives worked out, both sides of it: only the editor
+              // can say which rows a gesture crossed, and a run through a hunk
+              // crosses two files.
+              pick: (anchor) =>
+                useReview.getState().pick({ rootId, path }, anchor),
+              drag: (anchor) =>
+                useReview.getState().stretch({ rootId, path }, anchor),
               settle: () => useReview.getState().settle(),
+              // Where the range is on screen, so the composer can be drawn
+              // against it. Guarded in the store, since this arrives on every
+              // frame of a scroll.
+              locate: (spot) => useReview.getState().locate(spot),
             }),
           ]
 
@@ -364,12 +367,22 @@ export default function CodeMirrorFileDiff({
     for (const view of viewsRef.current) view.dispatch({ effects: marks })
   }, [threads, pending, path, reviewRootId, original, sideBySide, isDark])
 
-  /* The committed text, for the one thing a review cannot read off the buffer:
-   * a comment on a deleted line quotes lines that are only in the commit. See
-   * `committed` on the review store. */
+  /* Both texts, handed to the review.
+   *
+   * The commit is the one thing a review cannot read off the buffer — a comment
+   * on a deleted line quotes lines that are only there (see `committed` on the
+   * store) — and the working side is what a **kept** review is put back on: this
+   * fires when a file is shown, which is the one moment both halves exist, and
+   * `showing` re-anchors every thread in this file against them. */
   useEffect(() => {
     if (!reviewRootId) return
-    useReview.getState().showing(path, original ?? "")
+    useReview
+      .getState()
+      .showing(path, original ?? "", docTextOf(path) ?? initialText)
+    // `initialText` is the seed for a buffer that may already exist and is
+    // deliberately not a dependency anywhere in this file — the buffer is read
+    // here, not watched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, original, reviewRootId])
 
   useEffect(() => {

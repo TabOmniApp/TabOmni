@@ -7,10 +7,8 @@ import {
 } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
 
-import { useDatabases } from "@/lib/db/databases-store"
 import { useFiles } from "@/lib/files/store"
 import { watchExpandedDirectories } from "@/lib/files/watch"
-import { useNotes } from "@/lib/note/store"
 import { reconcileScope, useActiveTabId, useHasOpenTabs } from "@/lib/panels"
 import {
   isEditingRichText,
@@ -25,6 +23,7 @@ import { useProjects } from "@/lib/projects"
 import { useClaudeProfiles } from "@/lib/worktree-chat/claude-profiles"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
 import { useBoard } from "@/lib/board/store"
+import { useReview } from "@/lib/files/review"
 import { Dock } from "./dock"
 import { ProjectCrumbs } from "./project/project-crumbs"
 import { ProjectRail } from "./project/project-rail"
@@ -39,7 +38,6 @@ import { FileWorkspace } from "./files/file-workspace"
 import { DatabaseWorkspace } from "./db/database-workspace"
 import { AddFolderDialog } from "./add-folder-dialog"
 import { CommandPalette } from "./command-palette"
-import { NoteWorkspace } from "./note/note-workspace"
 import { NothingOpen } from "./nothing-open"
 import { SettingsDialog } from "./settings-dialog"
 import { SystemBar } from "./system-bar"
@@ -65,8 +63,6 @@ function paneView(pane: Pane) {
       return <DatabaseWorkspace />
     case "api":
       return <ApiWorkspace />
-    case "note":
-      return <NoteWorkspace />
     case "worktree":
       return <WorktreeChatPane />
     case "board":
@@ -87,15 +83,17 @@ export function Studio() {
 
   // Everything the studio holds belongs to the one workspace, so this is the
   // only moment it is read. The ones here rather than in their own panels are
-  // the ones that matter before the panel is opened: the databases feed the
-  // tree the app starts on, and a note or a file is the kind of thing whose
-  // *tab* can be restored onto a pane whose sidebar is not the one showing —
-  // the strip cannot draw a tab for something it has never read.
+  // the ones that matter before the panel is opened: a file is the kind of
+  // thing whose *tab* can be restored onto a pane whose list is not the one
+  // showing — the strip cannot draw a tab for something it has never read.
+  //
+  // The databases used to be read here too, for the tree the app started on.
+  // Nothing in this window lists them any more, and reading them put the
+  // Database panel's remembered tabs back into a strip that no longer draws
+  // them (`PANES`); `DatabaseWindow` does its own read.
   useEffect(() => {
     void useStudio.getState().init()
     void useSettings.getState().restore()
-    void useDatabases.getState().refresh()
-    void useNotes.getState().refresh()
     void useFiles.getState().restore()
     void useProjects.getState().restore()
     void useRun.getState().restore()
@@ -104,6 +102,10 @@ export function Studio() {
     // Before any board is opened: a project's tab carries how many cards it has
     // waiting, and the chat pane's chip asks which card a chat is the work of.
     void useBoard.getState().refresh()
+    // Before any diff is opened, for the same reason: the `Changes` bar counts a
+    // review across files nobody has looked at yet. Each thread is put back on
+    // its lines the first time its own file is shown — see `showing`.
+    void useReview.getState().load()
   }, [])
 
   // A run outlives the dock being closed and the tab being switched away from,
@@ -113,6 +115,10 @@ export function Studio() {
   // A chat's turn runs in the main process and outlives the
   // pane being switched away from, so its lines are subscribed to here.
   useEffect(() => useWorktreeChats.getState().listen(), [])
+
+  // A whole-diff review's own turn, the same way — its progress lines arrive
+  // whether or not the Changes pane happens to be on screen.
+  useEffect(() => useReview.getState().listen(), [])
 
   /*
    * The manifest is a small file on a local disk and usually lands well inside
@@ -195,7 +201,7 @@ function Workbench() {
   //
   // A panel is drawn only when it has a tab to draw: each one used to answer
   // "nothing selected" for itself, which meant whoever opened the app to read
-  // a note was told to pick a table, because `database` is the pane a fresh
+  // a request was told to pick a table, because `database` is the pane a fresh
   // launch starts on. Now the workbench says it once, in terms of the strip,
   // which is what the user is actually looking at.
   const shown = hasOpenTabs && activeTabId ? pane : null
@@ -362,11 +368,9 @@ function Workbench() {
         is shown — a panel nobody has opened is a connection nobody is reading.
 
         Everything they hold that their store does not is lost on a switch, and
-        a panel switched away from is coming back. Leaving Database for Notes
+        a panel switched away from is coming back. Leaving Database for API
         and returning gave a result grid scrolled back to the top, a SQL editor
-        with no undo history and the split at its default height; a note came
-        back as a fresh ProseMirror over the same text, with the caret at the
-        start.
+        with no undo history and the split at its default height.
 
         `invisible`, not `hidden`: `display: none` destroys the scrolling boxes
         inside, which would put that grid back at the top by another route —
@@ -417,8 +421,9 @@ function Workbench() {
         >
           {/*
             The workspace's own column: its projects, and the branches under
-            each. `Database`, `Notes` and `API` are hidden for now — see
-            `SIDEBAR_SECTIONS` in `lib/projects.ts`.
+            each. `Database` and `API` are hidden for now — see
+            `SIDEBAR_SECTIONS` in `lib/projects.ts`, and the footer's two
+            buttons, which open them in a window each.
           */}
           <ResizablePanel
             // The column's own widths, unchanged by the rail: it is positioned
@@ -534,9 +539,9 @@ function Workbench() {
 
               {/* No screen of its own for an empty workspace. A folder is what
                   Explorer lists and what the dock opens a shell in, and nothing
-                  else here is about one — the databases, the requests and the
-                  notes belong to the workspace — so a studio held shut until one
-                  is added would be holding back panels that had nothing to wait
+                  else here is about one — the databases and the requests
+                  belong to the workspace — so a studio held shut until one is
+                  added would be holding back panels that had nothing to wait
                   for. Adding one is a button in Explorer's own header, and the
                   File menu. */}
               <div className="flex min-h-0 flex-1">
@@ -707,7 +712,7 @@ function Workbench() {
                         className={cn(
                           "h-full overflow-hidden @max-[100px]:pointer-events-none @max-[100px]:opacity-0",
                           // The store for a click, the query for a drag — see
-                          // the left column's, which carries the note.
+                          // the left column's, which does the same.
                           !sidebar && "pointer-events-none opacity-0"
                         )}
                       >

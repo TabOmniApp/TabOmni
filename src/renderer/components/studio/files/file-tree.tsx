@@ -69,13 +69,16 @@ import {
   type Viewer,
 } from "@/lib/files/viewers"
 import { useProjects } from "@/lib/projects"
+import { useReview } from "@/lib/files/review"
 import { shownRootOf } from "@/lib/files/roots"
 import { useStudio, type ExplorerTab } from "@/lib/store"
+import { Claude } from "@/components/ui/svgs/claude"
 import { RenameDialog } from "../db/rename-dialog"
 import { IconButton } from "../icon-button"
 import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
 import { ChangesList } from "./changes-list"
+import { ReviewProgressDialog } from "./review-progress-dialog"
 
 /** What the right-click menu is about: a row in the tree, or the workspace
  * folder heading above one. */
@@ -200,6 +203,11 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
   const changed = changes === undefined ? undefined : changeCount(changes)
   useWatchChanges(shown)
 
+  /* Whether a review is already running, anywhere: one at a time across the
+   * app (`reviewAll`), so a second project's button is disabled by the first
+   * project's turn rather than pretending it can start one. */
+  const reviewing = useReview((state) => state.reviewing) !== null
+
   return (
     <ContextMenu>
       <div className="flex h-full flex-col">
@@ -226,6 +234,37 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           </div>
 
           <div className="flex shrink-0 items-center gap-0.5">
+            {/*
+              Review, on the tab the changed files are listed in.
+
+              Here rather than only in the diff pane's own bar, because that
+              bar lives under a file that has been picked — and a review is
+              the thing somebody wants *before* picking one, over the whole
+              pile. Drawn only when there is something to review, so the
+              header of `All files` is left as it was.
+            */}
+            {tab === "changes" &&
+              shown &&
+              changed !== undefined &&
+              changed > 0 && (
+                <IconButton
+                  label={
+                    reviewing
+                      ? "Claude is reviewing this checkout"
+                      : "Review every changed file with Claude"
+                  }
+                  disabled={reviewing}
+                  onClick={() => {
+                    void useReview.getState().reviewAll(shown.id, shown.path)
+                  }}
+                >
+                  {reviewing ? (
+                    <RotateCw className="animate-spin" />
+                  ) : (
+                    <Claude />
+                  )}
+                </IconButton>
+              )}
             {/* **Refresh, and nothing else.** The header is two tabs now and a
                 row of icons beside them is a row of icons nobody reads — every
                 other action here is on a menu over the thing it acts on, which
@@ -377,6 +416,11 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
             onClose={() => setRenamingFolder(null)}
           />
         )}
+
+        {/* What the button above opened. Mounted beside it rather than in the
+            diff pane, so a review started from here is watchable without a
+            file having been picked — see `ReviewProgressDialog`. */}
+        <ReviewProgressDialog />
       </div>
 
       {/* The empty space under the tree is **the root's** menu.

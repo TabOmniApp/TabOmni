@@ -16,7 +16,6 @@ const ACCENT_BY_TITLE: Record<string, Section> = {
   // and a title with a hue beside it is what they replaced.
   Database: "database",
   API: "api",
-  Notes: "note",
 }
 
 /**

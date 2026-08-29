@@ -99,28 +99,34 @@ export function ChangesPane() {
     )
   }
 
-  if (!path) {
-    return (
-      <Notice
-        title="Nothing selected"
-        detail={
-          count
-            ? "Pick a file under Changes in the Explorer to read what changed in it."
-            : "Nothing has changed in this checkout."
-        }
-      />
-    )
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1">
-        <FilePane
-          path={path}
-          visible={shown}
-          preferred="diff"
-          reviewRootId={root.id}
-        />
+        {/*
+          `ReviewPanel`'s own bar — `Review`, `Discard`, the comment count —
+          must not wait on a file being picked: it is the one thing that can
+          start a whole-diff review, and gating it behind a click defeats the
+          badge on the Changes tree that exists to say "look here without
+          opening anything first". So the pane still renders with nothing
+          selected, and only the diff itself is swapped for the notice.
+        */}
+        {path ? (
+          <FilePane
+            path={path}
+            visible={shown}
+            preferred="diff"
+            reviewRootId={root.id}
+          />
+        ) : (
+          <Notice
+            title="Nothing selected"
+            detail={
+              count
+                ? "Pick a file under Changes in the Explorer to read what changed in it."
+                : "Nothing has changed in this checkout."
+            }
+          />
+        )}
       </div>
       <ReviewPanel rootId={root.id} rootPath={root.path} />
     </div>

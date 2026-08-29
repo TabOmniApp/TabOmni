@@ -397,8 +397,8 @@ export const useFiles = create<FilesState>((set, get) => {
   /**
    * Writes a file if it has unsaved edits, and does nothing otherwise.
    *
-   * Closing a tab flushes rather than prompting. It is the same bargain the
-   * Notes panel makes and for the same reason — the edit was deliberate, and a
+   * Closing a tab flushes rather than prompting. The reason is that the edit
+   * was deliberate, and a
    * three-button "save / discard / cancel" is a dialog in the way of the common
    * case — but the file here is somebody's source, so ⌘S is still the way it is
    * normally written and the dot says when it has not been.

@@ -2,7 +2,7 @@
 
 The studio as an Electron app: a workspace points at real directories on disk
 rather than rows in a browser database, and every tool over them — database,
-API, terminal, agent, notes — is a tab in one window rather than an
+API, terminal, agent — is a tab in one window rather than an
 application of its own.
 
 ## Layout
@@ -30,9 +30,8 @@ for; the manifest records an absolute path and the files stay yours.
     environments.json
     folders.json    the groups those requests are filed under
     cookies.json
-    notes.json      the Notes panel's listing
-    note-folders.json
-    notes/<note-id>.md   one note's own markdown
+    note-files/     pictures dropped into a block document
+    drawings/       one `<id>.excalidraw` per drawing
     db/<db-id>/     one Docker-managed database's own data
 ```
 
@@ -44,7 +43,7 @@ it — off the screen. Adding a folder brings its files into view; removing one
 takes its shells and its chats with it and leaves the directory untouched.
 
 Everything else belongs to the workspace rather than to a folder: the
-databases, the saved requests, the cookie jar, the notes. A
+databases, the saved requests, the cookie jar. A
 project's database is generally the same database its frontend and its API both
 talk to, and filing it under one of the two would only decide which panel is
 allowed to see it. What _is_ per folder is what is genuinely per repository — a
@@ -56,22 +55,28 @@ manifest has to be read to learn.
 
 ## The left column
 
-What the workspace **holds**, stacked: `Search`, then `Projects`, `Database`,
-`Notes` and `API` as four folding sections, as many open at once as there is
-room for (`workspace-sidebar.tsx`). It is the whole of the left edge and it does
-not go away while you work, which is the point: reaching any of the four is a
-click in a list already on screen rather than a trip through one.
+What the workspace **holds**, stacked: `Search`, then `Projects`, `Database`
+and `API` as folding sections, as many open at once as there is room for
+(`workspace-sidebar.tsx`). It is the whole of the left edge and it does not go
+away while you work, which is the point: reaching any of them is a click in a
+list already on screen rather than a trip through one.
+
+**Today it draws `Projects` and nothing else** — `SIDEBAR_SECTIONS` is that one
+line — and the other two open in a window each from the footer; see Panel
+windows below. There was a fourth, `Notes`, and it is gone rather than hidden:
+see Notes, removed.
 
 **It took two moves to arrive at this, and the first went too far.** The
 activity rail went first — Conductor's left column is navigation and the
 _contents_ of the thing being worked on are on the **right** — which put
-Explorer, Database, API and Notes behind a row of tabs on the right-hand panel.
+Explorer, Database, API and Notes (then still a panel) behind a row of tabs on
+the right-hand panel.
 That fixed the real problem (the left of the window was three columns deep
 before anything being worked on) and introduced a smaller one: a tab strip shows
 exactly one list, and "what does this workspace hold" is a question about seeing
 several at once. Four ways of filling one box is not four lists.
 
-So three of them came left as sections, and **the Explorer kept the right-hand
+So the others came left as sections, and **the Explorer kept the right-hand
 panel**, alone and without tabs — a strip of four tabs with one tab on it is a
 row of chrome that answers nothing. The asymmetry is the point rather than an
 oversight: a file tree is the contents of the thing being worked on rather than
@@ -83,15 +88,14 @@ A folded section is a bare `PanelHeader` this column draws; an open one is the
 panel's own component, unchanged, with the fold handed to its own header
 (`open`/`onToggle` on `PanelHeader`, so there is one header rather than a second
 bar drawn above each panel's). The panel is unmounted while folded, which it can
-afford to be: none of the three holds a pty, a turn in flight or an editor —
-what they hold is a store each, which outlives the component. Open sections
-share what is left of the column evenly and scroll inside themselves; sized to
-their contents instead, a long list of notes would push the projects off the
-bottom.
+afford to be: neither holds a pty, a turn in flight or an editor — what they
+hold is a store each, which outlives the component. Open sections share what is
+left of the column evenly and scroll inside themselves; sized to their contents
+instead, a long list of requests would push the projects off the bottom.
 
 `section-tabs.tsx` went with the tabs, and so did the rail's remembered order and
-hidden set — folding is what hiding was for, and four labelled sections need no
-arranging. What survives both bars is the _kind_: `lib/sections.ts` holds the
+hidden set — folding is what hiding was for, and a handful of labelled sections
+need no arranging. What survives both bars is the _kind_: `lib/sections.ts` holds the
 ids and `section-marks.tsx` the label, icon and hue, because a hue that means
 "table" has to mean it wherever a table is listed.
 
@@ -163,6 +167,65 @@ with it.
 The **Board** below is not that layer coming back, and the difference is the
 reason it was worth building where the other was worth deleting — see the
 section for which of the two claims each makes.
+
+## Panel windows
+
+`Database` and `API` are not sections of the left column any more —
+`SIDEBAR_SECTIONS` is `projects` and nothing else — so the two buttons at the
+left end of that column's footer open each of them in a **window of its own**
+(`openPanelWindow`, `main.ts`). One window per panel, focused rather than
+duplicated if it is already open.
+
+**They are the same renderer**, loaded with `?view=database` or `?view=api`,
+which `App.tsx` reads before it decides what to draw (a query rather than a
+route: there is no router here, and one flag is not a reason to add one). So the
+tree, the request list, the tabs and the grid are the components the studio
+draws, against the same stores — nothing in a panel window is a second
+implementation of anything. What `PanelWindow` leaves out is the workbench: no
+rail, no dock, no projects, and a strip holding one panel's tabs rather than
+five panels' — `lib/tabs.ts` arranges a mixture, and a window with one panel in
+it has nothing to interleave, which is also why its tab ids carry no `PREFIX`.
+
+**The reason it can be a window at all is that neither panel is pushed
+anything.** Every call they make — `databases:list`, `db:query`,
+`docker:status`, `http:*` — is a call and an answer, and an answer goes back to
+whoever asked. The push events (`processOutput`, `terminalData`,
+`files:changed`, a chat's frames) still go to the studio window alone, which is
+what `getWindow` in `ipc.ts` answers with; a panel that needed one of those
+would need its own manager in main, and would not be worth a window on these
+terms. The channel is checked rather than trusted (`isPanelWindowView`): a
+string from the renderer names a window this process is about to open.
+
+The two windows share what the stores **remember** — `db.tabs`, `db.selected`,
+`http.tabs` are the workspace's settings, not a window's — and that used to
+follow all the way through: open a table in the Database window, close it, quit,
+and the table came back next launch in the **studio's** strip, beside the chats.
+It was defended as "they are one workspace", and it was wrong. What a window
+opens is what that window is for; a tab surfacing in a strip whose column has
+not listed the panel since `SIDEBAR_SECTIONS` was cut to `Projects` reads as the
+app having lost track of where things live, and there was no way to put it back
+short of closing it.
+
+So **the studio does not draw either pane at all**. `PANES` in `lib/store.ts` is
+the list of panes the workbench walks, and `database` and `api` are out of it;
+both stay in `Pane`, in `PANELS` and in their stores, so putting either back is
+that one id — the same bargain `SIDEBAR_SECTIONS` makes. The memory is still per
+workspace and still shared, which is the right shape: it is now read by the only
+window that draws it.
+
+Two things went with that pane. `⌘P` no longer lists **tables or requests** — a
+palette row that selects a tab into a strip which never shows it is found,
+opened and invisible, which is the failure `useHasOpenTabs` is commented
+against; each window has its own list down its left side, which is the way in
+that is still there. And the studio's boot no longer reads the databases: that
+read was what pulled the remembered tabs back in, and nothing in this window
+lists them. `DatabaseWindow` does its own read on mount — which is why a window
+refreshes what its own list needs rather than waiting for a studio boot that may
+never happen in it, and why there is only ever one window per panel.
+
+They keep their **native title bar**, on macOS too. `hiddenInset` buys the
+studio a header that stands in for the title bar; these have no such header, and
+traffic lights over a tree are lights with nothing behind them.
 
 ## Board
 
@@ -369,9 +432,9 @@ Four things, and none of them is a fifth panel knowing about the board:
   a line of text per card rather than a control per card, because what somebody
   wants off a glance at a board is which cards have an agent on them.
 - **Start chat from this card** creates a chat in the card's project and links
-  it, with the card's title and body as the composer's **draft** — `create`
-  already takes one, which is how `Ask AI to fix` seeds a message from the
-  `Changes` pane. Not sent: the first turn is still the user's to phrase and to
+  it, with the card's title and body as the composer's **draft** — `create` takes
+  one, and this is the only caller left that uses it. Not sent: the first turn is
+  still the user's to phrase and to
   read before it runs, and a card that sent itself would be a board that starts
   agents.
 - The chat's own pane carries a **chip** above the transcript naming its card,
@@ -400,10 +463,10 @@ text.
 Two files, both the whole workspace's and both read once at launch:
 `workspace/board.json` for the cards and `workspace/board-columns.json` for the
 columns — `board:list` / `board:save` and `board:list-columns` /
-`board:save-columns`, each replacing the whole collection the way the notes'
+`board:save-columns`, each replacing the whole collection the way the requests'
 listing is replaced. Two files rather than one, and the columns not a field on a
-card, for the reason a note folder is not a field on a note: a column is renamed,
-recoloured and reordered without any card changing.
+card, for the reason a request folder is not a field on a request: a column is
+renamed, recoloured and reordered without any card changing.
 
 **Order in each list is order on the board** — within a column for a card, left
 to right for a column — so a drag of either is one write and there is no second
@@ -415,8 +478,8 @@ The cards of a project that has **left the workspace** stay in that file. The
 board simply does not draw them, the way a chat whose folder has gone is dropped
 from the listing rather than deleted — see the `tasks.json` argument above.
 
-Which boards were open is **not** remembered across launches, unlike the notes'
-tabs and like the `Changes` tab this copies: a board is one click from the
+Which boards were open is **not** remembered across launches, unlike the API
+panel's tabs and like the `Changes` tab this copies: a board is one click from the
 project it belongs to, and restoring one would mean restoring a tab for every
 project somebody had glanced at.
 
@@ -1130,8 +1193,9 @@ draws — because a toolbar saying `Edits` over a turn that ran as a plan is the
 one disagreement worth a function to make impossible.
 
 The `+` menu is two items. **Attach file** (⌘U) is the OS picker, and what it
-leaves in the draft is a path relative to the project — plain text, the same
-thing `@` inserts: the turn runs in this directory with `Read`, so a path is
+leaves in the draft is an `@` and a path relative to the project — plain text,
+the same thing `@` inserts, through the same `mentionOf`, so a dropped file is
+tinted like a picked one: the turn runs in this directory with `Read`, so a path is
 already something the agent can open, and print mode takes a prompt rather than
 an upload. It is still the picker rather than a second `@`, since the OS dialog
 reaches files the index does not — anywhere on the machine, and past what the
@@ -1173,6 +1237,60 @@ because a chat can hold lines from a turn that died before anything was opened.
 The retry does not write the prompt down twice, which is why running a turn is a
 method of its own.
 
+**A chat is written down by its first message.** It used to be written down by
+the `+`, on the reasoning that the row has to exist for somebody to type into —
+a tab that only appears once you have said something is a `+` that does nothing.
+That reasoning was right about the tab and wrong about the record: the tab does
+open on the click, but it is the **renderer's** until the first message
+(`unsaved` in `lib/worktree-chat/store.ts`), so a `+` somebody thought better of
+no longer leaves an `Untitled` row in the project's list and a file on disk for
+ever. There was nothing in those chats to keep.
+
+What that costs is that the renderer mints the id, which is the CLI's session
+id — main can no longer invent one at the first message, because it would be a
+different chat to the one on screen. So `createWorktreeChat` takes a `ChatSeed`:
+the id, and whatever else the tab picked up before anybody spoke into it. The
+toolbar is the one that matters — picking Opus and `Plan` before typing is
+ordinary — and `/rename` is there for the same reason. An id already in the
+listing is returned as it stands rather than added twice, which is what two
+messages sent before the first write landed would otherwise do.
+
+The exception is a caller that records the chat's id somewhere else. The board's
+`startChat` links a card to the chat it starts, so it asks `create` to `save`
+straight away; without that, closing the app would bring the card back with its
+chat `lost` — which is what a card whose chat was _deleted_ says, and it would
+be saying it about a chat that was never written down at all.
+
+**A chat is named twice, and the second name is the CLI's.** The first is the
+sentence that opened it, clipped to forty characters, which is what the tab says
+the moment somebody presses Enter and is a poor name for a chat found again in
+the column a week later — "Kiểm tra giúp tôi tại sao api /api/sear…" against
+"Line-landing API empty responses". The second is a summary of that same first
+message, and the argument that mattered is that **this app does not produce it**:
+`CLAUDE.md` refuses features that call the CLI as a helper, and a summarising
+turn would be exactly that — a turn nobody asked for, on the user's tokens, for a
+tab label. The CLI writes one for itself anyway. It goes into the session's own
+transcript as `{"type":"ai-title","aiTitle":…}`, off a model of its own, ahead of
+the turn's first reply, and it costs the chat's session nothing.
+
+So `retitle` in `main/worktree-chat.ts` reads it rather than asks for it. Nothing
+on the SDK's message stream carries it; `getSessionInfo()` would answer, but it
+reads the config directory of _this_ process and a chat on a profile is under a
+`CLAUDE_CONFIG_DIR` of its own. The transcript's folder is **found rather than
+computed** — the folder name is the project path with every non-alphanumeric
+character replaced, applied to the path the CLI _resolved_, so a folder reached
+through a symlink is somewhere this app would have to guess at (`/tmp` is filed
+under `-private-tmp` on macOS) — and a session id is a UUID, so the file name
+alone identifies it.
+
+`autoTitled` is what keeps it honest: only a chat this run named after its own
+first message may be renamed, and the user's own rename takes it off that list
+mid-turn. The read happens as the turn ends and **`done` waits on it**, because
+`done` is what the renderer re-reads the listing on and a re-read that raced the
+write would put the sentence back on top of the name. The `title` event beside
+it is not that path — it is for the turn that _failed_, where there is no re-read
+and a chat can still have been named.
+
 An `--append-system-prompt` says where the turn is, and nothing else. Short,
 because the CLI can see the working directory for itself. It was two sentences
 while there were `tabomni-*` tools to explain — a tool list says what a tool does,
@@ -1184,9 +1302,9 @@ chat, lines per chat — because a question about one project while another is
 being refactored is the point rather than an edge case.
 
 **Where they live.** The listing is `workspace/worktree-chats.json` and each
-chat's lines are `workspace/worktree-chats/<id>.json` beside it — the split the
-notes have, and for the same reason: a turn rewrites one chat rather than all of
-them. Both keep the old names, because renaming the files would lose every chat
+chat's lines are `workspace/worktree-chats/<id>.json` beside it — a listing and
+a file each, for the reason the notes had the same split: a turn rewrites one
+chat rather than all of them. Both keep the old names, because renaming the files would lose every chat
 already written.
 
 The chats are the `worktree` pane, registered in `PANELS` like any other, listed
@@ -1353,13 +1471,15 @@ to.
 ## The tab strip
 
 One strip for the whole workbench, above whichever panel is showing, rather
-than one per panel: a table, a request, a note and a chat sit side by side,
-and clicking any of them goes to the panel that shows it. Leaving
-Database for API used to take the tables off the screen — still open, but
+than one per panel: a file, a diff, a chat and a project's board sit side by
+side, and clicking any of them goes to the pane that shows it. Leaving one panel
+for another used to take the first panel's tabs off the screen — still open, but
 nothing said so. `components/studio/workspace-tabs.tsx` assembles it from the
-four panel stores; the order across panels is `tabOrder` on the studio store,
-since a request between two tables is a position none of those four has
-anywhere to record.
+panel stores `PANES` names; the order across panels is `tabOrder` on the studio
+store, since a chat between two files is a position none of those stores has
+anywhere to record. A table and a request are no longer among them — those two
+panels have windows of their own, each with a strip of its own (see Panel
+windows).
 
 **One strip means one set of tab rules, and `lib/panels.ts` is where they are.**
 Each panel is entered there as six small functions — what it has open, which of
@@ -1396,16 +1516,16 @@ scrolls itself into view when it becomes the active one — `block: "nearest"`, 
 a row already on screen is left exactly where it is rather than the list
 centring itself on every click. The opening half cannot be shared, because what
 "holds" a thing differs per panel: a directory chain in the Explorer, a folder
-chain in API and Notes (`ancestorFolderIds` in `lib/tree.ts`), the project a
-chat is in, the branch a table belongs to.
+chain in API (`ancestorFolderIds` in `lib/tree.ts`), the project a chat is in,
+the branch a table belongs to.
 
 Each panel does it in its own `select`, not in an effect beside the list. That
 is what keeps the fold state honest in both directions: it only ever _opens_, so
 a folder somebody shut stays shut unless what they picked is inside it, and the
 folder holding the current selection can still be collapsed by hand — which a
-version derived during render could not allow. It is also why API's and Notes'
-folds moved out of their components and into their stores: a list cannot open a
-folder for a selection made in another panel.
+version derived during render could not allow. It is also why API's folds moved
+out of its component and into its store: a list cannot open a folder for a
+selection made in another panel.
 
 **The strip comes back on a reload.** It used not to: one panel remembered its
 tabs and the others remembered nothing, so a reload left one strip intact and
@@ -1417,8 +1537,8 @@ the panel's business: a schema-qualified table name here, a note id there.
 times over.
 
 Every record is reconciled against what actually exists, never trusted: a
-request deleted since, a note deleted since, a table that has been dropped. For
-the API and Notes panels that happens as they are restored, in the first
+request deleted since, a file that has gone, a table that has been dropped. For
+the API panel that happens as it is restored, in the first
 `refresh()` — the moment those panels know what their ids mean. Each panel restores once, so a later refresh cannot reopen what has been
 closed since.
 
@@ -1458,9 +1578,9 @@ forced it — one taken out of the tree ends rather than hides, which is why the
 dock is collapsed rather than unmounted too — and the panels turned out to want
 the same for a smaller reason: a strip that keeps every panel's tabs on screen is an invitation
 to switch, and everything a panel held that its store did not was thrown away
-each time. Leaving Database for Notes and coming back gave a result grid scrolled
+each time. Leaving Database for API and coming back gave a result grid scrolled
 to the top, a SQL editor with no undo history and the query split back at its
-default height; a note came back as a fresh ProseMirror over the same text. None
+default height. None
 of that is state a store has any business holding — a scroll offset and an undo
 stack belong to the view — so the view is what stays.
 
@@ -1471,7 +1591,7 @@ scrolling boxes inside, which would put that grid back at the top by another
 route, and it is what the dock stacks its own shells with.
 
 **And the same one level down: a tab switched away from is hidden, not
-unmounted.** The rule was only ever half applied — Explorer and Notes
+unmounted.** The rule was only ever half applied — Explorer and the Notes panel
 stacked their tabs, and the others rebuilt one pane per click, so keeping
 Database on screen while reading a table cost nothing and moving between two of
 its tables cost everything. Every panel now draws one pane per open tab and
@@ -1558,10 +1678,10 @@ carry both.
 What a folder _is_ differs per panel, and `groupOf` is each one's answer: the
 Explorer root a file sits in — a workspace folder, the longest match, since a
 folder added inside another is still a project of its own — the project a chat
-is in, the folder in the panel's own tree a request or a note is filed under,
-the schema a table belongs to. A request at the top level of its tree is filed under a real place rather
-than nowhere, so its group is named for the panel — "Requests", "Notes" — rather
-than "Ungrouped".
+is in, the folder in the panel's own tree a request is filed under, the schema a
+table belongs to. A request at the top level of its tree is filed under a real
+place rather than nowhere, so its group is named for the panel — "Requests" —
+rather than "Ungrouped".
 
 The Database panel is the one whose grouping is not a folder at all. Its unit is
 the **schema**, because the connection — the obvious analogue of a project —
@@ -1638,19 +1758,26 @@ strip comes back as the row.
 
 ## Search
 
-`⌘P` opens a search over everything the workspace can open — a file, a table, a
-request, a chat, a note — and picking one opens its tab and goes to
-the panel that shows it.
-`components/studio/command-palette.tsx` is the whole of it.
+`⌘P` opens a search over everything **this window** can open — a file, a chat, a
+project's board — and picking one opens its tab and goes to the pane that shows
+it. `components/studio/command-palette.tsx` is the whole of it.
 
-It exists because the strip and the sidebars only answer a question the
-rail is already pointed at. A table in a collapsed branch, a request three
-folders deep and a note filed last week are each a trip through a panel the
-user is not in and is not going back to, and the sidebar they moved to is
-still there when they arrive. The palette is the way in that leaves the
-sidebar where it was — for the same reason nothing else here switches it,
-`select` on each panel's own store is what it calls, so a table opened from
-the palette behaves exactly like one opened from the tree.
+It exists because the strip and the two columns only answer a question they are
+already pointed at. A file nobody has expanded a folder of, a chat from last
+week and another project's board are each a trip through a list the user is not
+in and is not going back to, and the list they moved to is still there when they
+arrive. The palette is the way in that leaves the columns where they were — for
+the same reason nothing else here switches them, `select` on each panel's own
+store is what it calls, so a chat opened from the palette behaves exactly like
+one opened from a project's row.
+
+**Tables and requests are not in it.** They were, and the row worked; what
+stopped working is where it landed. Neither `database` nor `api` is a pane this
+window draws any more (see Panel windows), so selecting one put a tab into a
+strip that never shows it — found, opened and invisible, which is precisely the
+failure `useHasOpenTabs` carries a comment against. Each panel's window has its
+own list down its left side. A palette row that reached _into_ that window would
+be a push to a window main deliberately sends nothing to.
 
 **It only opens things.** A commands half would be the second place every
 action is written down, and every action the studio has already sits in the
@@ -1695,18 +1822,21 @@ cmdk scores every row it holds on every keystroke, which is right for a menu of
 commands and not for twenty thousand paths, so a cheap subsequence pass runs
 first — `slfs` finds `src/lib/files/store.ts`, and a typed `/` is not something
 the path has to match literally — and hands on forty rows to be ranked against
-the tables and notes beside them. Picking one opens the file **and** expands the
+the chats and boards beside them. Picking one opens the file **and** expands
+the
 tree down to it: somebody who found a file this way generally wants to see what
 sits next to it.
 
 What the palette lists otherwise is what the panels list, read from their stores
-rather than from an index. The one visible consequence is the databases:
-**a database's tables are searchable once its branch has been read**, because
-until then nothing in this app knows their names, and reading every database on
-the chance that `⌘P` is pressed would dial every server the workspace has. That
-is also the one row that can fail — a table in a database the workspace is not
-on has to move there first, which dials a server — so the palette stays open
-and says why, the tree's "unreachable" dialog being the tree's.
+rather than from an index — the chats and one board per project, both of which
+the studio already holds.
+
+**Nothing it lists can fail any more.** Opening a row is a read or a `select`,
+so `open` resolves to nothing and the palette's only line under the input is the
+`Opening …` one, shown after 150ms so the usual case never flashes it. The
+failure channel was there for the one row that dialled a server: a table in a
+database the workspace was not on had to move there first. That row is gone with
+the pane, and so is the channel.
 
 ## The window shortcuts
 
@@ -1840,6 +1970,48 @@ with it the last clickable thing in the title bar), **Tabs** (whether tabs are
 gathered under the folder each belongs to — see Grouped tabs), **Claude** (the
 named `CLAUDE_CONFIG_DIR` profiles a chat's turns can run under) and **MCP**
 (which MCP servers the user's own `claude` has, below).
+
+**Every row in Claude says whether that directory is actually signed in, and as
+whom.** A profile is a name beside a path, and a path is a weak thing to name an
+identity with: it can be a typo, it can be a directory somebody logged out of
+months ago, and on macOS the token is not in it at all — it is in the login
+keychain — so a directory can name an account it can no longer authenticate as.
+Without the check, all three look exactly like a profile that works, right up
+until a turn fails under an identity the user thought they had. The account is
+**asked of `claude`** — `claude auth status --json`, run with that directory as
+`CLAUDE_CONFIG_DIR` — for the reason the MCP listing is asked rather than read:
+`<dir>/.claude.json` does hold an `oauthAccount`, but that file is the CLI's,
+its shape moves between releases, and it would still not answer the question. It
+costs a process and no tokens.
+
+Three things about it are decisions rather than details. **The directory is
+`stat`ed first and a missing one is never spawned into**: `claude` creates
+whatever `CLAUDE_CONFIG_DIR` points at before it answers, so probing a typo
+would silently make the typo real and then report it as merely signed out — the
+whole point of `No such directory` being its own badge and not `Not signed in`
+is that the two have different fixes. **Only the default account is checked when
+the section opens**, and each profile is checked by its own button: checking
+every row on open is a `claude` per profile, and a row per keystroke while a
+path is being typed is worse. **Nothing is drawn as good until the CLI has said
+so** — the unchecked state is its own quiet badge rather than an optimistic one.
+The default account — no `CLAUDE_CONFIG_DIR` at all, which is what a chat with no
+profile picked runs under — gets a row of its own above the list, because it is
+the one the others are being told apart from.
+
+**The composer's own picker says it too**, and that is where it matters most:
+Settings is where profiles are set up, but the account menu in a chat's toolbar
+is where one is _chosen_, and "Claude Hùng" over "Claude Personal" over "Claude
+Hai" is four names somebody typed and no way to tell which login any of them is.
+So each row carries the address under the name (`accountLine`) — the email
+rather than a `Signed in` badge, since a badge beside an email is the same fact
+twice, and the words are kept for the rows that will _not_ run, which are the
+ones drawn in the destructive colour. The menu asks when it is **first opened**
+and the answers are held for the run: a workspace has a composer per chat and
+none of them is a reason to run `claude`, a menu of four profiles must not be
+four processes every time it is dropped down, and a login does not change while
+somebody is deciding who to send a message as. Re-asking is the Check button in
+Settings, which is the one place somebody has just done something that would
+change the answer.
 
 **There was a Chat section, and it is gone**: two switches, `showToolCalls` and
 `showThinking`, inherited from a chat view's own header under
@@ -2212,8 +2384,23 @@ screen is the textarea's own and selection, IME and undo are the platform's. A
 rich-text editor would have been a document model to keep in step for a
 decoration, over a message that is plain text on the wire and in the transcript.
 
+**The `@` stays in the text**, and only a word carrying one is a candidate for
+the tint. It used to be replaced by the path on insertion, which left a mention
+indistinguishable from any other word and the tint with nothing to go on but the
+lookup — so in a repository holding `src/api`, or a folder called `test`, an
+ordinary sentence using either of those words lit up as though a file had been
+pointed at. The tint was claiming an intent the text never had, and there is no
+way to recover that intent from the letters alone: `test` is a folder here _and_
+an English word, and which one was meant is exactly what the sigil records. So
+the sigil is the mention, kept rather than consumed, and `mentionOf` is what
+every caller inserting a path goes through — the menu's rows and **Attach
+file**'s paths alike, or a dropped file would be the one path that arrived
+untinted. It costs one character in the message and buys back the whole class of
+false positives; it is also what plain `claude` reads as a file reference, so the
+text still says the same thing to the CLI as it does on screen.
+
 What is tinted is read from the index rather than remembered from the menu, which
-is `markMentions` in `lib/worktree-chat/mention-text.ts`: a path typed by hand
+is `markMentions` in `lib/worktree-chat/mention-text.ts`: an `@path` typed by hand
 lights up like one that was picked, half a path deleted stops being tinted, and a
 file that has since been deleted goes plain the next time the index is walked —
 the tint means "the workspace still holds this", which is the thing worth knowing
@@ -2222,11 +2409,201 @@ built from every known name, which is what the catalogue's few dozen table names
 allowed and twenty thousand paths do not: a pattern rebuilt on every keystroke is
 the one thing here that would be felt while typing. The cost of the word split is
 that a path with a space in it is not tinted, which is a decoration missing
-rather than a mention lost. Punctuation around a word is shed before the lookup,
-so a path in brackets or at the end of a sentence still lights up while
-`src/main/ipc.ts.map` — a file the index does not hold — lights up nowhere. The
+rather than a mention lost — and which is why **Attach file** gives such a path
+its quotes and no `@`, rather than an `@` the tint could never honour.
+Punctuation around a word is shed before the lookup, so an `@path` in brackets or
+at the end of a sentence still lights up while
+`@src/main/ipc.ts.map` — a file the index does not hold — lights up nowhere. The
 same marks are drawn on the message once it is sent, so a line still reads as
 pointing at a file rather than mentioning one in passing.
+
+## `/` in a chat's composer
+
+`/` at the head of a message opens the second of the composer's two menus: the
+**slash commands the user's own `claude` would run in this project**. What is
+picked goes to the CLI as the message and is run by the CLI, exactly as it would
+be typed in a terminal. Two commands are the exception, and they are the reason
+this is not simply a list — see below.
+
+**The list is asked for, not written down.** `main/agent-commands.ts` calls
+`supportedCommands()` over the SDK's control channel, which is the same
+never-yielding-prompt construction `agent-models.ts` and `mcp-servers.ts` use: a
+`claude` process, no tokens, no turn. The argument for asking is stronger here
+than it was for the models. Measured in this repository the answer is seventy-odd
+commands, of which fewer than thirty are the CLI's own — the rest are the user's
+`~/.claude/commands`, this repository's `.claude/commands`, and every skill of
+every enabled plugin. A written list would hold none of the last three, and would
+go stale against the first with every release. Asked **per directory**, like the
+MCP listing and unlike the model list, because a repository's own commands and
+skills belong to that checkout.
+
+**Held per project for the run**, which is between the other two: the model list
+is held because it only changes when a different CLI is installed, and the MCP
+listing is deliberately not held because somebody looking at it has usually just
+run `claude mcp add`. This one is held because the CLI's own list does not move
+under a live session either — `/reload-skills` exists precisely because it does
+not. It is asked on the **first `/` typed**, not on mount: nothing is on screen
+until then, and a `claude` per composer that mounts would be a process for every
+tab switch. The cost is one visible beat on the first `/` of a project, which is
+why the menu draws while it is still empty and says what it is waiting for. A
+menu that appeared only once the answer landed would read as a keystroke that did
+nothing for a second and a half.
+
+**`/` is narrower than `@` on purpose.** `@` opens anywhere a word can start,
+because a mention belongs mid-sentence. A slash is punctuation in ordinary prose
+— `src/main`, `and/or`, a URL — so a menu that opened mid-sentence would open on
+almost every message about a file. It would also be _wrong_ to: the CLI only
+reads a slash command at the head of a message, so a row offered in the middle
+would insert text that runs as literal prose.
+
+**Two commands are this app's, and everything else is the CLI's.** `/clear` and
+`/rename` are about the conversation rather than about the code, and both are
+things this app already owns. `/clear` in a terminal swaps the session the
+terminal is attached to, and there is no terminal here to swap — sent as a
+message it would be read as prose, and the transcript on screen, which is this
+app's file rather than the CLI's, would still be full. `/rename` names a session
+transcript the CLI keeps, while the name on screen is in the tab and in the
+project's list. Everything else — `/compact`, `/context`, `/init`,
+`/code-review`, every skill, every plugin's command — goes over verbatim, which
+is both less code here and the only way those stay correct as the CLI changes
+them.
+
+The interception is in the **store's `send`**, not in the composer: the `Changes`
+pane, a board card and the composer all send through that one door, and a
+`/clear` typed into any of them has to mean the same thing. It is parsed from the
+draft rather than from the menu's pick, so `/clear` typed in full and never
+chosen from a row means what the row would have meant. The parse is deliberately
+exact — `/clearly` and `clear the cache` are messages, and reading either as
+`/clear` throws away a conversation nobody asked to throw away.
+
+**`/clear` closes the session as well as emptying the lines**, and that is the
+half that is easy to miss. A chat's id _is_ the CLI's session id, and `started`
+on the record is what decides whether the next message opens a session or
+`resume`s one. Wiping the transcript alone would leave a chat that looks empty
+and answers out of the context it was asked to forget. So `WorktreeChats.clear`
+closes the live session, drops `started`, settles any outstanding permission ask
+for that chat — the card on screen is a promise the turn is awaiting — and writes
+an empty file. What it does **not** do is make a new chat: the id, the tab, the
+title and the options all stay, because what `/clear` means in the terminal is a
+new context in the conversation you are in, not a different conversation.
+
+**Some of what the CLI lists is not offered.** Three kinds, in `HIDDEN` in
+`lib/worktree-chat/command-text.ts`: a terminal's own settings (`/color` sets a
+prompt bar this app has none of, `/heapdump` writes to the Desktop of a process
+that is not this one), controls this composer already has and would then have
+twice (`/model`, `/effort` and `/fast` are the toolbar's model menu, and a
+session's model moves through `setModel` rather than through a message; `/mcp` is
+Settings › MCP), and the CLI's `__`-prefixed internals. Anything not named is
+offered, so a plugin installed tomorrow is in the menu without a release — which
+is the whole point of asking.
+
+That list is **written down because it cannot be asked for**, and this is the one
+place the design gives something up. The SDK marks terminal-bound commands in its
+`init` frame, as `terminal_slash_commands`, and that frame is only emitted when a
+turn starts. The control-channel ask deliberately never runs one, so no init
+frame arrives — verified against the CLI: the message stream stays empty for the
+whole call. The alternative was starting a turn per launch to learn something
+that changes once a release, which costs tokens for a list of a dozen names.
+
+A row is the command, its argument hint where it declares one, and its
+description clamped to two lines — a skill's description is written for a model
+and runs to a paragraph. A command is chosen by what it _does_, which is why the
+description is the row here rather than a footnote under it as the `@` menu's
+token estimate is. The two local commands are labelled `this app` on the row,
+said rather than left to be discovered: somebody who knows what `/clear` does in
+a terminal is owed the difference.
+
+## The context window, and compaction
+
+The composer's toolbar carries a **meter**: a short bar and a percentage saying
+how much room is left in this chat's context window before it is compacted.
+Beside it, in the transcript, a compaction shows as a **rule across the
+conversation** — everything above it is something the model now knows only as a
+summary.
+
+**There is no percentage for compaction itself, and the meter is what replaced
+wanting one.** This was asked twice and settled empirically rather than from the
+type declarations: a real `/compact` driven through the SDK emits exactly two
+frames — `{status: 'compacting'}` and then `{status: null, compact_result: …}` —
+with nothing in between. No progress event, no token countdown, nothing. That is
+because compaction is _one summarisation call_: there is no work for a fraction
+to be a fraction of. A bar running 0→100 there would be a clock in a costume,
+reaching 100% while the CLI is still working or stalling at 80% and jumping. So
+the spinner stays a spinner, and the number went where a number can be honest.
+
+**The meter counts down, not up**, which is the same reading the CLI's own
+`Context left until auto-compact` gives. "13% used" is a fact about the past; the
+question somebody has while typing is how much room is left before the
+conversation gets summarised, and a meter should answer the question being asked
+rather than the one that is easier to compute. The bar **drains** rather than
+fills for the same reason — a bar growing beside a number shrinking would be two
+readings of one window pointing opposite ways. `remainingOf` is clamped where
+`fractionOf` is not, and the asymmetry is deliberate: "over the limit" is a real
+state worth reporting honestly, while "minus eleven percent left" is not a state
+at all.
+
+Where auto-compaction is switched off the line stops counting down and says what
+is used instead. A countdown to an event that will never happen is a promise.
+
+**The window is measured, not counted, and the difference is a denominator.**
+This app already tracked a context figure — `contextOf` in `claude-agent.ts`,
+summed from a reply's own usage — and it could say `19.3k` and nothing else,
+because a reply carries what it was billed and not the size of the window it was
+billed against. `getContextUsage()` is the missing half: a control request over
+the SDK's own channel, costing a round trip and no tokens, carrying `maxTokens`,
+the auto-compact threshold and the split by category. It is the structured twin
+of what `/context` prints.
+
+Both are kept, because they are not the same measurement arriving twice.
+`context` moves on every reply and is what ticks while a long turn reads twenty
+files. The `window` lands **once a turn**, after the result: a control request
+per content block would be a round trip for a figure nobody can act on
+mid-answer. Neither is written down — the window describes the process the chat
+is talking to, and a chat whose session has been closed for idleness has none
+until its next turn. The meter is simply absent rather than drawn at zero, since
+zero would be a claim about an empty window when the truth is that nobody has
+asked yet.
+
+**The bar is read against the auto-compact threshold, not the window**, and this
+is the decision the whole feature turns on. On a 1M-context model the CLI
+compacts at 967k, so a bar drawn against 1M sits calm right up to the moment the
+conversation is summarised out from under it — the warning arrives after the
+event it was warning about. `fractionOf` divides by whichever limit will actually
+act, and falls back to the window where auto-compaction is off, which is also why
+the detail line says `of 967k before auto-compacting` rather than `of 1M`: that
+is the number somebody is counting down to. The CLI's own `percentage` is on the
+record and deliberately not drawn, since it is rounded against the raw window and
+would be a figure disagreeing with the bar beside it.
+
+The breakdown behind the meter is the CLI's own categories. `Free space` is
+dropped from it — it is the remainder and would be the largest row in almost
+every chat, opening a list meant to answer "what is filling this up" with the one
+thing that is not. Deferred rows are **kept but sorted last**: they are the
+out-of-window tool schemas, listed and not charged, and "13.7k you are not paying
+for" belongs beside the ones you are.
+
+**The colours are the app's own.** The CLI sends one per category, but those are
+its _terminal theme's_ names — `promptBorder`, `inactive`, `claude`, `warning`,
+`purple_FOR_SUBAGENTS_ONLY` — which no stylesheet here can use and which carry no
+meaning to map: two unrelated categories share `promptBorder`. So `readWindow`
+matches on the category's **name** and anything unrecognised becomes `other`,
+which draws in a neutral tone. That is the field most likely to move in a CLI
+release, and an unfamiliar category then draws as a neutral band rather than
+disappearing.
+
+The compaction boundary is a **line**, unlike the two above, and it is on
+`alwaysShown` in `lib/worktree-chat/activity.ts` — the strongest case of that
+rule. Its whole meaning is _where in the transcript it sits_; folded into a run
+of tool calls it would be a divider inside a fold, dividing nothing a reader can
+see. `trigger` is kept because `auto` and `manual` explain different things: an
+automatic compaction is why an answer above the line reads as though it forgot
+something.
+
+Every failure around the meter is swallowed on purpose. A CLI too old to answer
+the control request, a session closed for idleness between the result and the ask
+landing, a request that times out — all of them mean "no new number", and the
+caller keeps the last one it had. A turn that worked must not report an error
+because a decoration could not be refreshed.
 
 ## Explorer
 
@@ -2707,34 +3084,38 @@ has nothing left to guard against and is gone. Whitespace is now all or nothing
 no selection-scoped equivalent, and somebody who turned the toggle on to find a
 stray tab wanted all of them anyway.
 
-**A review is left on the diff, and becomes a chat.** Reading a turn's work is
-where the remarks happen — "this leaks", "wrong error path", "rename this" — and
-before this they had to be retyped into a chat with the file and the line named
-by hand, which is both the tedious part and the part that goes wrong. So the
-`Changes` pane takes them where they occur: a `+` in a column against the code
-picks a line — **held down and dragged** for a range, the way a forge does it,
-with shift-click as the second way — a box at the foot of the pane takes the
-remark, and one button opens a new chat in that project **with the whole review
-written into its composer** — unsent, which is what the ellipsis on
-`Ask AI to fix…` means. A prompt assembled out of eight remarks is exactly the
-kind that wants a sentence added to it ("the first three only", "and run the
-tests"), and a turn already in flight cannot be told that, so the last word stays
-the reader's in a field they are already looking at. The threads are **not**
-cleared by it either: the review is the structured half — ranges, files, who said
-what — and the composer holds only its text, so discarding it on the strength of
-a message nobody has sent yet would throw away the reviewable half if the reader
-decided against sending. `Discard` is the deliberate way, and pressing the button
-twice makes a second chat, which is visible rather than silent.
+**A review is left on the diff, and stays there.** Reading a turn's work is where
+the remarks happen — "this leaks", "wrong error path", "rename this" — and before
+this they had to be retyped into a chat with the file and the line named by hand,
+which is both the tedious part and the part that goes wrong. So the `Changes`
+pane takes them where they occur: a `+` in a column against the code picks a
+line — **held down and dragged** for a range, the way a forge does it, with
+shift-click as the second way — a box **floating against those lines** takes the
+remark, and the thread it opens is drawn **under the lines it is about**. What is
+left in flow is one bar: how many comments the checkout has, and `Discard`, which
+is the only thing that can say a review exists in a file that is not open.
 
-That draft is `drafts` on the worktree-chat store, and giving it somewhere to live
-fixed something that was already wrong: **a composer's draft is now per chat**.
-The field held one local `useState` and the pane was never keyed, so a
-half-written message followed you into the next chat you clicked and sat under
-its own field. It is keyed by the chat now, the field hands back what was in it
-on the way out (`onLeave`), and `create` takes a draft and writes it in the same
-`set` as the chat — the composer reads it as its _initial_ value, and one arriving
-a render later would arrive after the field had been built empty. Initial rather
-than controlled, because a value round-tripped through a store on every keystroke
+**`Ask AI to fix…` is gone**, and with it `reviewPrompt` and its tests. It opened
+a chat in the project with the whole review written into its composer, unsent —
+the ellipsis meant exactly that, since a prompt assembled out of eight remarks is
+the kind that wants a sentence added to it before it goes. What it was really
+saying is that a review's _destination_ is a chat, and that a comment is a
+half-written message on its way somewhere else. It is not: a comment is a thing
+said about a line, and `Ask Claude` on the thread answers one where it was
+asked, which is what somebody actually wanted the eight-remark prompt to do.
+Handing the whole review over in one go is still a thing somebody may want, and
+it is now three words in any chat — the diff is right there. What is not is a
+button whose only purpose was to move a review out of the pane it belongs in.
+
+The chat composer's `drafts`, which that button seeded, are **not** removed: they
+were fixing something that was already wrong on their own account. The field held
+one local `useState` and the pane was never keyed, so a half-written message
+followed you into the next chat you clicked and sat under its own field. It is
+keyed by the chat now, the field hands back what was in it on the way out
+(`onLeave`), and `create` takes a draft and writes it in the same `set` as the
+chat — the composer reads it as its _initial_ value, and one arriving a render
+later would arrive after the field had been built empty. Initial rather than
+controlled, because a value round-tripped through a store on every keystroke
 would put the mention menu's caret bookkeeping behind a render it does not
 control.
 
@@ -2754,7 +3135,9 @@ voice is noise, and who said what is the whole content of a disagreement. `lib/f
 store and the prompt; `lib/files/review-marks.ts` is the column;
 `review-panel.tsx` is the strip.
 
-Six things about its shape were decided rather than fallen into:
+Seven things about its shape were decided rather than fallen into — one of which
+has since been decided the other way, and is left here with its reasoning because
+the reversal is only legible beside it:
 
 - **The picker is a gutter, not the code.** Both sides of this diff are genuinely
   read-only, so nothing in the content area holds focus or reports a selection,
@@ -2777,25 +3160,23 @@ Six things about its shape were decided rather than fallen into:
   pointer. Only a row crossed changes the range, since each change is a store
   write, a render and a transaction. It is finished on a `window` `mouseup`, since
   the button is regularly let go outside the column it was pressed in.
-- **The remarks are in the pane's own bar, not in the diff** — and it went the
-  other way once. The threads _were_ CodeMirror block widgets under the lines
-  they were about, which is where a forge draws them, built from plain DOM
-  because a React root per thread would be mounted by a view that rebuilds on
-  every file, layout and theme change and measured before React had committed
-  anything into it. They came back out for a plainer reason than any of that: a
+- **The remarks are in the pane's own bar, not in the diff** — which is what this
+  shipped as, is no longer true, and is the decision worth reading in full because
+  it went round twice. The threads _were_ CodeMirror block widgets under the lines
+  they were about, which is where a forge draws them, built from plain DOM because
+  a React root per thread would be mounted by a view that rebuilds on every file,
+  layout and theme change and measured before React had committed anything into
+  it. They came out to a list at the foot of the pane on a plainer argument: a
   diff with three comments in it is a diff pushed apart in three places, and the
-  code around a remark is the thing somebody is reading. What the diff keeps is
-  what it can say without moving a line — a bubble in the review column and a
-  tint on the range — and the remark itself is a row in the list, where a review
-  of four files is one list rather than four files to open, and where a thread in
-  a file that is not on screen is still readable. Gone with the widgets: their
-  DOM, the module-level `drafts` they needed so a rebuild would not take a
-  half-typed sentence with it, and `replyTo` ever reaching `review-marks.ts`.
-- **Only the new side.** The line numbers a comment carries are the working
-  file's, because those are what an agent can open the file at. A removed line is
-  a block widget rather than a line of that document and has no line in the file
-  to point at, so it gets no cell; a remark about one goes on the kept line
-  beside it.
+  code around a remark is the thing somebody is reading. Both halves of that were
+  true and it was still the wrong trade — see the bullet below.
+- **Only the new side** — which is what this shipped as, and is no longer true
+  twice over. The reasoning was that a comment's line numbers are the working
+  file's, because those are what an agent can open the file at, and a removed line
+  is a block widget with no line in the file to point at. Deleted code turned out
+  to be half of what a review is about ("this was load bearing", "why did this
+  go"), so a comment on one is numbered in the commit and says so; and a range can
+  now cover both at once. See the two bullets on `ReviewAnchor` below.
 - **The quoted lines are captured when the thread is opened**, not resolved when
   it is sent. Lines move — a fix to the file above this one is enough — and a
   snippet read later would quote something the remark was never about. Capped at
@@ -2805,21 +3186,355 @@ Six things about its shape were decided rather than fallen into:
   root id rather than a flag, and only `changes-pane.tsx` passes one — the `Diff`
   half of a file tab's toggle is the same component without it. A `+` in every
   diff in the app would be offering a review with nowhere to submit it.
-- **A review is a sitting, not a record.** Nothing is written to disk: drafts
-  outlive switching files and tabs, and do not outlive the app. What a review is
-  _for_ is the chat at the end of it, and that is the thing that keeps it —
-  which is also why the drafts are cleared the moment the chat exists rather than
-  when the turn comes back.
+- **A review is a sitting, not a record** — which it no longer is, and the
+  reversal is worth reading beside the reasoning it overturns. Nothing was written
+  to disk, on three legs: a review was _for_ the chat at the end of it, anything
+  worth keeping was in that chat, and a comment read back a week later would point
+  at line numbers that had since moved.
+  The first two went with `Ask AI to fix…`. There is no chat at the end any more —
+  a comment is answered in its own thread — so nothing was keeping a review, and
+  closing the window lost an afternoon of reading. The third leg was the real one
+  and is now **answered rather than ignored**: a thread is addressed by the
+  **lines it quoted**, not by its numbers. The snippet was already stored, for the
+  prompt, and turns out to be the durable address. `settle` re-anchors a thread
+  the first time its file is shown — which is the one moment both the commit and
+  the working buffer are to hand — in three steps whose order is the point: the
+  lines are still where they were (leave it, and hand back the _same object_, so
+  the common case re-renders nothing); they are somewhere else in the file (move
+  the anchor); they are gone, or they now appear twice (mark it `stale`). Never
+  delete: a remark whose code has gone is still something somebody said, and often
+  the most interesting thing in the review. It is drawn as **outdated** and tints
+  no rows, because the numbers it holds are the ones it was written with and
+  marking whatever sits at them now would be pointing at the wrong code.
+  A run that appears twice is refused for the same reason it is worth having the
+  rule at all — moving to the first of two identical `}` lines is a comment
+  quietly reattached to the wrong code, which is worse than saying nothing.
+  The threads live in `workspace/review.json`, one file for the workspace the way
+  the board's cards are, which is why `ReviewThread` and everything under it moved
+  into `shared/api.ts`: main is the one writing them now. Writes are **debounced**,
+  unlike the board's, because this store is written to by a _drag_ — every row a
+  range crosses is a `set`.
 
-The prompt is the one part with a test (`test/review.ts`): a heading per comment
-naming the file and its lines **relative to the project** — the cwd the turn
-runs in, and forty characters shorter than the absolute path — the quoted lines
-in a fence so a `#` in them is not a heading, then the remark, in the order they
-were written, which is the order the diff was read in. The chat is started with
-`create` on the worktree-chat store, which is why that call now hands back the
-new chat's id: a caller with something to _say_ in a chat has to be able to name
-it, and reading `selectedId` back would be a guess at whether this call is what
-put it there.
+#### What the first version of it got wrong
+
+Three complaints, all of them about the distance between where a remark is
+_thought_ and where it can be _written_, and all three answered without giving
+back the thing the block widgets were taken out for — a diff pushed apart in as
+many places as it has comments.
+
+- **The offer to comment appears on the row, not in the column.** The `+` was
+  revealed by a CSS `:hover` on a 14px gutter cell laid over the sign column,
+  which meant a reader who had not been told the column existed found it by
+  sweeping the pointer through it, and one who had still had to aim. It is now
+  put up by `hoverRow` in `review-marks.ts` — editor state, set from a
+  `mousemove` on the editor's own DOM — so it appears while the pointer is on the
+  **code**, which is where it already is. That costs a transaction per row
+  crossed, which is what the CSS was avoiding; it is the rate a drag already
+  dispatches at, every other row's marker is `eq` to what it was so one cell
+  redraws, and the dispatch is skipped when the row has not changed. It also has
+  to be state rather than `:hover` for a reason CSS cannot reach: a removed chunk
+  is **one** gutter element holding twenty rows, so a selector can light the slot
+  or nothing, and which of the twenty the pointer is on is arithmetic.
+- **The composer is against the lines, and is still not in the flow.** Picking a
+  range at the top of a diff and then typing about it in a strip at the foot of
+  the pane is the single thing that made this tiring: the eye and the focus both
+  travel, and the code the remark is about scrolls out of the sentence being
+  written. The box is now `position: fixed` over the diff, hung below the range
+  where there is room and above it where there is not. **Positioned, not laid
+  out** is the whole of why this is affordable where the widgets were not —
+  nothing in the diff moves for it, and there is only ever one of these, only
+  while somebody is typing into it. Where it goes is `spot` on the review store,
+  pushed by `codemirror-diff.tsx` and re-pushed while the diff scrolls, since a
+  range scrolled out from under its box is a box pointing at nothing. The
+  rectangle is **measured off the DOM** rather than computed from line numbers,
+  and that is deliberate: a range on the new side is a run of document positions
+  `coordsAtPos` would answer, but one on the old side lives inside a
+  `@codemirror/merge` block widget where there is no position to ask about. Both
+  sides already carry a class saying they are pending, so one query is right for
+  both by construction. In a split diff exactly one editor reports, or the one
+  with nothing pending in it would answer null over the top of the one that
+  measured it. The strip's own copy of the box is **kept** rather than deleted,
+  for the range that is on screen nowhere — picked and then scrolled past.
+- **A range may cover both sides of a hunk**, which reverses "only the new side"
+  above and the "one side or the other and never both" that replaced it. The
+  argument for the old rule was sound as far as it went — the two sides are
+  numbered in different files, and a pair of numbers cannot be in two — and it was
+  the wrong thing to build the _shape_ around. What somebody selects in a unified
+  diff is a hunk: the `-` lines and the `+` lines that replaced them, which is one
+  thought, and the most common thing in a diff to have an opinion about. Refusing
+  it meant two comments each saying half a remark. So a comment's address is a
+  `ReviewAnchor` — a run of the commit's lines, a run of the working file's, or one
+  of each — and `side`, `fromLine` and `toLine` are gone from both the thread and
+  the pending range. There was no migration to do: **a review is a sitting, not a
+  record**, so nothing on anyone's disk had the old shape. In the prompt a hunk is
+  quoted **twice, labelled** `Removed` and `Now`, never in one fence: half of what
+  is quoted is in the file and half is not, and running them together is the exact
+  mistake the deleted-side heading has always existed to stop.
+- **Which rows a gesture covered is worked out by the editor, not the store**, and
+  that is what fixed the selection feeling unreliable. The old drag took the row it
+  started on and the row it was over and did min/max — so a drag that crossed into
+  the other side was _ignored outright_ (the range froze while the pointer kept
+  going, which reads as broken rather than as a rule), and one that crossed a
+  folded bar froze the same way. `spanBetween` in `review-marks.ts` now walks the
+  heights between the two ends and folds every row it finds through `withRow`. It
+  **samples at half a row** rather than enumerating `viewportLineBlocks`, and that
+  is the point rather than a shortcut: the samples go through `rowOf`, which is the
+  same function the press itself used, so the range is guaranteed to contain the
+  row that was clicked. A walk that re-derived what a block means is where the old
+  version's two answers came from. Every row is at least `DIFF_ROW_HEIGHT` tall —
+  that is what pins the removed chunks' arithmetic — so nothing can be stepped over,
+  and both ends are sampled exactly so a one-row gesture is one row. A folded bar
+  contributes nothing and the walk passes over it, which is what dragging across a
+  fold looks like everywhere else.
+- **The band over the picked rows is a box-shadow, not a background**, and the
+  reason is a rule this pane cannot outrank. `diff-chrome.ts` paints
+  `.cm-changedLine` with `!important`, and it has to —
+  `@codemirror/merge`'s own base theme competes with it at the same specificity,
+  so without it a removed row came out with a red `-` column and brown code. But
+  `!important` beats any specificity the review's own theme can reach, so a
+  `background-color` band lost on exactly the rows a review is most often about:
+  a range dragged across a hunk was tinted on its context lines and bare on its
+  added ones, which reads as the selection being cut in half rather than as one
+  band. An inset shadow with a spread big enough to fill the row paints **over**
+  the row's own background instead of competing with it — which is what this
+  wanted anyway, since a line being picked is still an added or a removed line.
+  The edges are listed before the wash in every rule, because earlier shadows
+  paint on top.
+- **A removed chunk's columns state their geometry**, and the bug that made this a
+  rule is worth keeping. A removed chunk is **one** gutter element however many
+  rows it draws, so every column beside it has to line up with rows that a
+  different piece of code laid out. `.cm-diffRemovedCol` was `display: block` and
+  nothing else, which left two things to chance — where the column sits inside a
+  slot taller than its content, and how tall each row is — and the visible result
+  was the `−` signs drawn a whole row below the lines they belonged to while the
+  numbers beside them were right, because a number cell and a sign cell resolve
+  their line boxes differently. The review's own column never had it, and that is
+  the tell: `.cm-reviewRemovedCol` has always carried `alignSelf: stretch` and an
+  explicit `height` per row, so in the same slot its marks lined up beside signs
+  that did not. `.cm-diffRemovedCol` carries both now. Anything drawn against a
+  removed chunk should: `line-height` alone is a guess about the glyph.
+- **The shift-click anchor is tracked now**, where it deliberately was not. Growing
+  whatever was pending is what a reader means by shift-click when a range is a pair
+  of numbers in one file; a range that can cross sides has no such thing as
+  growing, because which rows are in it depends on where the run _started_. So the
+  press records its height in **document** coordinates — client coordinates would
+  name a different row after any scrolling in between — and a later shift-click
+  spans from there.
+- **The threads went back into the diff**, under the lines they are about, and the
+  argument that took them out is answered rather than forgotten. A diff _is_
+  pushed apart at a comment — but at a comment, which is where somebody is already
+  looking, and nowhere else. What the strip cost was worse and less visible: a
+  remark four hundred pixels below its code is read with a finger on the screen,
+  and a list with its own scroll made coming back to what you had already said a
+  hunt through a second scrollable thing. The thing the list was supposed to buy —
+  "a thread in a file that is not on screen is still readable" — turned out to be
+  worth almost nothing, because a thread is read _while looking at its lines_; what
+  is genuinely wanted from off-screen is only the knowledge that comments exist
+  elsewhere, and that is a count in a one-line bar.
+  That bar counts **threads**, and `noteCount` was deleted for it. Summing every
+  note was right while the bar was the header of a list of notes — "a thread with
+  three replies is three things said" — and stopped being right the moment the
+  list went: what the bar answers now is _how many places have a remark on them_,
+  and a thread argued with three times is one place to go and look. Counting notes
+  also had a result nobody would defend out loud, which is that asking Claude a
+  question made the review look bigger, since its answer is a note like any other.
+  What makes it affordable this time is `lib/files/review-hosts.ts`. The node a
+  thread is drawn in belongs to neither side: the widget's `toDOM` hands the same
+  node back every time, so a view rebuild _moves_ it rather than replacing it, and
+  React reaches it with `createPortal` — so a thread is still a component with a
+  reply box, a spinner and an error line, which is what the plain-DOM version could
+  not afford. It also settles which threads are drawn without anybody deciding: a
+  thread in a file the pane is not showing portals into a node nothing attached, so
+  nothing renders and nothing errors. Gone with the strip: the thread list, its
+  scroll, and the heading that was a button opening the file a thread is about —
+  a control that navigates to where you already are.
+- **A thread is drawn the way a forge draws one**, and the reason to copy that
+  layout is not fashion: it is what anybody who reviews code already reads without
+  being taught. A bordered box between two runs of code; one block per thing said,
+  each headed by **who said it**; hairlines between the blocks; and a `Reply…`
+  field at the foot. Three things the earlier card got wrong come out of it. A
+  glyph beside the text left _who_ to be inferred from an icon, and a review with
+  a reviewer and an agent in it is a conversation, which needs names. Spacing
+  between notes made three remarks read as one paragraph with gaps, where a
+  hairline makes them three. And `Reply` was a button revealed on hover — a
+  control nobody can see, guarding the single most common thing to do with a
+  thread; it is a one-line field now, collapsed until clicked, which is the trade
+  a forge makes: present, without spending the height of a form. What is kept that
+  a forge has no need of is the **file and line**, because a hunk's
+  `12–14 (was 8–9)` and the `deleted` mark carry what the box's position on screen
+  cannot say; it goes where a timestamp goes.
+- **A commented range is drawn as the same band as a picked one**, at the same
+  strength, and the speech bubbles are gone. Every row of a commented range used to
+  carry a filled bubble, which put a column of solid glyphs down a pane whose
+  whole job is showing code — and covered the `+`, so the one row that could not
+  offer to be commented on was a row somebody had already commented on. The band
+  says the same thing with no glyphs, in the vocabulary the reader has just used
+  to pick the range: one word rather than two. The `+` now appears on hover over
+  any row, commented or not, because this column has one job and it is offering to
+  add a remark; that a line carries one is the band's business.
+  It was drawn a shade quieter at first, on the reasoning that a range already
+  commented on is a state of the file while a range being picked is something
+  happening now. That is backwards: a picked range lives for as long as a drag and
+  arrives with a handle on its end and a composer floating against it, where a
+  commented one has to be _found_ by somebody scrolling a diff looking for what
+  they have already said — and it was the fainter of the two. One band, one
+  strength; what tells "now" apart from "marked" is the handle and the box. The
+  two keep separate class **names** for one appearance, grouped in the theme,
+  because `spotOf` finds the picked range by querying those classes and a
+  commented row sharing them would anchor the composer to the union of everything
+  marked in the file.
+  The ends of a commented run come from the **set** of commented lines — a row
+  whose neighbour on this side is not commented is an end — rather than from
+  anything stored on the thread. That is exact within a side, and costs one thing
+  against `pending`, which carries its ends: a comment covering a whole hunk draws
+  as two touching bands with a hairline where the deleted rows meet the ones that
+  replaced them. A field on the record would close it and is not worth having for
+  a rule nobody would notice was there.
+- **A block widget has to declare itself**, which is a bug worth keeping: `isHunkBar` in `diff-chrome.ts` identifies a
+  collapsed region **by elimination** — "this configuration has exactly two kinds
+  of block widget, so not being a removed chunk is being a collapsed bar" — which
+  was exact until the review added a third. Every gutter then drew the expander
+  beside each thread, a control that would have tried to uncollapse a region that
+  is not there. A widget now carries `FOREIGN_WIDGET`, a symbol exported from
+  `diff-chrome.ts` and read off `BlockInfo.widget`, and anything else adding a
+  block widget to a diff has to carry it too. The symbol goes that way round
+  because the import cannot: `review-marks.ts` already reads that file, and that
+  file has no business knowing what a review is.
+- **`Review` is a turn per changed file**, and what comes back are **comments**,
+  not a report. That is the whole of the idea: a review returned as
+  prose is a review somebody reads and then re-enters as remarks, which is the
+  tedium this pane exists to remove. So a turn answers with a fenced JSON array
+  of findings — a path, a line range, a sentence — and each one becomes a thread
+  with `author: "agent"`, on the lines it names, answerable and deletable exactly
+  like one somebody typed. The author was in the store from the day it was
+  written, for this, which is why nothing about its shape changed to allow it.
+  Three things are decided rather than fallen into. The patches are gathered by
+  **main**, not fetched by the turn: it has no shell, `git` is not something a
+  read-only tool list can reach, and this app already knows how to ask. What the
+  turn does for itself is _read the files_, which is the part a `--unified=0`
+  patch cannot give it. The findings name the **working file's** lines only —
+  nothing turning a patch into a position has the commit's text to hand, and a
+  remark about a deletion belongs on the lines that replaced it. And
+  `findingsIn` is **defensive without being repairing**: the fence is looked for
+  first and the outermost brackets second, but a finding missing a field or naming
+  a line that is not a number is _dropped_, because the cost of guessing is a
+  comment pinned to the wrong line and the cost of dropping is one remark. `null`
+  means nothing there was JSON at all and is said out loud; an empty array is a
+  real answer — the change is sound — and reads as one.
+  **The split into a turn per file is a reversal**, and the reason is arithmetic
+  rather than taste. It was one turn over the concatenated patches under a single
+  `PATCH_LIMIT`, which is a budget spent in path order: on a change of any real
+  size — a few hundred files, a regenerated lockfile, a formatting sweep —
+  everything after the first few dozen was dropped to a list of names the turn
+  was free to ignore, and the review silently reported on the front of the
+  alphabet. A per-file turn is the only shape where the hundredth file is looked
+  at as hard as the first, and the cap becomes per file, so nothing is dropped
+  for being late in a change. Two things are given up for that and neither is
+  free. **N turns is N cached prefixes** — the cost of a review now scales with
+  the change, where before a 400-file diff and a 4-file diff cost nearly the
+  same. And **no turn sees the change whole**, so a remark that only exists in
+  the relationship between two files is one this will not make; that is softened
+  rather than solved, by handing every turn the list of changed files and the
+  tools to read them. Grouping related files into a turn each was considered and
+  rejected as the thing to do first: every rule for "related" is either an import
+  graph that only works for this repo's own languages, or a proximity heuristic
+  that puts `main/git.ts` and `lib/files/git-diff.ts` in different turns anyway.
+  A turn may comment **only on its own file** — findings naming another are
+  dropped — because every changed file has a turn, and a remark each turn that
+  can see a file is allowed to make is that remark left once per importer.
+  Turns run `REVIEW_CONCURRENCY` at a time, which is a count of resident `claude`
+  processes and so is small; one file failing is collected rather than raised,
+  and only a run where _every_ file failed comes back as an error, because a run
+  that reviewed 399 files and lost one to a timeout should hand over the 399.
+  Threads are **added**, never replaced: a review run on top of remarks somebody
+  had already written is two reviews of the same diff, and throwing one away is
+  `Discard`'s business rather than this button's. The bar is drawn **always** now,
+  where it used to appear only once there was something to count — a button that
+  reviews the whole change has to be reachable on a diff nobody has commented on
+  yet, which is exactly the state it used to hide in.
+- **Claude is called by name, not by a button.** Writing `@claude-review` in a
+  comment runs one turn in that checkout and puts the answer in as a note by
+  `agent` — the author `lib/files/review.ts` has had since the day it was written,
+  for exactly this, which is why nothing about the store's shape changed to allow
+  it. It is the question a reviewer already has while writing the remark ("is this
+  actually load bearing?"), and the only way to ask it before was to send the
+  whole review to a chat and read the answer somewhere else.
+  It was an `Ask Claude` button beside the reply field, and a mention is better
+  for a reason the button could not fix: pressing it sent the **whole thread**, so
+  "what about the null case?" or "…but only the second half" could not be asked at
+  all without writing a second comment first and then pressing. A mention makes
+  the question and the summons one sentence. It is also the shape a forge's review
+  already has, so it needs no teaching beyond seeing one — which is why the
+  mention is left in the text rather than stripped once it has done its job.
+  Typing `@` opens a **menu**, which is what makes the name findable without
+  being memorised — so the placeholders teach the key (`@ to ask Claude`) and the
+  menu supplies the rest. It reuses `mentionQuery` and `insertMention` from
+  `lib/worktree-chat/mention-text.ts`: pure text work with no chat in it, already
+  checked in `test/chat-mentions.ts`, and two answers to "is the caret inside a
+  mention?" would be two behaviours to keep agreeing. What it does **not** reuse
+  is the rest of that menu — there is exactly one name to offer, so this has no
+  selection, no arrow keys and no ranking, and the day there is a second one the
+  composer's menu is the thing to copy. The keys it takes are `Enter` and `Tab` to
+  accept and `Escape` to dismiss; `⌘⏎` is deliberately not one of them, because a
+  comment finished while the menu happens to be up should send rather than
+  complete a word nobody was choosing, and `Escape` closes the menu rather than
+  the box so a dismissed list cannot throw away a half-written remark.
+  Two rules make it safe. `mentionsAgent` matches the **token**, so
+  `@claude-reviewer` is somebody else, `@claude-review-later` is a note to self,
+  and an address or a path ending in it is not a summons — a false positive here
+  is a turn nobody asked for. And **only a note by `you` summons anything**: Claude's
+  own answer comes back through the same `reply`, and one that quoted the mention
+  while explaining it would otherwise ask itself for ever. Both are checked in
+  `test/review.ts`, the second by watching `asking` rather than by mocking the
+  channel. Asking again after arguing with an answer sends the exchange so far,
+  attributed, so the second ask is a follow-up rather than the first question
+  again.
+
+That runs a **second `claude`**, which is the rule in `CLAUDE.md` and
+`ipc.ts` worth stating against rather than quietly stepping over: features
+calling the CLI as a helper — an AI filter, an import button — are refused,
+because a helper turn is a turn nobody asked for. This is not one. It is a button
+on a comment, pressed by the person who wrote the comment, and its answer goes
+where they are looking. What makes it safe to allow without the rule losing its
+edge is that it is deliberately **not a conversation**: `src/main/review-agent.ts`
+opens a session for the question and closes it on the answer, so there is no
+transcript, no resume, no idle reaper and no id anybody could send a second
+message to. It is read-only by the same means `Plan` and `Read only` are — a tool
+list applied in this process, no `Bash` — because a reply that edited the file
+under the diff being read would be the diff moving mid-sentence. Nothing can stop
+it to ask, since there is no card and nobody watching, so an unpermitted call is
+refused with a sentence rather than held. It is bounded at three minutes, which a
+chat's ask deliberately is not: there somebody is reading the question and will
+answer, here nobody is and there is no Stop to press. While it runs the thread
+draws the turn as the note it is about to become — Claude's own mark, its name,
+and "Reading the code…" — because the button that used to carry the spinner is
+gone and a thread that has summoned somebody has to say so where the answer will
+appear. A reviewer who wants a real conversation opens a chat and says so — the
+diff is on screen beside it.
+
+A note is drawn as **markdown**, through the same `MarkdownView` the chat pane
+and the Explorer's `.md` preview use. Claude answers in it — backticked
+identifiers, a `**bold**` qualifier, the odd short list — and a thread showing the
+source characters is a thread quoting the punctuation instead of reading it; a
+reviewer who types `fd` gets the same. That renderer builds its own DOM, so there
+is no React tree to slip a chip into, which is why `markMention` wraps
+`@claude-review` in backticks on the way in: inline code is the one marking that
+survives the round trip, and it says the right thing anyway — a handle rather than
+prose. The stored note is untouched, so what `threadBlock` quotes back to Claude
+is still what was typed.
+
+A failure is **drawn** under the thread and not written into it as a note: a
+reply that did not happen is not something anybody said.
+
+`threadPrompt` is the one part with a test (`test/review.ts`): a heading naming
+the file and its lines **relative to the project** — the cwd the turn runs in, and
+forty characters shorter than the absolute path — the quoted lines in a fence so a
+`#` in them is not a heading, then what was said, replies included and attributed,
+so asking a second time after arguing with the first answer is a follow-up rather
+than the same question again. It asks for the comment to be **answered** rather
+than carried out. `threadBlock` is split out of it because that is the part worth
+being sure of; it had a second caller, `reviewPrompt`, which went with
+`Ask AI to fix…`.
 
 **The diff is the one editor that is unmounted rather than hidden.** Every panel
 in the workbench, and every file tab inside this one, is kept mounted and hidden
@@ -3097,9 +3812,9 @@ deliberately not offered one: it is markdown with JSX in it, and a commonmark
 parser drops the component tags rather than drawing them.
 
 **A `.note` is the third file, and the only one the studio invented.** It opens
-in the Notes panel's own block editor — the same `BlockEditor`, the same slash
-menu, the same `/drawing` — over a file in one of the workspace's folders
-instead of over a record under `~/.tabomni`. `New note…` sits beside `New file…`
+in the block editor — the one the Notes panel brought and left behind (see
+Notes, removed) — over a file in one of the workspace's folders instead of over
+a record under `~/.tabomni`. `New note…` sits beside `New file…`
 in a folder's right-click menu and on the folder heading's, and creates an empty
 file with that extension: there is nothing to write into it, because an empty
 body is the empty document the editor starts on anyway.
@@ -3119,9 +3834,9 @@ prose it is at least all still there, and visibly so. The **Text editor** is
 offered second in the same **Open with** menu for the same reason: a note that
 will not open the way it should is a note whose text somebody needs to see.
 
-It is the files store's tab, not the notes store's, and that decides how it is
-written: typing marks it dirty, ⌘S and the header's Save write it, and closing
-the tab flushes it — where a note in the Notes panel is written as it is typed.
+It is the files store's tab, and that decides how it is written: typing marks it
+dirty, ⌘S and the header's Save write it, and closing the tab flushes it — where
+the Notes panel wrote its own records as they were typed.
 The file is in somebody's repository beside their source, and a rich-text pane
 that wrote on every keystroke would be changing their working tree while they
 thought.
@@ -3143,7 +3858,7 @@ editor. That print is `blocksToMarkdownLossy`, which is lossy by its own name:
 children of blocks that are not list items are un-nested, some styles go, and it
 renders the _whole_ file from the document, so the first save reflows every line
 whether or not it was touched. That is exactly the trade the Notes panel refused
-when it moved its own notes off markdown — and the difference here is that the
+when it moved its own records off markdown — and the difference here is that the
 markdown is not this app's storage, it is the user's file, so the choice is
 theirs to make per file. What the studio owes them is that nothing happens until
 they make it: the text editor stays the default, nothing is written until a
@@ -3339,9 +4054,8 @@ and already told what is in the editor; wiring diagnostics through it is a
 feature, and was deliberately not smuggled into a migration.
 
 Saving is `⌘S`, with a dot on the tab and on the tree row while a buffer is
-ahead of the disk. Closing a tab writes it rather than asking — the same bargain
-the Notes panel makes, since the edit was deliberate and a three-button dialog
-is in the way of the common case.
+ahead of the disk. Closing a tab writes it rather than asking, since the edit
+was deliberate and a three-button dialog is in the way of the common case.
 
 ## Terminal sessions, removed
 
@@ -3543,167 +4257,60 @@ somebody's captured mail out from under them — the file is theirs to keep or t
 delete, and it costs a stopped app nothing. A build that brings mail back would
 find it there.
 
-## Notes
+## Notes, removed
 
-The panel for what the work needs written down and nothing else knows where to
-put — the payload that took an hour to get right, the shape a response comes
-back in, what the next step was. It is a rail section beside the other three,
-not a corner of one of them, because that is what makes it reachable from
-whichever panel raised the thing worth writing down.
+**There was a Notes panel here**: a section of the left column with its own
+folder tree, a record per note in `notes.json`, a body per note under
+`notes/<id>.json`, a block editor over it, and a loopback preview server that
+served any of them as a finished page. It is gone the way Mail and the Tasks
+layer went — deleted rather than hidden behind a flag, so that what is here is
+what runs.
 
-Notes belong to the **workspace**, like the requests and the databases and for
-the same reason: a note about how a frontend calls its API is about both
-folders, and filing it under one would decide which one is allowed to see it.
-They are filed into folders of their own — arbitrarily deep, dragged between,
-right-clicked exactly the way the API panel's requests are.
+The argument for going was the one the panel was built on, read back the other
+way round. A note was justified by being _reachable from whichever panel raised
+the thing worth writing down_ — and by the time the left column was projects
+alone, it was reachable from nothing: `SIDEBAR_SECTIONS` had not listed it for
+some time, and `⌘P` was the whole of the way in. What it held is a file in a
+repository in every case that mattered, and the Explorer edits those in the same
+editor. A second place to write things down, filed under the workspace rather
+than under the work, is a place notes go to be lost.
 
-Two panels wanting the same tree is what pulled that tree out into
-`lib/tree.ts`: nesting by `parentId`, the cycle guard that stops a folder being
-dropped into its own subtree, and the count behind "this deletes 4 notes and 2
-subfolders". `lib/http/folders.ts` now delegates to it and keeps only what is
-genuinely the API panel's — the headers and params that cascade down a request
-folder, which a note folder has no equivalent of. `test/tree.ts` covers it: a
-wrong answer there is a subtree detached from the root or a delete confirmed
-against the wrong number.
+What went with it: `lib/note/store.ts`, `note-list.tsx` and `note-workspace.tsx`;
+`main/preview.ts`, `main/note-html.ts` and `main/note-blocks.ts`; the `notes:*`
+channels, `notes:preview-url`, `note-files:copy`, `note-files:delete` and
+`drawings:delete`; `NoteRecord`, `NoteFolder` and `NoteBody` out of the contract;
+`Section`, `Pane`, `SidebarSection` and `PREFIX` no longer naming `note`, and
+`--section-note` out of the tokens. `test/note-preview.ts` and `test/note-files.ts`
+went with the code they covered.
 
-**A note is a markdown file.** `notes.json` is the listing — name, folder,
-timestamps — and the text lives beside it, one `notes/<id>.md` per note. Two
-reasons, and the second is the better one: typing into a note rewrites that note
-rather than every note at once, and what is left on disk is a directory of plain
-markdown that grep, an editor, or git can read without this app's help. The id
-comes from the renderer and is used as a filename, so `Store` checks it is a
-UUID before it touches the path — an id is not a name the user typed, and it
-should not be able to become one.
+**What stayed is the editor**, because the Explorer's `.note` and `.md` tabs are
+that editor over a file — see § The block editor below, which is where the
+pictures and the drawings are documented now. The walks that were only the
+panel's went even so: which drawings and which pictures a document owned were
+questions asked to delete or duplicate a _note_, and nothing deletes or
+duplicates a document any more. A scene whose block is deleted stays under
+`workspace/drawings/`, which is what the panel did for an undone delete anyway.
 
-Writes are debounced 400ms, per note, so two notes open at once cannot cancel
-each other's save; closing a tab flushes what is still waiting, and deleting a
-note cancels it — a write landing after a delete would put the file back. The
-`Store`'s own queue is what makes that ordering hold rather than a race.
+**What is on disk is left alone**, deliberately, the way the mail and the note
+templates before it were: a workspace that ran the old build still has
+`workspace/notes.json`, `workspace/note-folders.json`, the bodies under
+`workspace/notes/`, and `workspace/note-templates*` from the removal before this
+one. This app reads none of them. Removing a feature is not a reason to delete
+somebody's writing out from under them, and a note worth keeping is a `.note`
+file in a repository now — copy it in and the Explorer opens it in the same
+editor.
 
-The editor is a batteries-included one rather than a bare ProseMirror: it brings
-the selection toolbar, the `/` block menu and the drag handles rather than having
-them hand-built, and it reads as part of the studio because `note-editor.css`
-points its own variables at the app's tokens — one palette, following the theme,
-with nothing in the panel that has to know which theme is on. (It was Crepe,
-sharing `milkdown-theme.css` with a chat composer that no longer exists; that
-stylesheet went with the composer, and `@milkdown/kit` is still here for
-`lib/markdown/renderer.ts`, which renders markdown to plain DOM for reading.)
+## The block editor
 
-Two of Crepe's features are off, each for a reason:
-
-- **LaTeX**, which needs KaTeX's stylesheet, not a dependency this app declares.
-- **AI** and the top bar, which are not what this panel is.
-
-The image block used to be off with them — Crepe's uploader handed an inserted
-file back as a `blob:` URL, bytes held in this window's memory and gone the next
-time the app opened, and a dead image is worse than none. That was never a
-decision about images; it was a decision about where the bytes go. **Images**
-below is where they go now.
-
-**A table's columns can be dragged.** Crepe's table block has no resizing, and
-prosemirror-tables' `columnResizing` cannot be switched on to supply it: it
-installs its own `TableView`, which Milkdown's node views beat because Milkdown
-hands them to `EditorView` as direct props; every width it writes goes through
-that view's `<colgroup>`, which Crepe's table does not have — pointed at the
-`<tbody>` instead, `updateColumnsOnResize` would remove the table's own rows;
-and its `mousedown` handler never runs anyway, because Crepe's `stopEvent`
-claims a click on a cell for the node view. So `table-resize.ts` does the drag
-itself, from a capture-phase listener that takes the event before Crepe can, and
-keeps a `<colgroup>` in step with the document. Crepe's table block is otherwise
-untouched — the grips, the `+` buttons and the alignment menu are still its own.
-
-The two columns either side of the border keep their total, so the table never
-changes width: it sits in a pane that is half a split workbench, with nowhere to
-grow into, and a table wider than its column would need a scrollbar where the
-row and column grips are. Widths reach the DOM as percentages for the same
-reason, since the pane is resizable and a column pinned at 240px is only right
-at one pane width. **They do not survive a reload**: the width lives in the
-cells' `colwidth` attribute, and GFM has no syntax for one, so serialising the
-note drops it. It holds for the session — the editors stay mounted, so tab and
-panel switches keep it — and the alternative was a width written into the file
-in a form no other markdown reader would understand, which is the one thing this
-panel is careful not to do. `test/table-resize.ts` covers the two halves that
-fail silently: the position arithmetic that finds every cell of a table, and the
-clamp that stops a column being dragged shut.
-
-The editor is keyed on the note id, and there is **one per open tab**, hidden
-rather than unmounted the way the dock stacks its shells. The editor
-takes its content once, at construction, and has no "load this instead", so a
-pane that mounted a single editor and swapped the note under it rebuilt
-ProseMirror on every tab click: back to a spinner, the caret at the top of the
-document, the scroll position gone and nothing left to undo. The text was never
-what that cost — `loadBody` has it cached — the editing state was. What a hidden
-editor must not do is answer the drawing event: `openDrawing` is a broadcast to
-every listener, so each mounted `DrawingHost` would open a dialog of its own for
-one drawing clicked in the note on screen, which is what the `visible` prop is
-for.
-
-The pane waits for the file rather than mounting empty and filling in, which
-would put a document nobody typed through ProseMirror's history and make one
-undo empty the note. Both of those live in the editor rather than in the note
-pane, because the Explorer's `.note` tabs are the same editor over a different
-file.
-
-**A table's columns can be dragged, and `table-resize.ts` is all of it.** Crepe
-ships no resizing, and prosemirror-tables' `columnResizing` cannot supply it
-here: it installs its `TableView` through `plugin.spec.props.nodeViews` while
-Milkdown hands its own views to `EditorView` as direct props, which ProseMirror
-consults first — so Crepe's table view wins and the `<colgroup>` every width is
-written through is never built. Turned on anyway, its `updateColumnsOnResize`
-would take the `<tbody>` for that colgroup, style the first rows as if they were
-`<col>`s and remove the rest: the table's own rows, out of the content DOM. And
-its handlers are `handleDOMEvents`, which never see the `mousedown` regardless,
-because Crepe's `stopEvent` claims one on a cell as a click into that cell.
-
-So the drag is its own: a capture-phase listener that takes the press before
-Crepe's view can claim it, widths painted into a colgroup the plugin keeps in
-step with the document, and one transaction at the end so one undo takes the
-whole drag. Crepe's table block is untouched — the row and column grips, the `+`
-buttons and the alignment menu are still its own. Widths are spent as
-percentages rather than the pixels the attribute holds: this pane is one half of
-a split workbench, and a column pinned to 240px in a pane later dragged narrower
-is a table wider than the note it is in. The pair either side of a border keeps
-its total, so the table itself never changes width.
-
-**A width does not survive a reload**, and that is the honest limit rather than
-an omission. It lives in the cells' `colwidth` attribute, and GFM has no syntax
-for a column width, so it is dropped the moment the document is serialised. It
-holds for the session — the editors stay mounted, so tab and panel switches keep
-it — and it is gone the next time the note is read from disk. The alternative
-was a width written into the file that no other markdown reader would
-understand, which is the one thing this panel is careful not to do.
-
-`test/table-resize.ts` covers the two halves that fail quietly: `commit`
-addresses every cell by arithmetic on the table's own position, where being one
-out lands on a row or the next cell along and ProseMirror simply drops an
-attribute that node has no place for, and `widthsFor` is what stops a drag from
-closing a column past the width a caret fits in.
-
-### Templates, removed
-
-**There was a template feature here**: a second listing beside the notes, in
-`note-templates.json` with a body per template under `note-templates/`, made
-from a `LayoutTemplate` button in the panel header, offered as **New from
-template** on a right-click, filled from **Save as template** on a note, and
-edited in a manage dialog that mounted the note editor over a template's file.
-Four presets — meeting notes, a bug repro, an API endpoint, a decision record —
-were seeded once, behind a `note.templatesSeeded` flag.
-
-It is gone the way Mail went: deleted rather than hidden. The `note-templates:*`
-channels and the `NoteTemplate` type are out of the contract, the store's own
-template calls and its two paths with them, and the sidebar is a note button, a
-folder button and a right-click menu with no submenu in it.
-
-What is left is on disk, deliberately: a workspace that ran the old build still
-has `workspace/note-templates.json`, the bodies under `workspace/note-templates/`
-and the seeded flag in its settings, and this app no longer reads any of them.
-Removing a feature is not a reason to delete somebody's writing out from under
-them. A template worth keeping is a note now — the text is markdown either way.
+The pane behind a `.note` or a `.md` in the Explorer (`files/file-blocks.tsx`
+over `note/block-editor.tsx`) — BlockNote, brought in with the Notes panel and
+kept when that went. What it is bound to and what a `.md` costs is § Explorer
+§ The editor; what follows is the two block types that are this app's own.
 
 ### Images
 
-A picture goes into a note the three ways one goes into any editor: dropped on
-it, pasted into it, or picked through the image block's **Upload** tab. That tab
+A picture goes into a document the three ways one goes into any editor: dropped
+on it, pasted into it, or picked through the image block's **Upload** tab. That tab
 is the whole of the wiring — BlockNote builds the panel out of what the editor
 can do, so an editor with no `uploadFile` offers only "Embed" a URL, and a
 dropped file is ignored. `lib/note/uploads.ts` is that function.
@@ -3727,43 +4334,42 @@ second block under the one being filled.
 
 **The bytes become a file of the workspace's own**, one per upload under
 `workspace/note-files/`, and the document holds a URL naming it. Neither
-alternative survives contact with the panel:
+alternative survives contact with the editor:
 
-- **Not a data URL in the block.** A note's body is rewritten on every pause in
-  the typing and crosses the bridge each time, so a photograph pasted into one
-  would be re-encoded, re-sent and re-written for the rest of that note's life.
+- **Not a data URL in the block.** A document is re-serialised on every pause in
+  the typing, so a photograph pasted into one would be re-encoded and
+  re-written for the rest of that file's life.
 - **Not a path into the user's own folders.** The file the picture came from is
-  theirs to move, rename or delete, and a note is expected to still have its
+  theirs to move, rename or delete, and a document is expected to still have its
   picture afterwards.
 
 Which is the trade the drawings already make, and the rest follows the drawings
 too: the name is a fresh UUID plus an extension taken from the browser's idea of
 the file's type — so nothing the user's filesystem named reaches a path of ours,
 and two pictures dropped from two folders cannot be the same file — and `Store`
-checks the shape of that name before it becomes one, the way it checks a note id.
-Duplicating a note **copies** the files and points the copy at the copies
-(`cloneNoteFiles`, beside `cloneDrawings` in the same `copyOf`), because two
-notes sharing one file means deleting either blanks the other. Deleting a note
-takes its pictures with it, read out of the document while it is still there.
+checks the shape of that name before it becomes one.
+
+**Nothing deletes one.** The copy-and-delete walks over a document were the
+Notes panel's — a note being duplicated or deleted was the only thing that ever
+owned a picture — and they went with it. A file dropped into a `.note` in
+somebody's repository is kept until they say otherwise, which for a file under
+`~/.tabomni` is the safer of the two ways to be wrong; the alternative is a
+delete that has to be right about a document the user may still be undoing.
 
 **The URL is `note-file://workspace/<name>`, a scheme this app serves**
 (`shared/note-files.ts` is its shape, `main/protocol.ts` the handler). Both sides
 have to be able to say what one means: the renderer puts it in an `img` and
 Chromium fetches it through the handler, streamed off disk with the content type
-its extension gives it, while the preview server renders the same document for a
-browser that has never heard of the scheme and swaps it for the bytes. A privileged
-scheme rather than `file://`, which Chromium will not load as a subresource of
+its extension gives it. A privileged scheme rather than `file://`, which Chromium will not load as a subresource of
 another origin, and `secure` so it is not mixed content on a page served over
 `app://`. The handler builds no path of its own: it hands the name to the store's
-own `noteFilePath`, which is the same check every other note file goes through.
+own `noteFilePath`, which is the same check every other one goes through.
 
 **A picture, a clip and a sound all work; an attachment is where it stops.** A
-video or an audio file dropped in plays where it sits, in the editor and on the
-preview page both — the Preview section below is how, since a player needs a URL
-it can seek within rather than the inlined bytes an image gets. Anything with no
-player, a PDF or an archive, is still stored and still named in the note, and in
-the preview it is a link the browser opens if it can show the type and downloads
-if it cannot. What it is _not_ is openable from the
+video or an audio file dropped in plays where it sits, seeking through the
+`Range` header `main/protocol.ts` passes along. Anything with no player, a PDF
+or an archive, is still stored and still named in the document. What it is _not_
+is openable from the
 editor: BlockNote's Download button hands the URL to `window.open`, and the
 studio denies a `window.open` in any scheme but `http`, `https` and `mailto`
 (`openExternal` in `main.ts`), which is a rule worth more than that button.
@@ -3778,10 +4384,8 @@ and served as `video/quicktime` is a player that shows nothing.
 
 An `![alt](https://…)` or an image copied out of a browser — which arrives as a
 `data:` URL on the clipboard's HTML — is left exactly as it is. Those are not the
-workspace's files, and the walks that copy and delete know the difference by
-asking `noteFileNameOf`. `test/note-files.ts` is that seam: the URL both sides
-agree on, and the two walks over it, one per process because neither may import
-the other's.
+workspace's files, and `noteFileNameOf` in `shared/note-files.ts` is what knows
+the difference.
 
 ### Drawings
 
@@ -3848,8 +4452,8 @@ React component — so it reaches the editor dialog through an event
 (`onDrawingOpened`) rather than a callback nobody was in a position to hand it,
 and it redraws on a theme change through one `MutationObserver` on `<html>`
 shared by every block in the document. A drawing is exported light or dark
-rather than tinted; Excalidraw inverts the strokes, and a preview that stayed
-dark on a white page would be the only thing in the studio that did.
+rather than tinted; Excalidraw inverts the strokes, and an export that stayed
+dark on a light page would be the only thing in the studio that did.
 
 Excalidraw is around a megabyte and most sessions never open a drawing, so it is
 loaded on demand: `React.lazy` for the editor, a dynamic `import()` in the node
@@ -3861,13 +4465,12 @@ in `vite.config.ts` reads them out of `node_modules` in dev and emits them into
 the bundle for a build; `public/` was the other option and 13MB of vendored
 woff2 does not belong in git.
 
-Deleting a note deletes the drawings its markdown refers to, read out of the
-text while it is still there. Duplicating a note copies them and re-points the
-copy, so editing the duplicate cannot change the original. Deleting just the
-block leaves its scene behind on purpose: that has to be undoable, and a delete
-that had already removed the file would come back as an empty drawing.
-`test/drawings.ts` covers the reading, since both directions are destructive
-when it is wrong.
+**Nothing deletes a scene.** Deleting the block leaves the file behind on
+purpose — that has to be undoable, and a delete that had already removed the
+file would come back as an empty drawing — and the walk that took a _note's_
+drawings with it went with the Notes panel. What is left under
+`workspace/drawings/` is the user's to clear out, which is the same bargain the
+pictures make.
 
 **Numbered badges** — the ①②③ of an annotated screenshot — are the one thing
 added to Excalidraw's own set of tools, and the button for them is **in its
@@ -3918,131 +4521,6 @@ than counted in React: that is what lets a drawing reopened tomorrow carry on at
 all of it, and takes `convertToExcalidrawElements` as an argument rather than
 importing it — an import at the top of that file would pull the megabyte back
 out of its lazy chunk and into the studio's own bundle.
-
-### Preview
-
-**Copy preview link** on a note's right-click menu puts a loopback URL on the
-clipboard; **Open preview** hands the same URL to the browser. What is on the
-other end is the note as a finished page — the thing to paste into a browser
-beside whatever the note documents, to send to someone on the same machine, or
-to hand to something that reads pages rather than looks at them.
-
-**It is server-rendered, and that is the decision the rest follows from.** The
-page arrives complete: no script runs before the words are there, so anything
-that fetches it — `curl`, a model reading a URL — gets the whole note. The
-obvious way to build it was BlockNote's own `blocksToHTMLLossy`, and it is not
-available here: that is a method on an editor, an editor is ProseMirror, and
-ProseMirror is a DOM. Taking it would have meant the renderer rendering every
-preview and pushing it to the main process, so a note could only be previewed
-while the studio was open on that note. `main/note-html.ts` is the walk written
-instead — the same block model, emitting plain semantic HTML rather than
-BlockNote's own class-laden markup, which is the better output for a page that
-is read rather than edited.
-
-Everything it renders came off disk, so nothing is trusted: text is escaped, a
-URL is parsed and checked against a scheme list before it becomes an `href` —
-`javascript:` keeps its words and loses its link — and a colspan is an integer
-or it is not there. A note is the user's own writing, but this is a page served
-over a socket, and the document does not get to write the markup.
-
-`main/preview.ts` is the server: loopback, a port the OS picks, and a secret
-generated per run as the first path segment. A wrong secret and an id that is
-not a note in this workspace answer with the same 404, so neither can be found
-by trying. That secret is also what looks the id up — the note's own listing is
-consulted rather than the path being turned into a filename, which is what
-keeps `../` from ever reaching one. One segment shorter is the index: every
-note in the workspace with the folder it is filed under, which is what a reader
-after the notebook rather than the note wants.
-
-**A link lives as long as the app run.** Both the port and the secret change on
-the next launch and nothing is written to disk to outlive them, so a preview
-left open overnight is a dead tab rather than a page still serving a note to
-whoever kept the URL. The server binds on the first link asked for, so a
-workspace whose notes are never read outside the studio never opens a port, and
-it is closed on quit along with the shells and the databases.
-
-The page carries the version it was rendered at and answers `HEAD` with it as an
-ETag; the one script on it polls that and reloads when it changes. This is the
-only thing on the page that needs JavaScript, and it is the only thing lost
-without it — which is what makes a preview open beside the editor keep up with
-the typing while still being a document rather than an app.
-
-**A colour reaches the page as a name, never as the value behind it.** The
-stylesheet declares both renderings of each of BlockNote's nine highlights and a
-coloured run gets `var(--hl-yellow-text)`, so a yellow heading is the studio's
-yellow in a light browser and the studio's other yellow in a dark one — kept in
-step by the browser rather than by the walk. It is also the whole of the
-validation: nothing out of the file is ever spent as a CSS value, and a name
-that is not one of the nine is dropped. What that costs is a colour picked
-outside the menu — the studio writes its own `oklch(…)` onto table cells this
-way — which is bound to the theme it was picked in and has no honest rendering
-on a page that follows the reader's. The one value that is not BlockNote's own
-is the light-mode yellow, darkened because a yellow chosen for the editor's dark
-surface all but disappears on white.
-
-**A table keeps the column widths it was built with.** They ride along as the
-`<colgroup>` the editor holds them in, and with `table-layout: fixed`, which is
-what makes a width a width — under the automatic layout a browser treats one as
-a suggestion and stretches it to the content, which is the table the widths were
-set to prevent. A table with every column sized is exactly as wide as they add
-up to and sits at the left, the way the editor lays it out; one with any column
-unsized fills the measure, the sized columns keeping their pixels while the rest
-share what is left. A table the note gave no widths at all is left to its
-content, because fixed layout there would divide it into equal columns and call
-that a decision.
-
-Long words are broken with `overflow-wrap: anywhere`, and that is not
-cosmetic: a note holds URLs, ids and paths longer than the measure, and
-`anywhere` counts towards a table cell's min-content width — which is what stops
-one long link inside a table from making the page scroll sideways. `pre` is left
-out, because a line break invented inside code is a lie about the code.
-
-A **drawing** is the one thing the main process cannot render: it has no
-Excalidraw, and a scene needs a canvas and a font stack. What it inlines is an
-SVG the renderer exported beside the scene, always in light mode, written
-whenever a drawing is saved and backfilled the first time a scene is read in a
-session — so opening the note once is what gives its diagrams to the preview. A
-drawing that has not been through that says so rather than leaving a gap.
-
-**The note's own files are resolved before the walk runs, not inside it.** They
-arrive under `note-file://`, a scheme of this app's that the browser reading this
-page has never heard of, and `withNoteFileUrls` in `main/note-blocks.ts` swaps
-every one of them in the document — so `note-html.ts` keeps a single scheme list
-and sees a URL a browser can follow like any other. `filesIn` in `preview.ts` is
-what each becomes, and the split is the one interesting decision on this page:
-
-- **A picture is inlined**, as a `data:` URL. It is small, and it is what keeps a
-  note of writing and screenshots a single file — saveable out of the browser,
-  readable by something that follows no links.
-- **Everything else is a link back to this server**, on a route of its own:
-  `/{token}/file/{name}`. A `data:` URL is the wrong shape for it — a video would
-  put tens of megabytes of base64 in the markup, `<video>` cannot seek inside
-  one, and a browser refuses to navigate to a `data:` document at all, which is
-  what once left a PDF in a note unopenable.
-
-`file` is safe as a reserved first segment because the branch it shadows is a
-note id, and a note id is a UUID. The token is checked before either branch, so a
-file is exactly as reachable as the note holding it and no more.
-
-**That route answers ranges**, and that is what makes a player a player rather
-than a play button: a `<video>` asks for the head of the file to find its
-duration and then for the bytes around wherever the reader drags to, and a server
-answering each of those with the whole file gives a clip that cannot be seeked.
-Single ranges only — `bytes=a-b` and the `bytes=-n` suffix form — because no media
-element sends a multipart range, and the whole file is a truthful answer to a
-header this does not parse. The bytes are sliced out of a buffer rather than
-streamed off disk, which is honest only because an upload is capped at 64 MB; a
-note that could hold an hour of video would want a read stream there.
-
-A video or audio block gets `controls preload="metadata"` and never `autoplay`:
-three clips in a note should cost three headers rather than three downloads, and
-nothing on a page someone opened to read should start making noise. A block the
-editor was told not to preview, and one whose file has gone, both fall back to
-the link — or, with nothing to link to, to the "missing" line.
-
-What is deliberately not in the ETag is the files: a note file is written once,
-under a name nothing else uses, so a picture that changed is a document that
-changed.
 
 ## The system bar
 

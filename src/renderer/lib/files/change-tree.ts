@@ -187,3 +187,23 @@ export function countsUnder(
 
   return counted ? { added, removed } : null
 }
+
+/**
+ * How many review comments sit under a node — a file's own, or its
+ * descendants' summed, the same shape `countsUnder` sums `+`/`−` in.
+ *
+ * Takes the count *per path* rather than the threads themselves, so this file
+ * stays free of `lib/files/review.ts` the way it is free of the review's
+ * whole shape elsewhere — the caller has already reduced a root's threads to
+ * one number per changed file (`ChangesList` does, from `useReview`), and
+ * this only walks the tree summing what it is handed.
+ */
+export function commentCountsUnder(
+  node: ChangeTreeNode,
+  counts: Map<string, number>
+): number {
+  return changesUnder(node).reduce(
+    (sum, change) => sum + (counts.get(change.path) ?? 0),
+    0
+  )
+}

@@ -6,31 +6,31 @@ import { isStringArray, recall, remember } from "./tab-memory"
 const COLUMN_KEY = "projects.column"
 
 /**
- * The four things the left column can stack.
+ * The three things the left column can stack.
  *
- * `projects` is this column's own; the other three are the panels' lists, which
+ * `projects` is this column's own; the other two are the panels' lists, which
  * were the right-hand panel's tabs before and are sections here — see
- * `WorkspaceSidebar`. Not `Section` from `lib/rail.ts`: that is the four ways
- * into the *workbench* and its `files` is the Explorer, which stayed on the
+ * `WorkspaceSidebar`. Not `Section` from `lib/rail.ts`: that is the ways into
+ * the *workbench* and its `files` is the Explorer, which stayed on the
  * right.
  *
  * Which of them are actually drawn is `SIDEBAR_SECTIONS` below, and it is not
  * all of them right now.
  */
-export type SidebarSection = "projects" | "database" | "note" | "api"
+export type SidebarSection = "projects" | "database" | "api"
 
 /**
  * Which of them the column actually draws.
  *
  * **Projects only, for now** — Conductor's left column, which is the shape this
  * is being held against: the projects and their branches, and nothing else
- * competing for the height. `Database`, `Notes` and `API` are *hidden* rather
- * than removed: the panels, their stores, their panes and their tabs are all
- * still here and still work, and `⌘P` indexes every table, request and note, so
- * nothing has become unreachable. Putting one back is adding its id to this
- * list.
+ * competing for the height. `Database` and `API` are *hidden* rather than
+ * removed: the panels, their stores, their panes and their tabs are all still
+ * here and still work, they have a window each (`openPanelWindow`), and `⌘P`
+ * indexes every table and request, so nothing has become unreachable. Putting
+ * one back is adding its id to this list.
  *
- * The type above keeps all four on purpose. It is what `TITLES` and `Section`
+ * The type above keeps all three on purpose. It is what `TITLES` and `Section`
  * are keyed by, so a hidden section stays spelled out rather than becoming a
  * string nothing checks.
  */

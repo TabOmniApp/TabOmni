@@ -1,4 +1,4 @@
-import { Search, Settings } from "lucide-react"
+import { Database, Search, Send, Settings } from "lucide-react"
 
 import { usePalette } from "@/lib/palette"
 import {
@@ -10,20 +10,19 @@ import { RequestList } from "./api/request-list"
 import { DatabaseTree } from "./db/database-tree"
 import { IconButton } from "./icon-button"
 import { PanelHeader, type Fold } from "./panel-header"
-import { NoteList } from "./note/note-list"
 import { ProjectsSection } from "./project/projects-section"
 import { SideRow } from "./side-row"
 
 /**
  * The window's left column: `Search`, then whatever `SIDEBAR_SECTIONS` lists.
  *
- * **Projects, and nothing under it right now.** The column stacked four —
- * `Projects` / `Database` / `Notes` / `API`, each folding — and `Database`,
- * `Notes` and `API` are hidden for the moment, so this is Conductor's left
- * column: the projects and their branches with the whole height to themselves.
- * Hidden, not removed. The three panels, their stores, their panes and their
- * tabs are untouched, `⌘P` still finds every table, request and note, and
- * bringing one back is a line in `SIDEBAR_SECTIONS`.
+ * **Projects, and nothing under it right now.** The column stacked three —
+ * `Projects` / `Database` / `API`, each folding — and `Database` and `API` are
+ * hidden for the moment, so this is Conductor's left column: the projects and
+ * their branches with the whole height to themselves. Hidden, not removed. Both
+ * panels, their stores, their panes and their tabs are untouched, `⌘P` still
+ * finds every table and request, the footer opens either in a window of its
+ * own, and bringing one back into the column is a line in `SIDEBAR_SECTIONS`.
  *
  * The Explorer was never one of them, and that is the asymmetry worth stating:
  * a file tree is the contents of the thing being worked on rather than a list of
@@ -66,10 +65,10 @@ export function WorkspaceSidebar({
 
         Even shares rather than sized to their contents: a column cannot both
         fit its contents and fill its height, and of the two answers this is the
-        one where a long list of notes cannot push the projects off the bottom.
-        A folded section is its header and nothing else, so folding three of
-        them gives the fourth the column — which is also what one section on its
-        own gets, for free.
+        one where a long list of requests cannot push the projects off the
+        bottom. A folded section is its header and nothing else, so folding two
+        of them gives the third the column — which is also what one section on
+        its own gets, for free.
       */}
       <div className="flex min-h-0 flex-1 flex-col">
         {SIDEBAR_SECTIONS.map((section) => (
@@ -91,7 +90,29 @@ export function WorkspaceSidebar({
           badge and a help link: this app has no account, and `⌘,` was the only
           way to the dialog — a preference nobody can find is a preference
           nobody changes. */}
-      <div className="flex h-8 shrink-0 items-center justify-end border-t px-3">
+      {/* The panels at the left end, Settings at the right: they are unrelated,
+          and all three sitting together would read as one group of controls
+          over the same thing. */}
+      <div className="flex h-8 shrink-0 items-center justify-between border-t px-3">
+        {/* The way to the two panels this column no longer draws: a window
+            each, which is also where they are least in the way of the
+            projects. */}
+        <div className="flex items-center gap-1">
+          <IconButton
+            label="Database window"
+            onClick={() => void window.desktop.openPanelWindow("database")}
+            className="size-5 shrink-0"
+          >
+            <Database className="size-3.5" />
+          </IconButton>
+          <IconButton
+            label="API window"
+            onClick={() => void window.desktop.openPanelWindow("api")}
+            className="size-5 shrink-0"
+          >
+            <Send className="size-3.5" />
+          </IconButton>
+        </div>
         <IconButton
           label="Settings"
           onClick={onOpenSettings}
@@ -108,7 +129,6 @@ export function WorkspaceSidebar({
 const TITLES: Record<SidebarSection, string> = {
   projects: "Projects",
   database: "Database",
-  note: "Notes",
   api: "API",
 }
 
@@ -119,7 +139,7 @@ const TITLES: Record<SidebarSection, string> = {
  * of these holds anything a remount would lose — no pty, no turn in flight, no
  * editor. What they hold is a store each, which outlives the component. So a
  * folded section is a header this column draws instead, which is also why the
- * panel's own buttons are not on it: `New note` belongs to the list, and the
+ * panel's own buttons are not on it: `New request` belongs to the list, and the
  * list is not there.
  *
  * `fold` off is the header without a chevron — the shape every panel's header
@@ -155,8 +175,6 @@ function Section({
         </>
       ) : id === "database" ? (
         <DatabaseTree fold={fold} />
-      ) : id === "note" ? (
-        <NoteList fold={fold} />
       ) : (
         <RequestList fold={fold} />
       )}

@@ -1,7 +1,5 @@
 import { extensionForType, noteFileUrl } from "@shared/note-files"
 
-import { mapNoteFileNames, noteFileNamesIn, type NoteBlock } from "./blocks"
-
 /**
  * What the note editor does with a file dropped, pasted or picked into it.
  *
@@ -75,33 +73,4 @@ export async function uploadNoteFile(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer())
   await window.desktop.writeNoteFile(fileName, bytes)
   return noteFileUrl(fileName)
-}
-
-/**
- * Copies every file a note refers to and points the copy at the copies — what
- * duplicating a note needs, exactly as `cloneDrawings` does.
- *
- * Without it two notes share one file, and deleting either takes the other's
- * pictures with it.
- */
-export async function cloneNoteFiles(
-  blocks: NoteBlock[]
-): Promise<NoteBlock[]> {
-  const names = noteFileNamesIn(blocks)
-  if (names.length === 0) return blocks
-
-  const copies = new Map<string, string>()
-  for (const name of names) {
-    const extension = name.slice(name.lastIndexOf(".") + 1)
-    const copy = `${crypto.randomUUID()}.${extension}`
-    await window.desktop.copyNoteFile(name, copy)
-    copies.set(name, copy)
-  }
-
-  return mapNoteFileNames(blocks, (name) => copies.get(name) ?? name)
-}
-
-export async function deleteNoteFiles(fileNames: string[]): Promise<void> {
-  if (fileNames.length === 0) return
-  await window.desktop.deleteNoteFiles(fileNames)
 }

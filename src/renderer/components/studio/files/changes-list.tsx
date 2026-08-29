@@ -1,5 +1,13 @@
-import { useState, type MouseEvent, type ReactNode } from "react"
-import { ChevronRight, Copy, Folder, Minus, Plus, Undo2 } from "lucide-react"
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react"
+import {
+  ChevronRight,
+  Copy,
+  Folder,
+  MessageSquare,
+  Minus,
+  Plus,
+  Undo2,
+} from "lucide-react"
 
 import type { GitChange } from "@shared/api"
 import {
@@ -22,6 +30,7 @@ import {
 import {
   changeTree,
   changesUnder,
+  commentCountsUnder,
   countsUnder,
   type ChangeTreeNode,
 } from "@/lib/files/change-tree"
@@ -29,6 +38,7 @@ import { splitChanges, useChanges } from "@/lib/files/changes"
 import { GIT_LABELS, GIT_LETTERS, GIT_TONES } from "@/lib/files/git-status"
 import { nameOf } from "@/lib/files/paths"
 import type { FileRoot } from "@/lib/files/roots"
+import { threadsOf, useReview } from "@/lib/files/review"
 import { useFiles } from "@/lib/files/store"
 import { useStudio } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -84,6 +94,20 @@ export function ChangesList({ root }: { root: FileRoot }) {
   const changes = useChanges((state) => state.byRoot[root.id])
   const loading = useChanges((state) => state.loading.includes(root.id))
 
+  /* How many review threads sit on each changed file, so a finding left by
+   * `Review` on a file nobody has opened yet is still visible — see the badge
+   * in `ChangeRow`/`DirRow`. Reduced to a `Map<path, count>` once per render
+   * rather than handed the threads themselves, so `change-tree.ts` stays free
+   * of the review's own shape (`commentCountsUnder`). */
+  const threads = useReview((state) => state.threads)
+  const commentCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const thread of threadsOf({ threads }, root.id)) {
+      counts.set(thread.path, (counts.get(thread.path) ?? 0) + 1)
+    }
+    return counts
+  }, [threads, root.id])
+
   /** Which row the menu is about, or null for the list as a whole — the same
    * shape the tree's one menu uses, and for the same reason: a trigger per row
    * is a trigger inside a trigger. */
@@ -127,6 +151,7 @@ export function ChangesList({ root }: { root: FileRoot }) {
         root={root}
         indent={0}
         shut={shut}
+        commentCounts={commentCounts}
         onFold={(key) =>
           setShut((state) =>
             state.includes(key)
@@ -349,6 +374,7 @@ function Nodes({
   root,
   indent,
   shut,
+  commentCounts,
   onFold,
   onMenu,
   onDiscard,
@@ -358,6 +384,7 @@ function Nodes({
   root: FileRoot
   indent: number
   shut: string[]
+  commentCounts: Map<string, number>
   onFold: (key: string) => void
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
@@ -372,6 +399,7 @@ function Nodes({
               change={node.change}
               root={root}
               indent={indent}
+              commentCount={commentCounts.get(node.change.path) ?? 0}
               onMenu={onMenu}
               onDiscard={onDiscard}
             />
@@ -389,6 +417,7 @@ function Nodes({
               indent={indent}
               open={open}
               staged={pile === "staged"}
+              commentCount={commentCountsUnder(node, commentCounts)}
               onToggle={() => onFold(key)}
               onMenu={onMenu}
               onDiscard={onDiscard}
@@ -401,6 +430,7 @@ function Nodes({
                   root={root}
                   indent={indent + 1}
                   shut={shut}
+                  commentCounts={commentCounts}
                   onFold={onFold}
                   onMenu={onMenu}
                   onDiscard={onDiscard}
@@ -429,6 +459,7 @@ function DirRow({
   indent,
   open,
   staged,
+  commentCount,
   onToggle,
   onMenu,
   onDiscard,
@@ -438,6 +469,9 @@ function DirRow({
   indent: number
   open: boolean
   staged: boolean
+  /** Review threads on the files under this folder, summed — see
+   * `commentCountsUnder`. */
+  commentCount: number
   onToggle: () => void
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
@@ -473,8 +507,9 @@ function DirRow({
             state. The counts step aside for the actions the way a file's do. */}
         <span
           aria-hidden
-          className="shrink-0 group-focus-within/row:invisible group-hover/row:invisible"
+          className="flex shrink-0 items-center gap-1.5 group-focus-within/row:invisible group-hover/row:invisible"
         >
+          <CommentBadge count={commentCount} />
           {counts && (
             <span className="font-mono text-[0.65rem] tabular-nums">
               <span className={GIT_TONES.added}>+{counts.added}</span>{" "}
@@ -562,12 +597,16 @@ function ChangeRow({
   change,
   root,
   indent,
+  commentCount,
   onMenu,
   onDiscard,
 }: {
   change: GitChange
   root: FileRoot
   indent: number
+  /** Review threads left on this file — see `commentCounts` in
+   * `ChangesList`. */
+  commentCount: number
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
 }) {
@@ -677,6 +716,7 @@ function ChangeRow({
           <span className="text-center font-mono text-[0.65rem]">
             {GIT_LETTERS[change.state]}
           </span>
+          <CommentBadge count={commentCount} />
           <Counts change={change} />
         </span>
       </SideRow>
@@ -793,6 +833,24 @@ function RowAction({
  * mode or its line endings, and it is the row that would otherwise look like a
  * bug.
  */
+/**
+ * How many review threads sit on a row, drawn the way the bottom bar in
+ * `review-panel.tsx` says the same thing — the same icon, so a comment left
+ * by `Review` on a file nobody has opened yet is still findable: click the
+ * row, the checkout's diff tab opens on this file, and the thread is right
+ * there. See `commentCounts` in `ChangesList`.
+ */
+function CommentBadge({ count }: { count: number }) {
+  if (count === 0) return null
+
+  return (
+    <span className="flex items-center gap-0.5 text-muted-foreground">
+      <MessageSquare aria-hidden className="size-2.5" />
+      <span className="font-mono text-[0.65rem] tabular-nums">{count}</span>
+    </span>
+  )
+}
+
 function Counts({ change }: { change: GitChange }) {
   if (change.added === null || change.removed === null) return null
 

@@ -31,7 +31,8 @@ export function registerAppScheme(): void {
       },
     },
     /*
-     * The notes' own images, which the renderer loads as an ordinary `img` src.
+     * A block document's own images, which the renderer loads as an ordinary
+     * `img` src.
      *
      * `standard` so the URL parses with a host and a path — the shape
      * `shared/note-files.ts` builds — and `secure` so it is not mixed content
