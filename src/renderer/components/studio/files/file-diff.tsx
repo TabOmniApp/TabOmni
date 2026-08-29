@@ -70,10 +70,15 @@ export function FileDiff({
     docRef.current = { path, initialText }
   })
 
-  useHeadText(ready ? path : null, (read) => {
+  useHeadDiff(ready ? path : null, (read) => {
     const doc = docRef.current
     if (doc.path !== read.path) return
-    setHead({ path: read.path, text: read.text, initialText: doc.initialText })
+    setHead({
+      path: read.path,
+      text: read.text,
+      patch: read.patch,
+      initialText: doc.initialText,
+    })
   })
 
   // Warmed while the reads are in flight, since nothing is mounted until they
@@ -106,6 +111,7 @@ export function FileDiff({
         sideBySide={sideBySide}
         whitespace={whitespace}
         original={head.text}
+        patch={head.patch}
         reviewRootId={reviewRootId}
       />
     </Suspense>
@@ -113,9 +119,9 @@ export function FileDiff({
 }
 
 /**
- * What `HEAD` has of a file, **with the path it was read for** — null text for a
- * file `HEAD` does not have, which is both a new file and a directory that is not
- * a repository, and null altogether until the first read comes back.
+ * What git has to say about a file, **with the path it was read for** — null
+ * text for a file `HEAD` does not have, which is both a new file and a directory
+ * that is not a repository, and null altogether until the first read comes back.
  *
  * The path travels with the text for two reasons. Nothing worth drawing can be
  * built against an empty committed side — a diff computed against one is "the
@@ -132,14 +138,22 @@ type Head = {
   path: string
   /** What `HEAD` has of it, null for a file `HEAD` does not have. */
   text: string | null
+  /** And git's own patch between the two, which is what the view's ranges are
+   * read off — see `lib/files/git-diff.ts`. Null is a fallback rather than an
+   * error: the view computes the difference itself when there is none. */
+  patch: string | null
   /** And the working tree's, kept beside it so the pair the editor is built from
    * is two halves of one file. */
   initialText: string
 }
 
-function useHeadText(
+function useHeadDiff(
   path: string | null,
-  onRead: (read: { path: string; text: string | null }) => void
+  onRead: (read: {
+    path: string
+    text: string | null
+    patch: string | null
+  }) => void
 ) {
   // Through a ref, so a caller that builds its handler inline does not re-run
   // `git show` on every render.
@@ -156,15 +170,16 @@ function useHeadText(
     let alive = true
 
     void window.desktop
-      .fileAtHead(path)
-      .then((text) => {
-        if (alive) onReadRef.current({ path, text })
+      .fileDiff(path)
+      .then((read) => {
+        if (alive)
+          onReadRef.current({ path, text: read.head, patch: read.patch })
       })
       .catch(() => {
         // A path outside the workspace's roots, or a git that could not be run.
         // Both mean there is nothing to compare against, which the empty left
         // side already says.
-        if (alive) onReadRef.current({ path, text: null })
+        if (alive) onReadRef.current({ path, text: null, patch: null })
       })
 
     return () => {

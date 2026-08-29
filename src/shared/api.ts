@@ -168,6 +168,29 @@ export type GitChange = {
 }
 
 /**
+ * Everything the diff pane needs about one file, read in a single round trip.
+ *
+ * The two travel together because the pane cannot draw either alone and mounts
+ * nothing until both are in hand — two calls would be two waits for one paint.
+ *
+ * `head` is the file as `HEAD` has it, null when `HEAD` does not have it: a
+ * file somebody has just written, a directory that is not a repository, or a
+ * repository with no commits, all of which are the same nothing to a diff.
+ *
+ * `patch` is `git diff HEAD --unified=0` for that path, and it is git's own
+ * answer to what changed rather than a second opinion computed in the renderer.
+ * Null when git could not be asked. **It is a hint, not a promise**: the
+ * renderer checks it against the two texts it is actually drawing and falls
+ * back to computing the difference itself if it does not describe them — which
+ * is what happens for a buffer with unsaved edits, since git reads the file on
+ * disk. See `lib/files/git-diff.ts`.
+ */
+export type FileDiff = {
+  head: string | null
+  patch: string | null
+}
+
+/**
  * A directory the Explorer is watching whose contents changed.
  *
  * The directory rather than what happened in it: `fs.watch` reports a rename as
@@ -350,6 +373,20 @@ export type ProcessExit = {
  * `Assistant` names the *role*, not a panel: the workspace assistant that once
  * shared these types is gone, and a project's chat is the conversation left.
  */
+/**
+ * One item of the list a turn keeps with `TodoWrite`.
+ *
+ * The CLI sends a third field, `activeForm` — the same task in the present
+ * participle, for the line it draws while that one is running. It is not kept:
+ * it is the same sentence twice on a record that is rewritten to disk on every
+ * appended line, and the checklist already says which item is running by
+ * drawing it as running.
+ */
+export type ChatTodo = {
+  content: string
+  status: "pending" | "in_progress" | "completed"
+}
+
 export type AssistantMessage =
   | { id: string; role: "user"; text: string }
   | { id: string; role: "assistant"; text: string }
@@ -432,6 +469,17 @@ export type AssistantMessage =
        * hover. Not a computed diff — these are the two sides the call was made
        * of. */
       change?: string
+      /**
+       * The list a `TodoWrite` wrote, read out of its own input.
+       *
+       * Read rather than left as the argument JSON for the reason `change` is:
+       * the row was drawing `{"todos":[{"content":"…","status":"pending"…` cut
+       * at 120 characters, which is the one call in a transcript whose argument
+       * *is* the thing worth reading. Absent for every other tool, and absent
+       * for a `TodoWrite` whose payload does not have the shape below — a newer
+       * CLI lands back on the JSON rather than on an empty checklist.
+       */
+      todos?: ChatTodo[]
       /** Set when the tool call came back an error. */
       failed?: boolean
     }
@@ -511,6 +559,20 @@ export type TurnUsage = {
    * every line written before this field existed.
    */
   context: number | null
+  /**
+   * How long the turn took on the clock, in milliseconds.
+   *
+   * Measured in main rather than read off the SDK's `duration_ms`, for the
+   * reason every other figure here is subtracted: the numbers on a result line
+   * are the streaming session's, and a wall time taken from it would grow with
+   * the chat. It is the same quantity the spinner counts up — from the prompt
+   * going in to the result coming back, tool calls and all — so a finished turn
+   * reads as what somebody watched it take.
+   *
+   * Null for a line written before this existed, which is what stops a chat
+   * from last week claiming its turns were instant.
+   */
+  durationMs: number | null
 }
 
 /**
@@ -1017,6 +1079,30 @@ export const CHAT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const
 export type ChatEffort = (typeof CHAT_EFFORTS)[number]
 
 /**
+ * The level a chat runs at when nobody has picked one.
+ *
+ * **A level and not null**, which is the change worth explaining. `null` meant
+ * "pass no `--effort` and let the CLI decide", and the picker drew it as a row
+ * called `Default` sitting above the five real ones — so the tick was on a word
+ * rather than on a level, and there was nothing on screen, anywhere, saying how
+ * hard a chat was actually thinking. Nothing could say: the CLI's answer to
+ * `supportedModels()` lists the levels a model accepts and does not name the one
+ * it would fall back to, so the honest choices were a menu that admits it does
+ * not know or a level this app names out loud. This is the second.
+ *
+ * `medium` because it is the middle of the five and because it is what an
+ * unconfigured install lands on; somebody who wants their own
+ * `~/.claude/settings.json` to decide is describing `Inherit`, which is a
+ * different control.
+ *
+ * A record can still hold `null` — every chat written before this does, and a
+ * model that takes no levels at all is picked with one — so `chatOptions` reads
+ * a null as this, and the CLI ignores an effort a model has no use for the same
+ * way it ignores a global `effortLevel` in settings.
+ */
+export const DEFAULT_CHAT_EFFORT: ChatEffort = "medium"
+
+/**
  * One model the user's own `claude` will answer on.
  *
  * **Asked of the CLI rather than written down here.** This was a list of four
@@ -1038,6 +1124,18 @@ export type AgentModel = {
   /** What `--model` is given. An alias (`opus`), a full id, or the CLI's own
    * `default` row. */
   value: string
+  /**
+   * The wire id this row's `value` resolves to — `claude-sonnet-5` for both
+   * `sonnet` and, on an account recommending Sonnet, `default`.
+   *
+   * Kept for one job: saying what `Default (recommended)` actually is. That row
+   * is the CLI's own and its label names no model, so a picker drawing it alone
+   * ticks a word rather than a model. Two rows sharing a `resolvedModel` are the
+   * same model under two names, which is how the alias behind `default` gets a
+   * label worth showing. Optional — a CLI that predates the field sends none,
+   * and the row then reads as it did before.
+   */
+  resolvedModel?: string
   /** `Opus (1M context)` — the CLI's `displayName`. */
   label: string
   /** `Opus 5 with 1M context · Best for everyday, complex tasks`. */
@@ -1234,13 +1332,12 @@ export type WorktreeChatOptions = {
  * recommends for the account; a chat that genuinely wants the global setting
  * can still pick `Inherit` and get null back.
  *
- * `effort` stays null for the reason it always was: the CLI's own default is a
- * judgement about the model, and naming a level here would be this app
- * overriding it for every chat.
+ * `effort` is `DEFAULT_CHAT_EFFORT` rather than null, and that is the one of
+ * these that changed most recently — see the constant.
  */
 export const DEFAULT_CHAT_OPTIONS: WorktreeChatOptions = {
   model: "default",
-  effort: null,
+  effort: DEFAULT_CHAT_EFFORT,
   permission: "edits",
   profileId: null,
 }
@@ -1260,7 +1357,14 @@ export function chatOptions(
   if (!options) return DEFAULT_CHAT_OPTIONS
   return {
     model: options.model ?? null,
-    effort: options.effort ?? null,
+    // A null is a chat written before the picker named its levels, or one
+    // parked on a model that takes none — both read as the default rather than
+    // as "no answer", so the toolbar always has a level to tick. See
+    // `DEFAULT_CHAT_EFFORT`. Not for `Inherit`, which is the one row that means
+    // "whatever your own `claude` is set to": naming a level under it would
+    // override the setting it exists to defer to.
+    effort:
+      options.effort ?? (options.model == null ? null : DEFAULT_CHAT_EFFORT),
     permission: readPermission(options),
     profileId: options.profileId ?? null,
   }
@@ -1377,6 +1481,21 @@ export const BOARD_TONE_IDS: BoardTone[] = [
 ]
 
 /**
+ * How urgent a card is, or nothing.
+ *
+ * Three and not five, because the only thing a priority on a personal board is
+ * read for is which card to pick up next, and a scale nobody can rank
+ * consistently is a field that stops being maintained. **Absent is the
+ * default** rather than `medium`: a board where every card claims a priority is
+ * a board where the field says nothing, so it is set on the few that need it.
+ */
+export type BoardPriority = "low" | "medium" | "high"
+
+/** Them in the order the picker offers them — loudest first, which is the order
+ * they are worth scanning in. */
+export const BOARD_PRIORITY_IDS: BoardPriority[] = ["high", "medium", "low"]
+
+/**
  * One column of one project's board.
  *
  * **A record rather than a union**, which is what it was: `Todo` / `Doing` /
@@ -1431,8 +1550,10 @@ export const DEFAULT_BOARD_COLUMNS: {
  * Deliberately **not** the task this app used to have (see `docs/design.md`
  * § Tasks, removed): that was a container of members drawn from every panel,
  * with a crumb across the title bar and a dashboard of its own. This holds a
- * title, a line, a column and at most one chat, and nothing outside the board
- * and that chat's own header knows it exists.
+ * title, a line, a column, its own marks and at most one chat, and nothing
+ * outside the board and that chat's own header knows it exists. What the marks
+ * are and what was refused beside them — an assignee, comments, attachments —
+ * is `docs/design.md` § Board.
  *
  * The whole collection is one file and one save, the shape `NoteRecord`'s
  * listing has — a card is small and bounded, so there is no body to keep out of
@@ -1466,6 +1587,33 @@ export type BoardCard = {
    * gone — the `chatRootId` idiom, and for the same reason.
    */
   chatId: string | null
+  /**
+   * Free labels, in the order they were typed.
+   *
+   * **Text and not records**, unlike the columns: a tag is written by typing it
+   * and there is nothing else about one to keep — no rename, no palette, no
+   * listing to maintain — so a tag store would be a second file to keep in
+   * agreement with the cards for no answer either could give alone. The hue is
+   * derived from the text (`tagTone` in `lib/board/tones.ts`), which is what
+   * makes the same word the same colour on every card without anything
+   * remembering that it is.
+   *
+   * Optional, because every card written before this field existed is on
+   * somebody's disk without it — read through `tagsOf`, never directly.
+   */
+  tags?: string[]
+  /** How urgent, or absent for the ordinary case. Read through `priorityOf`. */
+  priority?: BoardPriority | null
+  /**
+   * The day it is due as `YYYY-MM-DD`, or absent.
+   *
+   * A **day** and not an instant, which is why this is not the ISO timestamp
+   * every other date in this app is: a due date rendered from an instant is a
+   * day earlier or later depending on the reader's offset, and a board that
+   * says a card is overdue because the machine woke up in another timezone is
+   * a board that cannot be trusted. Read through `dueOf`.
+   */
+  due?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -1717,17 +1865,12 @@ export type DesktopApi = {
   gitDiscardAll: (folderId: string) => Promise<void>
 
   /**
-   * A file as `HEAD` has it — the left-hand side of a diff.
-   *
-   * `null` when `HEAD` does not have it, which is the ordinary answer for a file
-   * somebody has just written: the diff against it is the whole file added. Also
-   * null for a directory that is not a repository at all, and for a repository
-   * with no commits yet, both of which are the same thing to a diff.
+   * The committed side of a diff and git's own patch for it — see `FileDiff`.
    *
    * Takes the path rather than a root and a relative path, like every other read
    * of a file in the workspace, and is gated the same way.
    */
-  fileAtHead: (filePath: string) => Promise<string | null>
+  fileDiff: (filePath: string) => Promise<FileDiff>
 
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
@@ -2210,7 +2353,7 @@ export const IPC = {
   gitUnstage: "git:unstage",
   gitDiscard: "git:discard",
   gitDiscardAll: "git:discard-all",
-  fileAtHead: "git:file-at-head",
+  fileDiff: "git:file-diff",
   getSetting: "settings:get",
   setSetting: "settings:set",
   dbQuery: "db:query",

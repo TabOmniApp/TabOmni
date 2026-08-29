@@ -19,9 +19,15 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import {
+  changeTree,
+  changesUnder,
+  countsUnder,
+  type ChangeTreeNode,
+} from "@/lib/files/change-tree"
 import { splitChanges, useChanges } from "@/lib/files/changes"
 import { GIT_LABELS, GIT_LETTERS, GIT_TONES } from "@/lib/files/git-status"
-import { nameOf, parentOf, relativeTo } from "@/lib/files/paths"
+import { nameOf } from "@/lib/files/paths"
 import type { FileRoot } from "@/lib/files/roots"
 import { useFiles } from "@/lib/files/store"
 import { useStudio } from "@/lib/store"
@@ -34,8 +40,17 @@ import { SideRow } from "../side-row"
  * The tree answers "what is in this checkout", which is thousands of rows most
  * of which nobody is thinking about; this answers "and what have I done to it",
  * which after an agent has run a turn is the often the only question worth
- * asking. A list rather than a filter over the tree, because the answer is a
- * dozen files scattered through it.
+ * asking.
+ *
+ * **It is a folder tree, the shape a pull request is read in everywhere else.**
+ * It was a flat list of one line each — the directory dimmed ahead of the name
+ * — on the argument that a turn's changes are a dozen files scattered through
+ * the checkout and a tree of them would be mostly folders. That holds at four
+ * rows and stops holding at twenty, where `src/renderer/components/studio/`
+ * runs down the column and the thing being scanned for — which *area* was
+ * touched — has to be reassembled by eye. `lib/files/change-tree.ts` builds the
+ * rows and folds a chain of single-child directories into one, so the tree
+ * costs a level of indentation only where the work actually branched.
  *
  * A row opens **the checkout's one diff tab** rather than a tab of its own, so
  * reviewing twelve files is twelve clicks and one tab. That distinction is the
@@ -49,8 +64,11 @@ import { SideRow } from "../side-row"
  *
  * **Staging and discarding are here.** They are the two sentences somebody says
  * while reading a turn's work — keep this, throw that away — so they belong on
- * the list that work is read in. Committing is not here at all; the dock has a
- * shell in the same folder, and a commit message is something somebody writes.
+ * the list that work is read in. A directory row does the same to everything
+ * under it, which is what the tree buys beyond legibility: `Stage` on one
+ * folder rather than on its nine files. Committing is not here at all; the dock
+ * has a shell in the same folder, and a commit message is something somebody
+ * writes.
  *
  * Two ways to reach them, and the first is the one somebody already knows: the
  * buttons that appear on a row, and on a pile's heading, under the pointer —
@@ -69,14 +87,25 @@ export function ChangesList({ root }: { root: FileRoot }) {
   /** Which row the menu is about, or null for the list as a whole — the same
    * shape the tree's one menu uses, and for the same reason: a trigger per row
    * is a trigger inside a trigger. */
-  const [target, setTarget] = useState<GitChange | null>(null)
-  const [discarding, setDiscarding] = useState<GitChange | "all" | null>(null)
+  const [target, setTarget] = useState<RowTarget | null>(null)
+  const [discarding, setDiscarding] = useState<RowTarget | "all" | null>(null)
 
   /** Both piles start folded, so a checkout arrives as two counts rather than as
    * however many rows a turn happened to touch. The headings keep their own
    * actions while folded — `Stage all` is the one thing somebody wants without
    * reading the rows first. */
   const [open, setOpen] = useState({ staged: false, unstaged: false })
+
+  /**
+   * Which **directory** rows are shut, keyed `<pile>:<tree id>`.
+   *
+   * The shut ones rather than the open ones, because a tree that arrives
+   * collapsed is a tree whose files have to be clicked out of hiding — the
+   * files are the point here, unlike in `All files`, where a checkout has
+   * thousands of them. A pile that has just been opened shows every change in
+   * it. Keyed by pile, since one path can be a row in both.
+   */
+  const [shut, setShut] = useState<string[]>([])
 
   if (changes === undefined) {
     // Only before the first answer. A re-read behind a list already on screen
@@ -89,6 +118,27 @@ export function ChangesList({ root }: { root: FileRoot }) {
   }
 
   const { staged, unstaged } = splitChanges(changes)
+
+  const nodes = (pile: string, rows: GitChange[]) => (
+    <ul>
+      <Nodes
+        nodes={changeTree(rows, root.path)}
+        pile={pile}
+        root={root}
+        indent={0}
+        shut={shut}
+        onFold={(key) =>
+          setShut((state) =>
+            state.includes(key)
+              ? state.filter((entry) => entry !== key)
+              : [...state, key]
+          )
+        }
+        onMenu={setTarget}
+        onDiscard={setDiscarding}
+      />
+    </ul>
+  )
 
   return (
     <ContextMenu>
@@ -142,19 +192,7 @@ export function ChangesList({ root }: { root: FileRoot }) {
                 <Minus />
               </RowAction>
             </Heading>
-            {open.staged && (
-              <ul>
-                {staged.map((change) => (
-                  <ChangeRow
-                    key={`staged:${change.path}`}
-                    change={change}
-                    root={root}
-                    onMenu={setTarget}
-                    onDiscard={setDiscarding}
-                  />
-                ))}
-              </ul>
-            )}
+            {open.staged && nodes("staged", staged)}
           </>
         )}
 
@@ -186,19 +224,7 @@ export function ChangesList({ root }: { root: FileRoot }) {
                 <Plus />
               </RowAction>
             </Heading>
-            {open.unstaged && (
-              <ul>
-                {unstaged.map((change) => (
-                  <ChangeRow
-                    key={change.path}
-                    change={change}
-                    root={root}
-                    onMenu={setTarget}
-                    onDiscard={setDiscarding}
-                  />
-                ))}
-              </ul>
-            )}
+            {open.unstaged && nodes("unstaged", unstaged)}
           </>
         )}
       </ContextMenuTrigger>
@@ -209,7 +235,7 @@ export function ChangesList({ root }: { root: FileRoot }) {
             {target.staged ? (
               <ContextMenuItem
                 onClick={() => {
-                  void useChanges.getState().unstage(root, [target.path])
+                  void useChanges.getState().unstage(root, target.paths)
                 }}
               >
                 <Minus />
@@ -218,7 +244,7 @@ export function ChangesList({ root }: { root: FileRoot }) {
             ) : (
               <ContextMenuItem
                 onClick={() => {
-                  void useChanges.getState().stage(root, [target.path])
+                  void useChanges.getState().stage(root, target.paths)
                 }}
               >
                 <Plus />
@@ -232,13 +258,22 @@ export function ChangesList({ root }: { root: FileRoot }) {
               <Undo2 />
               Discard changes…
             </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onClick={() => void navigator.clipboard.writeText(target.path)}
-            >
-              <Copy />
-              Copy path
-            </ContextMenuItem>
+            {/* A directory row has no path to copy: the folders in this tree
+                exist because a file's path passed through them, and this
+                renderer does not build paths — see `lib/files/paths.ts`. */}
+            {target.path && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  onClick={() =>
+                    void navigator.clipboard.writeText(target.path as string)
+                  }
+                >
+                  <Copy />
+                  Copy path
+                </ContextMenuItem>
+              </>
+            )}
             <ContextMenuSeparator />
           </>
         )}
@@ -290,6 +325,171 @@ export function ChangesList({ root }: { root: FileRoot }) {
 }
 
 /**
+ * What a row's actions and its menu are about — a file, or a folder and
+ * everything under it.
+ *
+ * One shape for both, because staging, unstaging and discarding all take a list
+ * of paths already: a directory row is the same three calls with nine paths
+ * instead of one. `path` is what only a file has — the thing `Copy path` copies
+ * and the name the discard dialog says.
+ */
+type RowTarget = {
+  label: string
+  paths: string[]
+  staged: boolean
+  path: string | null
+}
+
+/** One level of the tree. Recursive, and deliberately not flattened first: the
+ * fold state is per directory, and a flattened list would have to be rebuilt on
+ * every fold. */
+function Nodes({
+  nodes,
+  pile,
+  root,
+  indent,
+  shut,
+  onFold,
+  onMenu,
+  onDiscard,
+}: {
+  nodes: ChangeTreeNode[]
+  pile: string
+  root: FileRoot
+  indent: number
+  shut: string[]
+  onFold: (key: string) => void
+  onMenu: (target: RowTarget) => void
+  onDiscard: (target: RowTarget) => void
+}) {
+  return (
+    <>
+      {nodes.map((node) => {
+        if (node.kind === "file") {
+          return (
+            <ChangeRow
+              key={node.id}
+              change={node.change}
+              root={root}
+              indent={indent}
+              onMenu={onMenu}
+              onDiscard={onDiscard}
+            />
+          )
+        }
+
+        const key = `${pile}:${node.id}`
+        const open = !shut.includes(key)
+
+        return (
+          <li key={key}>
+            <DirRow
+              node={node}
+              root={root}
+              indent={indent}
+              open={open}
+              staged={pile === "staged"}
+              onToggle={() => onFold(key)}
+              onMenu={onMenu}
+              onDiscard={onDiscard}
+            />
+            {open && (
+              <ul>
+                <Nodes
+                  nodes={node.children}
+                  pile={pile}
+                  root={root}
+                  indent={indent + 1}
+                  shut={shut}
+                  onFold={onFold}
+                  onMenu={onMenu}
+                  onDiscard={onDiscard}
+                />
+              </ul>
+            )}
+          </li>
+        )
+      })}
+    </>
+  )
+}
+
+/**
+ * A folder in the tree: the chevron, the collapsed name, and the counts of
+ * everything under it.
+ *
+ * In the muted text of the panel rather than in a git colour. A folder holding
+ * an added file and a deleted one has no single state, and picking one of them
+ * would be the row asserting something git did not say — the counts underneath
+ * are the honest summary.
+ */
+function DirRow({
+  node,
+  root,
+  indent,
+  open,
+  staged,
+  onToggle,
+  onMenu,
+  onDiscard,
+}: {
+  node: Extract<ChangeTreeNode, { kind: "dir" }>
+  root: FileRoot
+  indent: number
+  open: boolean
+  staged: boolean
+  onToggle: () => void
+  onMenu: (target: RowTarget) => void
+  onDiscard: (target: RowTarget) => void
+}) {
+  const under = changesUnder(node)
+  const counts = countsUnder(node)
+  const target: RowTarget = {
+    label: node.label,
+    paths: under.map((change) => change.path),
+    staged,
+    path: null,
+  }
+
+  return (
+    <div className="group/row relative">
+      <SideRow
+        indent={indent}
+        title={`${node.label} — ${under.length} changed ${under.length === 1 ? "file" : "files"}`}
+        onContextMenu={() => onMenu(target)}
+        onClick={onToggle}
+      >
+        <ChevronRight
+          aria-hidden
+          className={cn(
+            "size-3 shrink-0 transition-transform",
+            open && "rotate-90"
+          )}
+        />
+        <span className="min-w-0 flex-1 truncate text-left text-xs">
+          {node.label}
+        </span>
+        {/* No state letter: see the note above about a folder having no single
+            state. The counts step aside for the actions the way a file's do. */}
+        <span
+          aria-hidden
+          className="shrink-0 group-focus-within/row:invisible group-hover/row:invisible"
+        >
+          {counts && (
+            <span className="font-mono text-[0.65rem] tabular-nums">
+              <span className={GIT_TONES.added}>+{counts.added}</span>{" "}
+              <span className={GIT_TONES.deleted}>−{counts.removed}</span>
+            </span>
+          )}
+        </span>
+      </SideRow>
+
+      <RowActions target={target} root={root} onDiscard={onDiscard} />
+    </div>
+  )
+}
+
+/**
  * The one dialog in this panel, because this is the one action here that
  * destroys work.
  *
@@ -305,13 +505,15 @@ function DiscardDialog({
   count,
   onClose,
 }: {
-  target: GitChange | "all" | null
+  target: RowTarget | "all" | null
   root: FileRoot
   count: number
   onClose: () => void
 }) {
+  const row = target === "all" ? null : target
   const all = target === "all"
-  const name = all ? null : target && nameOf(target.path)
+  // A folder row, which is the one case that discards many paths at once.
+  const one = row !== null && row.paths.length === 1
 
   return (
     <AlertDialog
@@ -325,12 +527,16 @@ function DiscardDialog({
           <AlertDialogTitle>
             {all
               ? `Discard every change in ${root.label}?`
-              : `Discard changes to “${name}”?`}
+              : one
+                ? `Discard changes to “${row?.label}”?`
+                : `Discard ${row?.paths.length} changes in “${row?.label}”?`}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {all
               ? `All ${count} changed ${count === 1 ? "file" : "files"} go back to the last commit. Files that were never committed are moved to the trash. Nothing staged is kept.`
-              : "The file goes back to the last commit — the staged copy and the edits on disk both. A file that was never committed is moved to the trash instead, since there is nothing to go back to."}
+              : one
+                ? "The file goes back to the last commit — the staged copy and the edits on disk both. A file that was never committed is moved to the trash instead, since there is nothing to go back to."
+                : "Every changed file in this folder goes back to the last commit — the staged copies and the edits on disk both. Files that were never committed are moved to the trash instead, since there is nothing to go back to."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -340,7 +546,7 @@ function DiscardDialog({
             onClick={() => {
               const changes = useChanges.getState()
               if (all) void changes.discardAll(root)
-              else if (target) void changes.discard(root, [target.path])
+              else if (target) void changes.discard(root, target.paths)
               onClose()
             }}
           >
@@ -355,13 +561,15 @@ function DiscardDialog({
 function ChangeRow({
   change,
   root,
+  indent,
   onMenu,
   onDiscard,
 }: {
   change: GitChange
   root: FileRoot
-  onMenu: (change: GitChange) => void
-  onDiscard: (change: GitChange) => void
+  indent: number
+  onMenu: (target: RowTarget) => void
+  onDiscard: (target: RowTarget) => void
 }) {
   // Both rows of a file that is staged and edited again are marked: the diff on
   // screen is that file, and marking one of the two would be picking a side the
@@ -370,21 +578,24 @@ function ChangeRow({
     (state) => state.selectedPath[root.id] === change.path
   )
 
-  // Where the file is, in the checkout's own terms, and empty for one sitting in
-  // the checkout's own directory — where the name has already said everything.
-  // Not `change.directory`, which is whether the row *is* one.
-  const location = relativeTo(root.path, parentOf(change.path))
+  const target: RowTarget = {
+    label: nameOf(change.path),
+    paths: [change.path],
+    staged: change.staged,
+    path: change.path,
+  }
 
   return (
     <li className="group/row relative">
       <SideRow
         active={active}
+        indent={indent}
         title={
           change.directory
             ? `${change.path}/ — a ${GIT_LABELS[change.state]} folder, everything in it. Opens in All files.`
             : `${change.path} — ${GIT_LABELS[change.state]}${change.staged ? ", staged" : ""}`
         }
-        onContextMenu={() => onMenu(change)}
+        onContextMenu={() => onMenu(target)}
         onClick={() => {
           /*
            * A folder is not a diff, so it goes to the tree instead.
@@ -393,7 +604,9 @@ function ChangeRow({
            * for it used to open the checkout's diff tab on a path that is not a
            * file — an empty pane, with nothing saying why. The tree is where a
            * directory's contents are, so that is where the row leads: the `All
-           * files` tab, revealed and opened.
+           * files` tab, revealed and opened. It is a leaf of this tree rather
+           * than a folder in it for the same reason: git named one path, and
+           * what is under it was never listed.
            */
           if (change.directory) {
             useStudio.getState().setExplorerTab("files")
@@ -421,49 +634,29 @@ function ChangeRow({
         }}
       >
         {/*
-         * One line, and the **directory** is what gives way on it.
-         *
-         * `min-w-0` with the default shrink on the directory and `shrink-0` on
-         * the name is the whole of that: a narrow column eats into
-         * `src/renderer/components/…` and leaves `chat-composer.tsx` whole,
-         * which is the one part of a path anybody scans a list for. Truncating
-         * the other way round gives a column of rows that all begin
-         * `src/renderer/comp…` and end nowhere.
-         *
-         * `text-left` because a `<button>` centres its text by the browser's own
-         * stylesheet, which Tailwind's preflight does not reset. Every other
-         * `SideRow` hides it: their children are sized to their content, so
-         * there is nothing for the alignment to distribute. This one grows.
+         * The name alone — the directory it is in is the row above it now, so
+         * there is nothing to truncate from the left any more. `text-left`
+         * because a `<button>` centres its text by the browser's own
+         * stylesheet, which Tailwind's preflight does not reset; this child
+         * grows, so unlike most `SideRow`s there is space for the alignment to
+         * distribute.
          */}
-        <span className="flex min-w-0 flex-1 items-baseline overflow-hidden text-left">
+        <span className="flex min-w-0 flex-1 items-center overflow-hidden text-left">
           {/*
            * The one row that carries a glyph, because it is the one row that is
-           * not what the list is otherwise made of. A folder icon on every row
+           * not what the list is otherwise made of. A folder icon on every file
            * would be a column of icons saying nothing; on this one it is the
            * difference between `public/images/building` read as a file with no
            * counts and read as the directory it is. The trailing `/` says the
            * same thing again for anybody reading the text alone.
-           *
-           * `self-center`, since the row aligns on the baseline and an SVG has
-           * none — it would hang off the bottom of the text.
            */}
           {change.directory && (
             <Folder
               aria-hidden
-              className={cn(
-                "mr-1 size-3 shrink-0 self-center",
-                GIT_TONES[change.state]
-              )}
+              className={cn("mr-1 size-3 shrink-0", GIT_TONES[change.state])}
             />
           )}
-          {location && (
-            <span className="min-w-0 truncate text-[0.7rem] text-muted-foreground">
-              {location}/
-            </span>
-          )}
-          <span
-            className={cn("shrink-0 truncate text-xs", GIT_TONES[change.state])}
-          >
+          <span className={cn("truncate text-xs", GIT_TONES[change.state])}>
             {nameOf(change.path)}
             {change.directory && "/"}
           </span>
@@ -477,7 +670,7 @@ function ChangeRow({
         <span
           aria-hidden
           className={cn(
-            "flex shrink-0 items-baseline gap-1.5 group-focus-within/row:invisible group-hover/row:invisible",
+            "flex shrink-0 items-center gap-1.5 group-focus-within/row:invisible group-hover/row:invisible",
             GIT_TONES[change.state]
           )}
         >
@@ -488,7 +681,7 @@ function ChangeRow({
         </span>
       </SideRow>
 
-      <RowActions change={change} root={root} onDiscard={onDiscard} />
+      <RowActions target={target} root={root} onDiscard={onDiscard} />
     </li>
   )
 }
@@ -502,7 +695,8 @@ function ChangeRow({
  * — the inner one is dropped and the click lands on the row. So these are a
  * sibling, positioned over the row's right-hand end, where the letter and the
  * counts have just made room for them. The row underneath keeps its whole
- * width, so clicking anywhere else on it still opens the diff.
+ * width, so clicking anywhere else on it still opens the diff — or folds the
+ * directory.
  *
  * `opacity` rather than `hidden`, and `pointer-events-none` with it: a button
  * that is merely transparent would still swallow the click meant for the row
@@ -513,42 +707,44 @@ function ChangeRow({
  * whole-checkout actions.
  */
 function RowActions({
-  change,
+  target,
   root,
   onDiscard,
 }: {
-  change: GitChange
+  target: RowTarget
   root: FileRoot
-  onDiscard: (change: GitChange) => void
+  onDiscard: (target: RowTarget) => void
 }) {
+  const what = target.path ? target.label : `everything in ${target.label}`
+
   return (
     <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100 group-hover/row:pointer-events-auto group-hover/row:opacity-100">
       {/* Discard first, stage last: the one that ends nearest the pointer's
           resting place is the one pressed most, and staging is that. The
           destructive one is the one that has to be reached for — and it opens
           the dialog rather than acting, which is the other half of that. */}
-      {!change.staged && (
+      {!target.staged && (
         <RowAction
-          label={`Discard changes to ${nameOf(change.path)}`}
-          onClick={() => onDiscard(change)}
+          label={`Discard changes to ${what}`}
+          onClick={() => onDiscard(target)}
         >
           <Undo2 />
         </RowAction>
       )}
-      {change.staged ? (
+      {target.staged ? (
         <RowAction
-          label={`Unstage ${nameOf(change.path)}`}
+          label={`Unstage ${what}`}
           onClick={() => {
-            void useChanges.getState().unstage(root, [change.path])
+            void useChanges.getState().unstage(root, target.paths)
           }}
         >
           <Minus />
         </RowAction>
       ) : (
         <RowAction
-          label={`Stage ${nameOf(change.path)}`}
+          label={`Stage ${what}`}
           onClick={() => {
-            void useChanges.getState().stage(root, [change.path])
+            void useChanges.getState().stage(root, target.paths)
           }}
         >
           <Plus />

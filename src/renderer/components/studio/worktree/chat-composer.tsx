@@ -25,7 +25,6 @@ import {
   SignalHigh,
   SignalLow,
   SignalMedium,
-  Sparkles,
   Square,
   Star,
   Check as CheckIcon,
@@ -51,13 +50,19 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
+import { Claude } from "@/components/ui/svgs/claude"
 import { quotePath, relativeTo } from "@/lib/files/paths"
 import { useGitStatus } from "@/lib/files/git-status"
 import { iconFor } from "@/lib/files/icons"
 import { useFiles } from "@/lib/files/store"
 import { cn } from "@/lib/utils"
 import { useClaudeProfiles } from "@/lib/worktree-chat/claude-profiles"
-import { orderedModels, useAgentModels } from "@/lib/worktree-chat/models"
+import {
+  defaultModelAlias,
+  effortFor,
+  orderedModels,
+  useAgentModels,
+} from "@/lib/worktree-chat/models"
 import { chatMentions, primeMentions } from "@/lib/worktree-chat/mentions"
 import {
   insertMention,
@@ -517,11 +522,12 @@ export function ChatComposer({
                   onOptions({
                     ...options,
                     model,
+                    // `Inherit` is the one pick with no level of its own; every
+                    // other lands on one the model accepts — see `effortFor`.
                     effort:
-                      model !== null &&
-                      chatEfforts(models, model).includes(effort as ChatEffort)
-                        ? effort
-                        : null,
+                      model === null
+                        ? null
+                        : effortFor(chatEfforts(models, model), effort),
                   })
                 }
               />
@@ -689,6 +695,9 @@ function ModelMenu({
 }) {
   const rows = orderedModels(models)
   const chosen = rows.find((entry) => entry.value === model)
+  /* What the CLI's `default` row actually is. Read once for the menu rather
+   * than per row: it is one answer about one row, and the rest do not ask. */
+  const alias = defaultModelAlias(models)
   // Held only so the digit shortcuts can close it: a click is Base UI's own
   // business, and a menu still open after the pick it was asked for reads as a
   // key that did nothing.
@@ -708,7 +717,12 @@ function ModelMenu({
       <DropdownMenuTrigger
         render={
           <ToolbarButton
-            icon={<Sparkles />}
+            // The CLI's own mark rather than a generic sparkle: what this
+            // picker chooses is which Claude model answers, and every other
+            // brand in the app is drawn as itself (`components/ui/svgs`). It
+            // keeps its brand hue in both states, so `on` shows in the label
+            // rather than the icon — the rule the other marks follow.
+            icon={<Claude />}
             // The raw value where no row matches it: a chat can be carrying a
             // `--model` this CLI no longer lists, and the honest answer is what
             // the record says rather than the name of some other model.
@@ -728,10 +742,10 @@ function ModelMenu({
           if (!at || at > rows.length) return
           event.preventDefault()
           const target = rows[at - 1]!
-          const targetEfforts = chatEfforts(models, target.value)
-          const nextEffort =
-            effort && targetEfforts.includes(effort) ? effort : null
-          onPick(target.value, nextEffort)
+          onPick(
+            target.value,
+            effortFor(chatEfforts(models, target.value), effort)
+          )
           setOpen(false)
         }}
       >
@@ -744,11 +758,7 @@ function ModelMenu({
             return (
               <DropdownMenuSub key={entry.value}>
                 <DropdownMenuSubTrigger
-                  onClick={() => {
-                    const nextEffort =
-                      effort && levels.includes(effort) ? effort : null
-                    onPick(entry.value, nextEffort)
-                  }}
+                  onClick={() => onPick(entry.value, effortFor(levels, effort))}
                   className="flex cursor-pointer items-center gap-2 px-2 py-1.5"
                 >
                   <div className="flex size-4 shrink-0 items-center justify-center">
@@ -760,6 +770,13 @@ function ModelMenu({
                     <span className="truncate text-xs font-normal">
                       {entry.label}
                     </span>
+                    {/* `Default (recommended)` names no model, so the row says
+                        which one it is standing for — see `defaultModelAlias`. */}
+                    {entry.value === "default" && alias && (
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                        {alias}
+                      </span>
+                    )}
                     {entry.isNew && (
                       <span className="rounded border border-muted-foreground/40 px-1 py-[0.5px] text-[9px] leading-tight font-semibold tracking-tight text-muted-foreground uppercase">
                         NEW
@@ -775,17 +792,13 @@ function ModelMenu({
                     <Star className="size-3.5 shrink-0 text-muted-foreground/70" />
                   )}
                 </DropdownMenuSubTrigger>
+                {/* The five levels and nothing else. There was a `Default` row
+                    above them, and what it did was put the tick on a word: a
+                    chat on it ran at a level the CLI never says out loud, so
+                    neither the menu nor the toolbar could name how hard it was
+                    thinking. Every pick now lands on a level — see
+                    `DEFAULT_CHAT_EFFORT`. */}
                 <DropdownMenuSubContent className="w-36">
-                  <DropdownMenuItem
-                    onClick={() => onPick(entry.value, null)}
-                    className="flex cursor-pointer items-center justify-between px-2 py-1.5 text-xs"
-                  >
-                    <span>Default</span>
-                    {isSelected && effort === null && (
-                      <CheckIcon className="size-3.5 text-foreground" />
-                    )}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
                   {levels.map((level) => (
                     <DropdownMenuItem
                       key={level}
@@ -821,6 +834,13 @@ function ModelMenu({
                 <span className="truncate text-xs font-normal">
                   {entry.label}
                 </span>
+                {/* `Default (recommended)` names no model, so the row says
+                    which one it is standing for — see `defaultModelAlias`. */}
+                {entry.value === "default" && alias && (
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    {alias}
+                  </span>
+                )}
                 {entry.isNew && (
                   <span className="rounded border border-muted-foreground/40 px-1 py-[0.5px] text-[9px] leading-tight font-semibold tracking-tight text-muted-foreground uppercase">
                     NEW

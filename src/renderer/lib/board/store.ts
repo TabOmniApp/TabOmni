@@ -1,12 +1,22 @@
 import { create } from "zustand"
 
-import type { BoardCard, BoardColumn, BoardTone } from "@shared/api"
+import type {
+  BoardCard,
+  BoardColumn,
+  BoardPriority,
+  BoardTone,
+} from "@shared/api"
 import { useProjects } from "../projects"
 import { useStudio } from "../store"
 import { useWorktreeChats, placeOfRoot } from "../worktree-chat/store"
 // Aliased: the store's own action is called `moveColumn` too, and a method body
 // calling the module-scope function of its own name reads like recursion.
-import { columnsOf, moveCard, moveColumn as shiftColumn } from "./cards"
+import {
+  columnKey,
+  columnsOf,
+  moveCard,
+  moveColumn as shiftColumn,
+} from "./cards"
 
 /**
  * A project's kanban board: what is next, what is running, what is done.
@@ -32,6 +42,24 @@ import { columnsOf, moveCard, moveColumn as shiftColumn } from "./cards"
  * knows nothing, and `cardOfChat` is how its header finds the card. So deleting
  * a chat needs no write here — see `linkedChat`.
  */
+/**
+ * Everything the card drawer collects — the whole of a card that is typed
+ * rather than dragged.
+ *
+ * One type for both `add` and `edit` because the drawer is one form: it always
+ * hands back every field it holds, so an edit that cleared a due date is the
+ * same shape as one that set it, and there is no partial update to work out
+ * whether `undefined` meant "leave it" or "clear it". Which column and which
+ * chat are **not** here — those are said by dragging and by the card's menu.
+ */
+export type CardFields = {
+  title: string
+  body: string
+  tags: string[]
+  priority: BoardPriority | null
+  due: string | null
+}
+
 type BoardState = {
   /** Every project's cards, in the file's order. */
   cards: BoardCard[]
@@ -63,24 +91,25 @@ type BoardState = {
    * A new card at the foot of a column.
    *
    * Takes the text it is created with rather than a blank to be renamed: the
-   * card is written to disk here, and the dialog that collects the text has a
-   * Cancel button — so nothing exists until that dialog is submitted. See
-   * `CardDialog`.
+   * card is written to disk here, and the drawer that collects the text has a
+   * Cancel button — so nothing exists until that drawer is submitted. See
+   * `CardDrawer`.
    */
-  add: (
-    folderId: string,
-    columnId: string,
-    fields: { title: string; body: string }
-  ) => void
-  edit: (id: string, fields: { title?: string; body?: string }) => void
+  add: (folderId: string, columnId: string, fields: CardFields) => void
+  edit: (id: string, fields: CardFields) => void
   /** Where a drop lands — see `moveCard`, which is the whole of the logic. */
   move: (id: string, columnId: string, index: number) => void
   remove: (id: string) => void
 
   /** A new column at the right-hand end of a project's board. */
   addColumn: (folderId: string, name: string) => void
-  renameColumn: (id: string, name: string) => void
-  setColumnTone: (id: string, tone: BoardTone) => void
+  /*
+   * Every write below names the **project as well as the column**, because a
+   * column id is only unique within one board — the seeded three are `todo` /
+   * `doing` / `done` on every project. See `columnKey` in `cards.ts`.
+   */
+  renameColumn: (folderId: string, id: string, name: string) => void
+  setColumnTone: (folderId: string, id: string, tone: BoardTone) => void
   /**
    * Removes a column, and **leaves its cards where they are**.
    *
@@ -89,9 +118,9 @@ type BoardState = {
    * column has gone is drawn in the first one instead — `columnOf` in `cards.ts`
    * is that rule, and the menu item says so before it is picked.
    */
-  removeColumn: (id: string) => void
+  removeColumn: (folderId: string, id: string) => void
   /** Where a dragged column lands — see `moveColumn`. */
-  moveColumn: (id: string, index: number) => void
+  moveColumn: (folderId: string, id: string, index: number) => void
 
   /** Points a card at a chat that already exists. */
   link: (id: string, chatId: string) => void
@@ -224,6 +253,9 @@ export const useBoard = create<BoardState>((set, get) => {
         title: fields.title,
         body: fields.body,
         chatId: null,
+        tags: fields.tags,
+        priority: fields.priority,
+        due: fields.due,
         createdAt: now(),
         updatedAt: now(),
       }
@@ -279,41 +311,41 @@ export const useBoard = create<BoardState>((set, get) => {
       ])
     },
 
-    renameColumn(id, name) {
+    renameColumn(folderId, id, name) {
       const named = name.trim()
       // An empty name is ignored rather than blanking the column — the rule a
       // chat's rename follows.
       if (!named) return
+      const is = columnKey(folderId, id)
       commitColumns(
         get().columns.map((column) =>
-          column.id === id
-            ? { ...column, name: named, updatedAt: now() }
-            : column
+          is(column) ? { ...column, name: named, updatedAt: now() } : column
         )
       )
     },
 
-    setColumnTone(id, tone) {
+    setColumnTone(folderId, id, tone) {
+      const is = columnKey(folderId, id)
       commitColumns(
         get().columns.map((column) =>
-          column.id === id ? { ...column, tone, updatedAt: now() } : column
+          is(column) ? { ...column, tone, updatedAt: now() } : column
         )
       )
     },
 
-    removeColumn(id) {
+    removeColumn(folderId, id) {
       const { columns } = get()
-      const going = columns.find((column) => column.id === id)
-      if (!going) return
+      const is = columnKey(folderId, id)
+      if (!columns.some(is)) return
       // Not the last one standing: a board with no columns has nowhere to draw
       // its cards and nowhere to put the button that would add a column back.
-      const own = columns.filter((column) => column.folderId === going.folderId)
+      const own = columns.filter((column) => column.folderId === folderId)
       if (own.length <= 1) return
-      commitColumns(columns.filter((column) => column.id !== id))
+      commitColumns(columns.filter((column) => !is(column)))
     },
 
-    moveColumn(id, index) {
-      const next = shiftColumn(get().columns, id, index)
+    moveColumn(folderId, id, index) {
+      const next = shiftColumn(get().columns, folderId, id, index)
       if (next === get().columns) return
       commitColumns(next)
     },

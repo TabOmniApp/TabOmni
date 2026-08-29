@@ -1,6 +1,13 @@
-import { chatEfforts, CHAT_MODEL_FALLBACK } from "../src/shared/api"
+import {
+  chatEfforts,
+  chatOptions,
+  CHAT_MODEL_FALLBACK,
+  DEFAULT_CHAT_EFFORT,
+} from "../src/shared/api"
 import { readModel } from "../src/main/agent-models"
 import {
+  defaultModelAlias,
+  effortFor,
   mergeModels,
   orderedModels,
 } from "../src/renderer/lib/worktree-chat/models"
@@ -160,6 +167,98 @@ section("mergeModels: the CLI's own list, decorated with the preset's order")
   check(
     "empty discovery leaves the preset intact",
     mergeModels(CHAT_MODEL_FALLBACK, []).length === 4
+  )
+}
+
+section("defaultModelAlias: what `Default (recommended)` actually is")
+{
+  const answered = [
+    readModel(
+      row({
+        value: "default",
+        displayName: "Default (recommended)",
+        resolvedModel: "claude-sonnet-5",
+      })
+    ),
+    readModel(
+      row({
+        value: "sonnet",
+        displayName: "Sonnet",
+        resolvedModel: "claude-sonnet-5",
+      })
+    ),
+    readModel(
+      row({
+        value: "opus",
+        displayName: "Opus",
+        resolvedModel: "claude-opus-5",
+      })
+    ),
+  ]
+
+  check(
+    "the alias row sharing the default's wire id names it",
+    defaultModelAlias(answered) === "Sonnet"
+  )
+
+  check(
+    "and it is never the default row's own label",
+    defaultModelAlias([answered[0]!]) === null
+  )
+
+  check(
+    "a CLI that sends no wire id leaves the row as it was",
+    defaultModelAlias(CHAT_MODEL_FALLBACK) === null
+  )
+
+  check(
+    "a list with no default row asks nothing",
+    defaultModelAlias([]) === null
+  )
+}
+
+section("effortFor: every pick lands on a level")
+{
+  const all = [...chatEfforts(CHAT_MODEL_FALLBACK, "default")]
+
+  check(
+    "a level the new model accepts is kept — switching model is not losing it",
+    effortFor(all, "xhigh") === "xhigh"
+  )
+
+  check(
+    "one it does not falls to the app's own default",
+    effortFor(["low", "medium", "high"], "max") === DEFAULT_CHAT_EFFORT
+  )
+
+  check(
+    "and to the strongest below it where the list stops short",
+    effortFor(["low"], "max") === "low"
+  )
+
+  check(
+    "a model that takes no levels takes none",
+    effortFor([], "medium") === null
+  )
+
+  check(
+    "nothing chosen yet is the default, not a null the toolbar cannot draw",
+    effortFor(all, null) === DEFAULT_CHAT_EFFORT
+  )
+}
+
+section("a record written before the picker named its levels")
+{
+  check(
+    "reads as the default rather than as no answer",
+    chatOptions({ model: "default", effort: null, permission: "edits" })
+      .effort === DEFAULT_CHAT_EFFORT
+  )
+
+  check(
+    "and one that names a level keeps it",
+    chatOptions({ model: "opus", effort: "high", permission: "edits" })
+      .effort === "high"
   )
 }
 

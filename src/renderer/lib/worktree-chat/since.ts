@@ -61,7 +61,20 @@ const SECOND = 1000
  * Clocks going backwards are floored at zero, as in `since`.
  */
 export function elapsed(startedAt: number, now: number = Date.now()): string {
-  const total = Math.floor(Math.max(0, now - startedAt) / SECOND)
+  return duration(now - startedAt)
+}
+
+/**
+ * The same label for a stretch that has already finished: a turn's own wall
+ * time, off its usage line.
+ *
+ * Shared with the spinner's clock rather than written again, because it is the
+ * same number twice — what a turn is drawn as having taken has to be what
+ * somebody watched it count up to, and two formatters would drift the moment
+ * one of them rounded.
+ */
+export function duration(ms: number): string {
+  const total = Math.floor(Math.max(0, ms) / SECOND)
   const seconds = total % 60
   const minutes = Math.floor(total / 60) % 60
   const hours = Math.floor(total / 3600)

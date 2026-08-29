@@ -12,7 +12,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { cardsOf, columnsOf } from "@/lib/board/cards"
+import { cardsOf, columnsOf, todayKey } from "@/lib/board/cards"
 import { useBoard } from "@/lib/board/store"
 import { BOARD_TONES, TONE_LABEL, toneOf } from "@/lib/board/tones"
 import { useStudio } from "@/lib/store"
@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils"
 import { IconButton } from "../icon-button"
 import { RenameRow } from "../rename-row"
 import { BoardCardRow } from "./board-card"
-import { CardDialog } from "./card-dialog"
+import { CardDrawer } from "./card-drawer"
 
 /**
  * One project's kanban board: its own columns, and cards that can name the chat
@@ -59,6 +59,17 @@ export function BoardPane() {
   const allColumns = useBoard((state) => state.columns)
 
   /**
+   * What day it is, for the due dates — read once for the whole board.
+   *
+   * Per render rather than held in state, and deliberately not on a timer: a
+   * board left open across midnight repaints on the next thing anybody does to
+   * it, and a clock ticking in a panel nobody is looking at to recolour one
+   * chip is not worth an interval. One value for every card so that no two of
+   * them can disagree about which day they are being compared against.
+   */
+  const today = todayKey()
+
+  /**
    * What is being carried, and where it would land.
    *
    * One state for both kinds rather than two, because they are exclusive — a
@@ -80,14 +91,14 @@ export function BoardPane() {
   const draggingColumn = drag && "column" in drag ? drag.column : null
 
   /**
-   * The card dialog, if it is open: a card being edited, or a column a card is
+   * The card drawer, if it is open: a card being edited, or a column a card is
    * being added to.
    *
    * A **column** and not a card for the second one, because there is no card
-   * yet — `+` writes nothing, and the card is created when the dialog is
-   * submitted. See `CardDialog`.
+   * yet — `+` writes nothing, and the card is created when the drawer is
+   * submitted. See `CardDrawer`.
    */
-  const [dialog, setDialog] = useState<
+  const [drawer, setDrawer] = useState<
     { edit: string } | { add: string } | null
   >(null)
 
@@ -96,13 +107,13 @@ export function BoardPane() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [addingColumn, setAddingColumn] = useState(false)
 
-  /* Derived rather than held, which is what closes the dialog of a card deleted
+  /* Derived rather than held, which is what closes the drawer of a card deleted
    * from under it: there is nothing to draw, so nothing draws. */
   const editing =
-    dialog && "edit" in dialog
-      ? (cards.find((card) => card.id === dialog.edit) ?? null)
+    drawer && "edit" in drawer
+      ? (cards.find((card) => card.id === drawer.edit) ?? null)
       : null
-  const adding = dialog && "add" in dialog ? dialog.add : null
+  const adding = drawer && "add" in drawer ? drawer.add : null
 
   // A project that has left the workspace while its tab was open: the tab
   // closes a frame later (`reconcileScope`), and until then this is what it
@@ -160,7 +171,12 @@ export function BoardPane() {
     const from = columns.findIndex((column) => column.id === draggingColumn)
     if (from !== -1 && from < index) index -= 1
 
-    useBoard.getState().moveColumn(draggingColumn, index)
+    // The carried column's own project, not the pane's: a column id is only
+    // unique within one board (see `columnKey`), so the write has to name both.
+    const carried = columns[from]
+    if (!carried) return endDrag()
+
+    useBoard.getState().moveColumn(carried.folderId, draggingColumn, index)
     endDrag()
   }
 
@@ -206,7 +222,11 @@ export function BoardPane() {
                   else dropCard(column.id)
                 }}
                 className={cn(
-                  "flex min-h-0 w-64 flex-col overflow-hidden rounded-lg bg-muted/40",
+                  // Wider than it was (w-64), because a card now carries a row
+                  // of tags above its title: at the old width two tags and a
+                  // priority wrapped to a second line on most cards, which is
+                  // the row costing height on every card to save it on none.
+                  "flex min-h-0 w-72 flex-col overflow-hidden rounded-lg bg-muted/40",
                   draggingColumn === column.id && "opacity-40"
                 )}
               >
@@ -216,7 +236,9 @@ export function BoardPane() {
                       name={column.name}
                       label="Column name"
                       onRename={async (name) => {
-                        useBoard.getState().renameColumn(column.id, name)
+                        useBoard
+                          .getState()
+                          .renameColumn(column.folderId, column.id, name)
                         setRenamingId(null)
                         return null
                       }}
@@ -241,20 +263,24 @@ export function BoardPane() {
                       aria-hidden
                       className={cn("size-2 shrink-0 rounded-full", tone.dot)}
                     />
-                    <h2 className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                    {/* Small caps: the header is a label over a stack of cards,
+                        and setting it apart in weight and case rather than in
+                        size keeps it from competing with the card titles under
+                        it — which are the thing being read. */}
+                    <h2 className="min-w-0 flex-1 truncate text-[0.6875rem] font-semibold tracking-wide text-foreground uppercase">
                       {column.name}
                     </h2>
                     {/* Nothing for an empty column: a count reading zero is a
                         thing to notice saying there is nothing to notice — the
                         rule the `Changes` tab's badge follows. */}
                     {own.length > 0 && (
-                      <span className="shrink-0 text-[0.6875rem] text-muted-foreground tabular-nums">
+                      <span className="shrink-0 rounded bg-foreground/8 px-1.5 py-0.5 text-[0.6875rem] leading-none text-muted-foreground tabular-nums">
                         {own.length}
                       </span>
                     )}
                     <IconButton
                       label={`Add a card to ${column.name}`}
-                      onClick={() => setDialog({ add: column.id })}
+                      onClick={() => setDrawer({ add: column.id })}
                       className="size-5 shrink-0"
                     >
                       <Plus className="size-3" />
@@ -294,8 +320,9 @@ export function BoardPane() {
                       <BoardCardRow
                         card={card}
                         edge={tone.edge}
+                        today={today}
                         dragging={draggingCard === card.id}
-                        onEdit={() => setDialog({ edit: card.id })}
+                        onEdit={() => setDrawer({ edit: card.id })}
                         onDragStart={() => setDrag({ card: card.id })}
                         onDragEnd={endDrag}
                       />
@@ -365,24 +392,24 @@ export function BoardPane() {
         </div>
       </div>
 
-      {/* One dialog, two things it can be doing with the answer. Keyed so that
+      {/* One drawer, two things it can be doing with the answer. Keyed so that
           it starts from the right text: the fields are held in it, and a second
           card opened without remounting would keep the first one's. */}
       {editing && (
-        <CardDialog
+        <CardDrawer
           key={editing.id}
           card={editing}
           onSave={(fields) => useBoard.getState().edit(editing.id, fields)}
-          onClose={() => setDialog(null)}
+          onClose={() => setDrawer(null)}
         />
       )}
 
       {adding && (
-        <CardDialog
+        <CardDrawer
           key={`add:${adding}`}
           card={null}
           onSave={(fields) => useBoard.getState().add(folderId, adding, fields)}
-          onClose={() => setDialog(null)}
+          onClose={() => setDrawer(null)}
         />
       )}
     </div>
@@ -440,7 +467,9 @@ function ColumnMenu({
               <DropdownMenuItem
                 key={tone}
                 onClick={() =>
-                  useBoard.getState().setColumnTone(column.id, tone)
+                  useBoard
+                    .getState()
+                    .setColumnTone(column.folderId, column.id, tone)
                 }
               >
                 <span
@@ -458,7 +487,9 @@ function ColumnMenu({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               variant="destructive"
-              onClick={() => useBoard.getState().removeColumn(column.id)}
+              onClick={() =>
+                useBoard.getState().removeColumn(column.folderId, column.id)
+              }
             >
               <Trash2 />
               {cards

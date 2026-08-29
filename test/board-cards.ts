@@ -5,9 +5,16 @@ import {
   cardsOf,
   columnOf,
   columnsOf,
+  dueOf,
+  dueState,
   linkedChat,
   moveCard,
   moveColumn,
+  parseTags,
+  priorityOf,
+  tagText,
+  tagsOf,
+  todayKey,
   unfinishedCount,
 } from "../src/renderer/lib/board/cards"
 import { check, finish, section } from "./harness"
@@ -252,33 +259,68 @@ section("moving a column")
 
 check(
   "to the end",
-  ids(columnsOf(moveColumn(columns, "todo", 2), "web")) === "doingshippedtodo"
+  ids(columnsOf(moveColumn(columns, "web", "todo", 2), "web")) ===
+    "doingshippedtodo"
 )
 
 check(
   "to the head",
-  ids(columnsOf(moveColumn(columns, "shipped", 0), "web")) ===
+  ids(columnsOf(moveColumn(columns, "web", "shipped", 0), "web")) ===
     "shippedtododoing"
 )
 
 check(
   "an index past the end lands last",
-  ids(columnsOf(moveColumn(columns, "todo", 99), "web")) === "doingshippedtodo"
+  ids(columnsOf(moveColumn(columns, "web", "todo", 99), "web")) ===
+    "doingshippedtodo"
 )
 
 check(
   "the other project's columns keep their places",
-  ids(columnsOf(moveColumn(columns, "todo", 2), "api")) === "blocked"
+  ids(columnsOf(moveColumn(columns, "web", "todo", 2), "api")) === "blocked"
 )
 
 check(
   "an id naming nothing is the same list back",
-  moveColumn(columns, "nope", 0) === columns
+  moveColumn(columns, "web", "nope", 0) === columns
+)
+
+check(
+  "so is a column of a project that does not have one",
+  moveColumn(columns, "api", "todo", 0) === columns
 )
 
 check(
   "no column is lost or duplicated",
-  moveColumn(columns, "todo", 2).length === columns.length
+  moveColumn(columns, "web", "todo", 2).length === columns.length
+)
+
+/*
+ * The seeded three are the *same three ids* on every project, so a column is
+ * only ever itself as a (project, id) pair. Matching on the id alone found
+ * whichever board came first in the file and, worse, took every board's `doing`
+ * out of the list on the way — a column that disappeared off a board nobody had
+ * touched, leaving the board it was dragged on unchanged.
+ */
+const shared: BoardColumn[] = [
+  column("todo", "web", "Todo"),
+  column("doing", "web", "Doing"),
+  column("done", "web", "Done"),
+  column("todo", "api", "Todo"),
+  column("doing", "api", "Doing"),
+  column("done", "api", "Done"),
+]
+
+check(
+  "two boards seeded with the same ids: the dragged board is the one that moves",
+  ids(columnsOf(moveColumn(shared, "api", "done", 0), "api")) ===
+    "donetododoing"
+)
+
+check(
+  "and the other board keeps every column it had",
+  ids(columnsOf(moveColumn(shared, "api", "done", 0), "web")) ===
+    "tododoingdone"
 )
 
 section("the link to a chat")
@@ -314,6 +356,111 @@ check(
 check(
   "a card that never had one",
   linkedChat(chats, card("x", "web", "todo")) === null
+)
+
+/*
+ * Tags, priority and due date were added to a type whose records were already
+ * on somebody's disk, and nothing in main normalises a board file on the way
+ * through — `listBoardCards` is a read of the JSON. So every one of them is
+ * read through a function here, and what is worth testing is what those
+ * functions do with a card that predates the field, a card written by a newer
+ * build, and the hand-typed text the dialog collects.
+ */
+section("marks")
+
+const bare = card("bare", "web", "todo")
+
+check("a card written before tags existed has none", tagsOf(bare).length === 0)
+check("and no priority", priorityOf(bare) === null)
+check("and no due date", dueOf(bare) === null)
+
+check(
+  "tags are trimmed and blanks dropped",
+  tagsOf({ ...bare, tags: [" api ", "", "   ", "ui"] }).join("|") === "api|ui"
+)
+
+check(
+  "one label typed two ways is one tag, in the spelling that came first",
+  tagsOf({ ...bare, tags: ["API", "api", "Api"] }).join("|") === "API"
+)
+
+check(
+  "a tags field that is not a list is no tags, not a crash",
+  tagsOf({ ...bare, tags: "api" as unknown as string[] }).length === 0
+)
+
+check(
+  "the dialog's line of text splits on commas, spaces and all",
+  parseTags("design system, api ,, ui").join("|") === "design system|api|ui"
+)
+
+check("and an empty line is no tags", parseTags("   ").length === 0)
+
+check(
+  "the field starts from the tags as they were saved",
+  tagText({ ...bare, tags: ["design system", "api"] }) === "design system, api"
+)
+
+check(
+  "a priority reads back",
+  priorityOf({ ...bare, priority: "high" }) === "high"
+)
+
+check(
+  "a priority this build has never heard of reads as none",
+  priorityOf({ ...bare, priority: "urgent" as never }) === null
+)
+
+check(
+  "a due date reads back",
+  dueOf({ ...bare, due: "2026-05-31" }) === "2026-05-31"
+)
+
+check(
+  "an ISO instant is not a due date — the field is a day",
+  dueOf({ ...bare, due: "2026-05-31T09:00:00.000Z" }) === null
+)
+
+check("nor is anything else", dueOf({ ...bare, due: "31/05/2026" }) === null)
+
+/*
+ * The colour of a due date is the one thing on a card that changes without
+ * anybody touching it, so the boundaries are what matter: yesterday is late,
+ * today is not, and the warning window is two days wide and no wider.
+ */
+check(
+  "yesterday is overdue",
+  dueState("2026-08-28", "2026-08-29") === "overdue"
+)
+check("today is not overdue", dueState("2026-08-29", "2026-08-29") === "soon")
+check("tomorrow is still soon", dueState("2026-08-30", "2026-08-29") === "soon")
+check(
+  "the day after is later",
+  dueState("2026-08-31", "2026-08-29") === "later"
+)
+
+check(
+  "the window crosses a month end",
+  dueState("2026-09-01", "2026-08-31") === "soon"
+)
+
+check(
+  "and a year end",
+  dueState("2027-01-01", "2026-12-31") === "soon" &&
+    dueState("2027-01-02", "2026-12-31") === "later"
+)
+
+check(
+  "today is the local day, not the UTC one",
+  // 1am on the 29th in a zone two hours ahead of UTC is still the 28th in UTC.
+  // `todayKey` reads the local parts, so it answers with the day the person
+  // looking at the board is having.
+  todayKey(new Date(2026, 7, 29, 1, 0, 0)) === "2026-08-29"
+)
+
+check(
+  "and pads a single-digit month and day",
+  todayKey(new Date(2026, 0, 5)) === "2026-01-05"
 )
 
 finish()

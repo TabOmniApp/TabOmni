@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react"
 
-import { CHAT_MODEL_FALLBACK, type AgentModel } from "@shared/api"
+import {
+  CHAT_MODEL_FALLBACK,
+  DEFAULT_CHAT_EFFORT,
+  type AgentModel,
+  type ChatEffort,
+} from "@shared/api"
 
 /**
  * The models the user's own `claude` offers, for the composer's toolbar.
@@ -106,4 +111,52 @@ export function orderedModels(models: AgentModel[]): AgentModel[] {
     if (right.order !== undefined) return 1
     return left.label.localeCompare(right.label)
   })
+}
+
+/**
+ * What `Default (recommended)` is, in the name of a model somebody recognises.
+ *
+ * The CLI's `default` row is a recommendation rather than a model: its label
+ * names nothing, so a picker that drew it alone put its tick on a word, and the
+ * one question the menu exists to answer — which model is answering — had no
+ * answer anywhere on screen. `resolvedModel` is the wire id behind a row, so the
+ * alias row sharing the default's is the default under a name (`Sonnet`).
+ *
+ * Null wherever that cannot be said honestly: a CLI old enough not to send the
+ * field, and a default whose id no other row carries. Both draw the row as it
+ * was, which is the failure this is allowed to have — a missing suffix, not a
+ * wrong one. The row itself is deliberately **not** replaced by the alias: they
+ * are the same model today and `default` is the one that follows the account.
+ */
+export function defaultModelAlias(models: AgentModel[]): string | null {
+  const fallback = models.find((entry) => entry.value === "default")
+  if (!fallback?.resolvedModel) return null
+  const named = models.find(
+    (entry) =>
+      entry.value !== "default" &&
+      entry.resolvedModel === fallback.resolvedModel
+  )
+  return named?.label ?? null
+}
+
+/**
+ * The level a pick lands on, given the levels the model in question takes.
+ *
+ * Every pick goes through this rather than through a `Default` row, which is
+ * the whole of that change: the record carries a level the toolbar can tick and
+ * main can pass, instead of a null that meant "ask the CLI" and read on screen
+ * as nothing at all. Keeps the level already chosen where the new model accepts
+ * it — switching Sonnet to Opus is not a reason to lose `Very high` — and falls
+ * to `DEFAULT_CHAT_EFFORT` otherwise, or to the strongest level below it for a
+ * model whose list stops short.
+ */
+export function effortFor(
+  levels: ChatEffort[],
+  effort: ChatEffort | null
+): ChatEffort | null {
+  if (levels.length === 0) return null
+  if (effort && levels.includes(effort)) return effort
+  if (levels.includes(DEFAULT_CHAT_EFFORT)) return DEFAULT_CHAT_EFFORT
+  // The list is weakest first, so the last one is as close as this model gets.
+  return levels[levels.length - 1] ?? null
 }

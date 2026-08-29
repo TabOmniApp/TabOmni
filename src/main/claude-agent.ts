@@ -5,7 +5,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 
-import type { AssistantMessage, TurnUsage } from "../shared/api"
+import type { AssistantMessage, ChatTodo, TurnUsage } from "../shared/api"
 import { claudeBinary } from "./claude-bin"
 import { environment, locate } from "./shell-env"
 
@@ -409,6 +409,11 @@ export async function startAgentSession(
   }
 
   let stderr = ""
+  /** Set by Stop and read by the result line that follows it: an interrupted
+   * turn comes back as `error_during_execution` like any other failure, and the
+   * CLI says nothing about who asked for it. Cleared by the result it explains,
+   * so a genuine failure two turns later is not blamed on an old Stop. */
+  let interrupted = false
   const inbox = new Inbox(session.sessionId)
 
   const conversation = query({
@@ -502,6 +507,21 @@ export async function startAgentSession(
    */
   let reportsState = false
 
+  /**
+   * When the turn being answered started, for the wall time on its usage line.
+   *
+   * Kept here rather than taken off the result line for the reason `previous`
+   * is: the SDK's own `duration_ms` belongs to the session. A turn starts when
+   * its prompt goes in, so a message sent while another turn is running does
+   * **not** move this — the queued turn starts where the running one ended,
+   * which is why the result below rewinds it rather than `send` doing so
+   * unconditionally.
+   */
+  let turnStartedAt = Date.now()
+  /** Whether a turn is in flight, so `send` knows which of the two above it
+   * is. */
+  let answering = true
+
   /** Resolved with whether the CLI came up at all — see the note above. */
   let settle: (running: boolean) => void = () => {}
   const running = new Promise<boolean>((resolve) => {
@@ -553,11 +573,17 @@ export async function startAgentSession(
         }
 
         if (message.type === "result") {
-          handlers.onUsage(usageOf(message, previous, context))
+          handlers.onUsage(
+            usageOf(message, previous, context, Date.now() - turnStartedAt)
+          )
           previous = message
           context = null
+          // Whatever is queued behind this result starts being answered now.
+          turnStartedAt = Date.now()
+          answering = false
           if (!reportsState) handlers.onBusy(false)
-          handlers.onTurn(errorOf(message))
+          handlers.onTurn(errorOf(message, interrupted))
+          interrupted = false
           continue
         }
 
@@ -587,6 +613,13 @@ export async function startAgentSession(
 
   return {
     send: (prompt) => {
+      // A Stop that raced the end of its turn leaves the flag set with no result
+      // to spend it on; the next message is where it stops being true.
+      interrupted = false
+      // An idle chat's turn starts here; one that is already working keeps the
+      // clock it has, since this message is queued behind that turn.
+      if (!answering) turnStartedAt = Date.now()
+      answering = true
       // Ahead of any word from the CLI, and deliberately: the composer has just
       // emptied itself, and a chat that looked idle until the CLI got round to
       // saying otherwise reads as a message that went nowhere.
@@ -594,6 +627,7 @@ export async function startAgentSession(
       inbox.push(prompt)
     },
     interrupt: () => {
+      interrupted = true
       // Rejections are the CLI having nothing to interrupt — a Stop that raced
       // the end of the turn — which is not worth a line in the chat.
       void conversation.interrupt().catch(() => {})
@@ -652,9 +686,13 @@ type EffortLevel = Parameters<
  * `read` that also decided what "failed" meant would be two readers of one
  * message.
  */
-function errorOf(message: ResultMessage): string | null {
+function errorOf(message: ResultMessage, interrupted: boolean): string | null {
   const failed = message.is_error || message.subtype !== "success"
   if (!failed) return null
+  // A Stop lands here as an ordinary failure — the CLI reports the turn it
+  // abandoned, not who asked it to — so the only thing that can tell the two
+  // apart is this app's own record of having asked.
+  if (interrupted) return "Interrupted by user."
   // Only a successful result carries the assistant's own last word; an error
   // subtype has no `result` field to explain itself with.
   const said =
@@ -874,7 +912,10 @@ export function usageOf(
   previous?: ResultMessage | null,
   /** Where the conversation stood at the turn's last reply, which the result
    * line does not say — see `context` on `TurnUsage`. */
-  context?: number | null
+  context?: number | null,
+  /** How long the turn took, measured by the caller — see `durationMs` on
+   * `TurnUsage` for why it is not read off the line. */
+  durationMs?: number | null
 ): TurnUsage {
   const before = previous?.modelUsage ?? {}
   const models = Object.entries(message.modelUsage ?? {}).map(([name, use]) => {
@@ -923,6 +964,7 @@ export function usageOf(
     // is this app claiming a turn was free rather than that nobody counted it.
     costUsd: cost > 0 ? cost : null,
     context: context ?? null,
+    durationMs: durationMs ?? null,
   }
 }
 
@@ -1028,11 +1070,32 @@ export function describeCall(
   path?: string
   stat?: string
   change?: string
+  todos?: ChatTodo[]
 } {
   const record =
     typeof input === "object" && input !== null
       ? (input as Record<string, unknown>)
       : {}
+
+  /*
+   * A todo list is its own row, not an argument.
+   *
+   * Returned before anything below runs, because every piece of it would be
+   * wrong here: there is no path and no description, the summary would be the
+   * list's JSON, and `input` would be the same JSON again behind the fold. What
+   * the row wants is the two facts a list has — how far through it is, and which
+   * item is running — with the list itself under it.
+   */
+  const todos = todosOf(name, record)
+  if (todos) {
+    const done = todos.filter((todo) => todo.status === "completed").length
+    const running = todos.find((todo) => todo.status === "in_progress")
+    return {
+      summary: running?.content ?? "",
+      stat: `${done}/${todos.length}`,
+      todos,
+    }
+  }
 
   const text = (key: string): string | undefined => {
     const value = record[key]
@@ -1103,6 +1166,41 @@ export function detailOf(text: string): string {
   return cut
     ? `${kept}\n… ${(lines.length - DETAIL_LINES).toLocaleString()} more lines`
     : kept
+}
+
+/**
+ * The list out of a `TodoWrite` call, or null.
+ *
+ * Null for every other tool and for a payload that does not have this shape,
+ * which is what makes this safe to put ahead of everything else in
+ * `describeCall`: a CLI that renames the field or the statuses lands back on the
+ * JSON argument the row drew before this existed, rather than on a checklist
+ * with nothing in it. Same reasoning as `asked` in `worktree-chat.ts` — the tool
+ * name says which kind of call it is, and this says whether the payload agrees.
+ *
+ * An item with no content is dropped rather than drawn as an empty line, and a
+ * status this does not know is read as `pending`: the list is worth showing even
+ * when one of its rows arrived in a shape from a later CLI.
+ */
+export function todosOf(
+  name: string,
+  record: Record<string, unknown>
+): ChatTodo[] | null {
+  if (name !== "TodoWrite") return null
+  if (!Array.isArray(record.todos)) return null
+
+  const todos = record.todos.flatMap((entry): ChatTodo[] => {
+    const todo = entry as Record<string, unknown>
+    const content = typeof todo?.content === "string" ? todo.content.trim() : ""
+    if (!content) return []
+    const status =
+      todo.status === "in_progress" || todo.status === "completed"
+        ? todo.status
+        : "pending"
+    return [{ content: collapse(content), status }]
+  })
+
+  return todos.length > 0 ? todos : null
 }
 
 const CHANGE_LINES = 16

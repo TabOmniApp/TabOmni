@@ -9,6 +9,7 @@ import {
   Loader2,
   MessageSquare,
   Settings2,
+  ShieldQuestion,
   Terminal,
 } from "lucide-react"
 
@@ -60,6 +61,11 @@ export function useTabItems(): Map<string, TabStripItem> {
   const chats = useWorktreeChats((state) => state.chats)
   const chatOpenIds = useWorktreeChats((state) => state.openIds)
   const chatSending = useWorktreeChats((state) => state.sending)
+  // A held turn is not a working one, and the strip is where a chat that is
+  // waiting on somebody has to say so: the pane's card is only visible to
+  // whoever is already looking at that chat, and the spinner beside a tab reads
+  // as "still going" — which is exactly the answer that stops you clicking it.
+  const chatAsks = useWorktreeChats((state) => state.asks)
 
   const changesOpenIds = useChanges((state) => state.openIds)
   const changesByRoot = useChanges((state) => state.byRoot)
@@ -229,15 +235,22 @@ export function useTabItems(): Map<string, TabStripItem> {
       (folder) => folder.id === chat.folderId
     )?.name
 
+    const waiting = chatAsks[id] !== undefined
+    const title = where ? `${chat.title} — ${where}` : chat.title
+
     add({
       id: PREFIX.worktree + id,
       label: chat.title,
-      icon: chatSending.includes(id) ? (
+      // Waiting wins over working: both are true while an ask is up — the turn
+      // is held rather than finished — and only one of them is something to do.
+      icon: waiting ? (
+        <ShieldQuestion className="size-3.5 shrink-0 animate-pulse text-primary" />
+      ) : chatSending.includes(id) ? (
         <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
       ) : (
         <MessageSquare className="size-3.5 shrink-0" />
       ),
-      title: where ? `${chat.title} — ${where}` : chat.title,
+      title: waiting ? `${title} — waiting for your answer` : title,
     })
   }
 

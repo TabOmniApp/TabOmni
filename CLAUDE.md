@@ -107,8 +107,10 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   palette's walk and the tsservers at once.
 - **`git.ts`** — `workingTree` for the tree's colours, `changes()` for the
   Changes tab (`git status` with the ignored dropped, plus a `git diff
---numstat` per side of the index), `fileAtHead` for the diff's left side, and
-  `stage` / `unstage` / `discard` for the list's menu. No git panel exists and
+--numstat` per side of the index), `fileAtHead` for the diff's left side,
+  `fileDiff` for the diff **itself** — `git diff HEAD --unified=0`, so the pane
+  and the row's `+`/`-` counts are one algorithm rather than two that agree most
+  of the time — and `stage` / `unstage` / `discard` for the list's menu. No git panel exists and
   **nothing commits** — that line is deliberate, see `docs/design.md`. `discard`
   answers with the paths it could not restore instead of deleting them: they go
   to the trash in `ipc.ts`, because this module stays free of `electron` so the
@@ -238,7 +240,16 @@ The shape, in one pass: the **left column** (`workspace-sidebar.tsx`) is
 the one line saying which sections are drawn, and putting `Database` / `Notes` /
 `API` back is adding an id to it; those panels, stores and tabs all still work.
 The **right-hand panel** is Explorer, with `All files` and `Changes` tabs, and it
-is the whole height of its column. The **dock** — `Run` and `Terminal` — is under
+is the whole height of its column. **Both columns collapse to a 36px rail**
+rather than to nothing (`explorer-rail.tsx`, `project-rail.tsx`) — one button
+each, the way back from a handle dragged shut — so the two panels'
+`collapsedSize` and the rails' width are one exported `RAIL_WIDTH`, the same
+bargain the dock's strip makes. A rail is **positioned, not laid out**: it takes
+none of its column's width, so the panels' sizes are the columns' own numbers
+and the one row it lands on leaves the room (`pr-11` on Explorer's header).
+A shut column is `invisible` rather than squeezed — a positioned rail clips
+nothing behind it — and never unmounted. `WindowLeftEdge` holds no button any
+more, only the traffic lights' clearance. The **dock** — `Run` and `Terminal` — is under
 the **pane**, spanning its width, collapsed rather than unmounted because a pty
 taken out of the tree ends. It used to be the lower half of the Explorer column,
 where a 520px cap left the shell ~60 columns wide; `docs/design.md` has the
@@ -253,15 +264,30 @@ A project also has a **board** — one tab per project whose id is the project's
 so `rootOf` is the identity the way it is for `changes`. Its columns are the
 project's own (added, renamed, recoloured, dragged), seeded as `Todo` / `Doing` /
 `Done`, and their **ids are those words** so cards written before columns were
-records need no migration. A card may name one chat, and that link is **UI-level
-in both directions**: the card opens or starts the chat (through `create`'s
+records need no migration — so a column id is unique only **within one board**,
+and every write to one goes through `columnKey(folderId, id)`: matching on the
+id alone moved whichever project came first in the file and took every other
+project's column of that name out of the list on the way.
+A card may name one chat, and that link is **UI-level in both directions**: the card opens or starts the chat (through `create`'s
 existing draft argument) and shows whether it is answering; the chat's pane
 carries a chip naming its card. Deleting a column rewrites no cards — an orphan
 is drawn in the first column (`columnOf`), and `membership` in
 `lib/board/cards.ts` is why the drawing and the drop agree about that. The agent
 cannot write to the board — this app serves no MCP server of its own.
+A **click** on a card opens `card-drawer.tsx` — a drawer down the right-hand
+edge (`swipeDirection="right"`), the app's one use of `components/ui/drawer`,
+and the same form for adding a card as for editing one. It was a centred dialog
+behind a double click; the `⋯` and the chat footer stop the click reaching the
+card, or pressing either would open the drawer as well.
+A card also carries **tags, a priority and a due date**, all optional and all
+read through `tagsOf` / `priorityOf` / `dueOf` rather than off the record —
+board files predate the fields and main normalises nothing on the way through. A
+tag's colour comes from the tag's own text (`tagTone`), so there is no tag store.
+A due date is a **day** (`YYYY-MM-DD`), not an ISO instant, which is why it is
+compared as a string and never round-tripped through a local `Date`.
 `docs/design.md` § Board carries all of it, including the reversal of the
-"three fixed columns" decision and why this is not the deleted Tasks layer.
+"three fixed columns" decision, why this is not the deleted Tasks layer, and why
+there is no assignee, no comments and no attachments.
 
 ### Constraints that bite
 
@@ -323,6 +349,8 @@ Logic worth testing is split out from the drawing: `lib/worktree-chat/activity.t
 `lib/files/review.ts` (`test/review.ts`), `lib/tab-groups.ts`
 (`test/tab-groups.ts`), `lib/files/roots.ts` (`test/file-roots.ts`),
 `lib/board/cards.ts` (`test/board-cards.ts`),
+`lib/files/change-tree.ts` (`test/change-tree.ts`),
+`lib/files/git-diff.ts` with `main/git.ts`'s own `fileDiff` (`test/git-diff.ts`),
 `lib/files/block-doc.ts`, `lib/worktree-chat/mention-text.ts`
 (`test/chat-mentions.ts`), `lib/worktree-chat/mcp-servers.ts` with
 `main/mcp-servers.ts`'s own `readServer` (`test/mcp-servers.ts`). Put new logic on that side of the line.

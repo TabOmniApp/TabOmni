@@ -2,6 +2,9 @@ import { useState } from "react"
 import {
   Brain,
   Check,
+  Circle,
+  CircleCheck,
+  CircleDot,
   Coins,
   Copy,
   FileText,
@@ -9,7 +12,7 @@ import {
   TriangleAlert,
 } from "lucide-react"
 
-import type { AssistantMessage } from "@shared/api"
+import type { AssistantMessage, ChatTodo } from "@shared/api"
 import { iconFor } from "@/lib/files/icons"
 import { nameOf } from "@/lib/files/paths"
 import { cn } from "@/lib/utils"
@@ -215,7 +218,7 @@ function ToolRow({ of }: { of: Extract<AssistantMessage, { role: "tool" }> }) {
    * onto the sentence it was already displaying is worse than one that does not
    * open.
    */
-  const openable = Boolean(of.input || of.output || of.change)
+  const openable = Boolean(of.input || of.output || of.change || of.todos)
 
   return (
     <div>
@@ -374,12 +377,14 @@ function ToolDetail({
   of: Extract<AssistantMessage, { role: "tool" }>
 }) {
   /* Whole where main kept it, and the row's own where it did not — except for a
-     call showing a change, whose argument is the path the chip is already
-     drawing. */
-  const argument = of.input ?? (of.change ? undefined : of.summary)
+     call showing a change or a todo list, whose argument is what the block below
+     is already drawing in full. */
+  const argument = of.change || of.todos ? of.input : (of.input ?? of.summary)
 
   return (
     <div className="mt-1 mb-1.5 ml-1 divide-y overflow-hidden rounded-md border bg-muted/30">
+      {of.todos && <TodoList todos={of.todos} />}
+
       {argument && (
         <Block
           text={argument}
@@ -416,6 +421,56 @@ function ToolDetail({
     </div>
   )
 }
+
+/**
+ * The list a `TodoWrite` wrote, as a checklist.
+ *
+ * The one call whose argument is prose rather than code, so it is the one block
+ * in the panel that is not a `pre`: monospace and `whitespace-pre` are for text
+ * whose indentation is its own, and a todo is a sentence. It wraps for the same
+ * reason — a task cut off at the panel's edge with a scrollbar under it is the
+ * one thing a checklist must not do.
+ *
+ * A done item is struck through *and* muted rather than only muted: the list is
+ * scanned down its left edge for where the turn is up to, and three shades of
+ * grey are not three states.
+ */
+function TodoList({ todos }: { todos: ChatTodo[] }) {
+  return (
+    <ul className="max-h-64 space-y-0.5 overflow-auto px-2 py-1.5 text-[0.65rem] leading-relaxed">
+      {todos.map((todo, at) => {
+        const Mark = TODO_MARKS[todo.status]
+        return (
+          <li key={at} className="flex items-baseline gap-1.5">
+            <Mark
+              className={cn(
+                "size-3 shrink-0 translate-y-0.5",
+                todo.status === "completed" &&
+                  "text-[#007100] dark:text-[#73c991]",
+                todo.status === "in_progress" && "text-foreground"
+              )}
+            />
+            <span
+              className={cn(
+                "min-w-0",
+                todo.status === "completed" && "line-through opacity-50",
+                todo.status === "in_progress" && "font-medium text-foreground"
+              )}
+            >
+              {todo.content}
+            </span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+const TODO_MARKS = {
+  pending: Circle,
+  in_progress: CircleDot,
+  completed: CircleCheck,
+} as const
 
 /** The tools whose argument is a command rather than a value. A set rather than
  * a comparison because the CLI has grown a second one before. */

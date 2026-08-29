@@ -562,10 +562,22 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
   },
 }))
 
-/** One project's chats, oldest first. Keyed by root id, which for a chat is
+/** One project's chats, newest first. Keyed by root id, which for a chat is
  * its folder — the same key its group and its scope use. */
 export function chatsOf(chats: WorktreeChat[], rootId: string): WorktreeChat[] {
-  return chats.filter((chat) => chatRootId(chat) === rootId)
+  return newestFirst(chats.filter((chat) => chatRootId(chat) === rootId))
+}
+
+/**
+ * The order the column lists chats in: most recently started at the top.
+ *
+ * By `createdAt` rather than `updatedAt` — a list ordered by activity
+ * rearranges itself under the cursor while a turn is running, which is the row
+ * you were reaching for moving as you click it. The file's own order is oldest
+ * first, so a new chat landed at the bottom of a long project.
+ */
+function newestFirst(chats: WorktreeChat[]): WorktreeChat[] {
+  return [...chats].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
 /**
@@ -584,7 +596,7 @@ export function chatsOf(chats: WorktreeChat[], rootId: string): WorktreeChat[] {
  * a directory to run in, and `Ungrouped` names the absence of one.
  */
 export function ungroupedChats(chats: WorktreeChat[]): WorktreeChat[] {
-  return chats.filter((chat) => chatRootId(chat) === null)
+  return newestFirst(chats.filter((chat) => chatRootId(chat) === null))
 }
 
 /**

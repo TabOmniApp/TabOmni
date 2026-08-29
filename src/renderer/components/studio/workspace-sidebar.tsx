@@ -51,7 +51,10 @@ export function WorkspaceSidebar({
       aria-label="Workspace"
       className="flex h-full min-h-0 flex-col overflow-hidden"
     >
-      <div className="shrink-0 py-2">
+      {/* `pr-9` because the column's collapse button is positioned over the
+          right of this row (`project-rail.tsx`) and takes no width of its own —
+          without it, the row's hover highlight ran under the button. */}
+      <div className="shrink-0 py-2 pr-9">
         <SideRow onClick={() => usePalette.getState().setOpen(true)}>
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate">Search</span>

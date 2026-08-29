@@ -1,4 +1,8 @@
-import { chatOptions, type WorktreeChatOptions } from "../src/shared/api"
+import {
+  chatOptions,
+  DEFAULT_CHAT_EFFORT,
+  type WorktreeChatOptions,
+} from "../src/shared/api"
 import { check, finish, section } from "./harness"
 
 /**
@@ -20,7 +24,27 @@ check(
   "no options at all is whatever a new chat gets",
   chatOptions(undefined).permission === "edits" &&
     chatOptions(undefined).model === "default" &&
-    chatOptions(undefined).effort === null
+    chatOptions(undefined).effort === DEFAULT_CHAT_EFFORT
+)
+
+/*
+ * A null effort is the app's default rather than "no answer", which is the one
+ * read here that is not a passthrough. The picker's `Default` row is gone (see
+ * `DEFAULT_CHAT_EFFORT`), so a record still carrying null — every chat written
+ * before that — would otherwise leave the toolbar with no level to tick over a
+ * turn that ran at one.
+ */
+check(
+  "a null effort off disk reads as the level a new chat gets",
+  chatOptions({ model: "opus", effort: null, permission: "edits" }).effort ===
+    DEFAULT_CHAT_EFFORT
+)
+
+check(
+  "but `Inherit` keeps its null — a level here would override the setting " +
+    "that row exists to defer to",
+  chatOptions({ model: null, effort: null, permission: "edits" }).effort ===
+    null
 )
 
 /*

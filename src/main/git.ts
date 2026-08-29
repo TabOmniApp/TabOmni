@@ -394,6 +394,89 @@ export async function fileAtHead(
   dir: string,
   filePath: string
 ): Promise<string | null> {
+  const relative = await inRepository(dir, filePath)
+  if (relative === null) return null
+
+  try {
+    return await git(dir, ["show", `HEAD:${relative}`])
+  } catch {
+    // Not in HEAD, which is what a file somebody has just written looks like.
+    return null
+  }
+}
+
+/**
+ * The patch between `HEAD` and the working tree for one file, or null when
+ * there is none to be had.
+ *
+ * This is the diff the pane actually draws, where `fileAtHead` is only its
+ * left-hand side. The renderer used to compute the difference between the two
+ * texts itself; it now reads the ranges off these `@@` headers instead, so that
+ * what is on screen and the `+`/`-` counts beside the row come from one
+ * algorithm rather than two that agree most of the time.
+ *
+ * **`--unified=0` because nothing here reads context.** With no context lines a
+ * hunk header *is* the changed range, and the renderer turns each straight into
+ * a pair of ranges rather than counting context back off it.
+ *
+ * **`HEAD` is named, unlike in `numstat`.** The left-hand side on screen is the
+ * commit, so the patch has to span the index and the working tree at once or it
+ * would describe a different pair than the one being drawn. A repository with
+ * no commits has no `HEAD` to name and fails into null here — the same nothing
+ * an untracked file gets, and the same thing both mean to a diff.
+ *
+ * `--no-textconv` because the renderer checks this patch against the two texts
+ * it holds and drops it whole if it does not describe them: a patch of what
+ * some `diff=` driver made of a file describes a pair nobody has.
+ */
+export async function fileDiff(
+  dir: string,
+  filePath: string
+): Promise<string | null> {
+  const relative = await inRepository(dir, filePath)
+  if (relative === null) return null
+
+  try {
+    return await git(dir, [
+      // For the reason in `workingTree`: this app watches `.git`, and a read
+      // that writes the index would report a change to itself.
+      "--no-optional-locks",
+      "diff",
+      "HEAD",
+      "--unified=0",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      // One path is being asked about, so a rename has nothing to pair it with
+      // here — and `--find-renames` would answer about the other name.
+      "--no-renames",
+      "--",
+      relative,
+    ])
+  } catch {
+    // No commits yet, or not a repository.
+    return null
+  }
+}
+
+/**
+ * A file in the repository's own terms, or null for one no git command could
+ * name.
+ *
+ * Both halves of a diff need this and neither can use the absolute path a row
+ * carries: `HEAD:` takes a path from the repository root, and so does the
+ * `-- <path>` a `git diff` is narrowed with.
+ *
+ * Turned around the same way `workingTree` turns git's answers back, and
+ * through `dir` rather than through the file: a **deleted** file has no
+ * `realpath` to resolve, and it is exactly the file whose committed side
+ * somebody wants to see. Resolving one path and not the other is what made
+ * `/tmp` on macOS answer with `../../private/tmp/…`.
+ */
+async function inRepository(
+  dir: string,
+  filePath: string
+): Promise<string | null> {
   let root: string
   try {
     root = (await git(dir, ["rev-parse", "--show-toplevel"])).trim()
@@ -402,31 +485,18 @@ export async function fileAtHead(
     return null
   }
 
-  // Turned into the repository's terms the same way `workingTree` turns them
-  // back, and through `dir` rather than through the file: a **deleted** file has
-  // no `realpath` to resolve, and it is exactly the file whose committed side
-  // somebody wants to see. Resolving one path and not the other is what made
-  // `/tmp` on macOS answer with `../../private/tmp/…`.
   const inRepo = await realpath(dir)
     .then((resolved) => path.relative(root, resolved))
     .catch(() => "")
   const relative = path.join(inRepo, path.relative(dir, filePath))
 
-  // Outside the repository the folder is in — nothing `HEAD:` could name.
+  // Outside the repository the folder is in — nothing git could name.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
     return null
 
-  try {
-    // Forward slashes always: `HEAD:src\main.ts` is not a path git knows, even
-    // on Windows.
-    return await git(dir, [
-      "show",
-      `HEAD:${relative.split(path.sep).join("/")}`,
-    ])
-  } catch {
-    // Not in HEAD, which is what a file somebody has just written looks like.
-    return null
-  }
+  // Forward slashes always: `HEAD:src\main.ts` is not a path git knows, even on
+  // Windows.
+  return relative.split(path.sep).join("/")
 }
 
 /**

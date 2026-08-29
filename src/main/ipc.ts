@@ -20,6 +20,7 @@ import {
   type ChatPlace,
   type ClaudeProfile,
   type DatabaseConnectionInput,
+  type FileDiff,
   type FileIndexEntry,
   type UpdateDatabaseInput,
   type HttpCookie,
@@ -46,6 +47,7 @@ import {
   discard,
   discardAll,
   fileAtHead,
+  fileDiff,
   stage,
   unstage,
   workingTree,
@@ -507,25 +509,37 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   }
 
   /**
-   * The committed side of a diff.
+   * The committed side of a diff, and git's own patch for it.
    *
    * Through the same gate as every other read of a file, and then run in the
    * root that holds it: `HEAD:` is a path in one repository, so the folder the
    * path lives under is the one to ask.
+   *
+   * The two run together rather than one after the other — they are two
+   * independent `git` processes and the pane waits for both before it draws
+   * anything, so serialising them would be a second round trip's wait for the
+   * same paint.
    */
-  ipcMain.handle(IPC.fileAtHead, async (_event, filePath: string) => {
-    const target = await inWorkspace(filePath)
-    const roots = await fileRoots()
+  ipcMain.handle(
+    IPC.fileDiff,
+    async (_event, filePath: string): Promise<FileDiff> => {
+      const target = await inWorkspace(filePath)
+      const roots = await fileRoots()
 
-    // The narrowest root that holds it, since one folder can be added inside
-    // another — the same rule `rootOf` follows in the renderer.
-    const root = roots
-      .filter((candidate) => files.insideAny([candidate.path], target))
-      .sort((a, b) => b.path.length - a.path.length)[0]
-    if (!root) return null
+      // The narrowest root that holds it, since one folder can be added inside
+      // another — the same rule `rootOf` follows in the renderer.
+      const root = roots
+        .filter((candidate) => files.insideAny([candidate.path], target))
+        .sort((a, b) => b.path.length - a.path.length)[0]
+      if (!root) return { head: null, patch: null }
 
-    return fileAtHead(root.path, target)
-  })
+      const [head, patch] = await Promise.all([
+        fileAtHead(root.path, target),
+        fileDiff(root.path, target),
+      ])
+      return { head, patch }
+    }
+  )
 
   /**
    * Every directory the Explorer may read: the workspace's folders.

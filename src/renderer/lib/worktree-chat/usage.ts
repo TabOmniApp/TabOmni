@@ -1,4 +1,5 @@
 import type { AssistantMessage, TurnUsage } from "@shared/api"
+import { duration } from "./since"
 
 /**
  * What a turn cost, in words.
@@ -56,6 +57,13 @@ export function usageLine(usage: TurnUsage | ChatTotal): string {
     parts.push(`${compact(prompt)} prompt, ${cached}% cached`)
   }
   if (usage.output > 0) parts.push(`${compact(usage.output)} out`)
+  // What it took on the clock, in the spinner's own words: the figure that was
+  // on screen while the turn ran is the one worth keeping once it has stopped
+  // moving, and a chat's total is the afternoon added up. Truthy rather than
+  // `!== null` for the reason `context` is — a line written before the field
+  // existed has none, and a chat from last week saying `0s` would be this app
+  // claiming its turns were instant.
+  if (usage.durationMs) parts.push(duration(usage.durationMs))
   // Where the chat stands rather than what it spent, and the reason it is last:
   // the figures before it are sums that only grow, and this one is a level —
   // it falls when the conversation is compacted. Truthy rather than `!== null`
@@ -163,6 +171,14 @@ export function totalOf(lines: AssistantMessage[]): ChatTotal | null {
       // Turns that reported nothing are skipped rather than resetting it, since
       // a crash does not empty the conversation behind it.
       context: use.context ?? sum.context,
+      // Summed like the spends and unlike `context`: a chat's time is every
+      // turn's time, and the turns of one chat never overlap. Null only where
+      // no turn reported one, so a chat with older lines in it totals the ones
+      // that were measured rather than reading as faster than it was.
+      durationMs:
+        use.durationMs === null
+          ? sum.durationMs
+          : (sum.durationMs ?? 0) + use.durationMs,
     }),
     {
       turns: 0,
@@ -174,6 +190,7 @@ export function totalOf(lines: AssistantMessage[]): ChatTotal | null {
       thinking: 0,
       costUsd: null,
       context: null,
+      durationMs: null,
     }
   )
 }

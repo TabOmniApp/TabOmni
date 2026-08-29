@@ -76,6 +76,7 @@ const usage = (over: Partial<TurnUsage> = {}): TurnUsage => ({
   thinking: 0,
   costUsd: null,
   context: null,
+  durationMs: null,
   ...over,
 })
 
@@ -402,6 +403,54 @@ section("the line somebody reads")
       usageDetail(usage({ output: 100, thinking: 40 })).includes(
         "40 of it thinking"
       )
+  )
+}
+
+/**
+ * How long the turn took, which is the one figure on the line that is not read
+ * off the result at all.
+ *
+ * The SDK's own `duration_ms` is the session's, like every other number there,
+ * so it is measured around the turn in `claude-agent.ts` and handed in. What is
+ * worth guarding is the pair of ends: a line from before the field says nothing
+ * rather than `0s`, and a chat's turns add up where its context does not.
+ */
+section("what a turn took")
+{
+  const turn = usageOf(
+    result({ "claude-opus-5": { inputTokens: 10, outputTokens: 900 } }),
+    null,
+    null,
+    65_400
+  )
+  check("the caller's measurement is carried", turn.durationMs === 65_400, turn)
+  check(
+    "a turn nobody timed reports none",
+    usageOf(result({})).durationMs === null
+  )
+
+  check(
+    "the line says it in the spinner's words",
+    usageLine(usage({ durationMs: 65_400 })).includes("1m5s"),
+    usageLine(usage({ durationMs: 65_400 }))
+  )
+  const untimed = usage({ output: 900, durationMs: null })
+  check(
+    "and a chat from before the field says nothing",
+    !/\d+s/.test(usageLine(untimed)),
+    usageLine(untimed)
+  )
+
+  const total = totalOf([line({ durationMs: 20_000 }), line({ durationMs: 5 })])
+  check("a chat's turns add up", total?.durationMs === 20_005, total)
+  check(
+    "and an untimed one is skipped rather than zeroing them",
+    totalOf([line({ durationMs: null }), line({ durationMs: 3_000 })])
+      ?.durationMs === 3_000
+  )
+  check(
+    "a chat where none of them were timed has no time",
+    totalOf([line({ durationMs: null })])?.durationMs === null
   )
 }
 

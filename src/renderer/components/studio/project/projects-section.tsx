@@ -7,6 +7,7 @@ import {
   MessageSquare,
   Pencil,
   Plus,
+  ShieldQuestion,
   Trash2,
 } from "lucide-react"
 
@@ -271,7 +272,7 @@ function ProjectRow({
 }
 
 /**
- * One project's chats, oldest first — the order they were started in.
+ * One project's chats, newest first — a chat just started is the top row.
  *
  * The row is the chat's **title**, which is the first thing that was asked in
  * it (`"Untitled"` until there is one). Listed here rather than only in the tab
@@ -288,6 +289,9 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
   const chats = useWorktreeChats((state) => state.chats)
   const selectedId = useWorktreeChats((state) => state.selectedId)
   const sending = useWorktreeChats((state) => state.sending)
+  // Which chats are stopped on a question — see the note in `tab-items.tsx`
+  // about why that is not the same thing as one that is working.
+  const asks = useWorktreeChats((state) => state.asks)
   const select = useWorktreeChats((state) => state.select)
   const remove = useWorktreeChats((state) => state.remove)
   const rename = useWorktreeChats((state) => state.rename)
@@ -304,6 +308,7 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
     <>
       {own.map((chat) => {
         const isSending = sending.includes(chat.id)
+        const isWaiting = asks[chat.id] !== undefined
 
         // Outside the menu while it is a field: a right-click on a text field
         // belongs to the field, not to the row it stands in for.
@@ -331,7 +336,11 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
                 <SideRow
                   indent={1}
                   active={selectedId === chat.id}
-                  title={chat.title}
+                  title={
+                    isWaiting
+                      ? `${chat.title} — waiting for your answer`
+                      : chat.title
+                  }
                   // `text-foreground` because a chat's title is the content of
                   // this list rather than a label over it — the muted default
                   // is right for a tree of filenames and wrong for a dozen
@@ -352,8 +361,14 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
                     useProjects.getState().setActive(folderId)
                   }}
                 >
-                  {isSending && (
-                    <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />
+                  {/* Waiting wins over working: both are true while an ask is
+                      up, and only one of them is something to do. */}
+                  {isWaiting ? (
+                    <ShieldQuestion className="size-3 shrink-0 animate-pulse text-primary" />
+                  ) : (
+                    isSending && (
+                      <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />
+                    )
                   )}
                   <span className="min-w-0 flex-1 truncate text-left">
                     {chat.title}

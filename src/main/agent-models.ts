@@ -133,6 +133,7 @@ function timeout(): Promise<never> {
  */
 export function readModel(model: {
   value: string
+  resolvedModel?: string
   displayName: string
   description: string
   supportsEffort?: boolean
@@ -147,6 +148,9 @@ export function readModel(model: {
     model.value === "default"
   return {
     value: model.value,
+    // Omitted rather than carried as undefined, so a row from a CLI that
+    // predates the field and one that resolves to nothing are the same record.
+    ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
     label: model.displayName,
     description: model.description,
     efforts: levels.filter((level): level is ChatEffort =>

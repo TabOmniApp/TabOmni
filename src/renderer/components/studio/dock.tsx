@@ -53,14 +53,19 @@ export function Dock() {
   const running = anyRunning(runs)
 
   return (
-    <div className="flex h-full min-h-0 flex-col border-t">
+    <div className="flex h-full min-h-0 flex-col">
       <div
         role="tablist"
         aria-label="Dock"
         // The height is the panel's `collapsedSize`, so this row is exactly what
         // is left when the dock is shut.
         style={{ height: DOCK_STRIP_HEIGHT }}
-        className="flex shrink-0 items-center gap-0.5 border-b px-1.5"
+        // The top border belongs to *this row* rather than to the wrapper, and
+        // that is the whole of it: a border on the wrapper is 1px the row does
+        // not get, so a shut dock was 37px of content in a 36px box — and the
+        // panel's own div scrolls (`overflow: auto`, inline, from
+        // react-resizable-panels), so that 1px showed up as a scrollbar.
+        className="flex shrink-0 items-center gap-0.5 border-t border-b px-1.5"
       >
         <IconButton
           label={open ? "Hide the panel" : "Show the panel"}

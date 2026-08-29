@@ -49,7 +49,24 @@ type Entry = {
   open: () => Promise<string | null>
 }
 
-type Group = { heading: string; entries: Entry[] }
+/**
+ * One heading's worth of rows, and the tab that narrows to it.
+ *
+ * `available` is not `entries.length > 0`: the tab row has to hold still while
+ * somebody types, and Files is empty until a query matches something. What
+ * decides whether a tab is offered is whether the workspace has that kind of
+ * thing at all — no database connected, no `Database` tab — while what is drawn
+ * under it is still the query's own answer.
+ */
+type Group = {
+  kind: string
+  heading: string
+  entries: Entry[]
+  available: boolean
+}
+
+/** The tab that narrows to nothing, always first. */
+const ALL = "all"
 
 type Notice = { tone: "muted" | "destructive"; text: string }
 
@@ -124,6 +141,33 @@ function Palette({ onOpened }: { onOpened: () => void }) {
   const groups = useEntries(query)
   const [notice, setNotice] = useState<Notice | null>(null)
 
+  /**
+   * Which kind of thing the list is narrowed to.
+   *
+   * Held here rather than on the palette's store, so it starts at `All` every
+   * time the dialog opens — this component is a child of it and so unmounts
+   * with it. A tab is a way through one search, not a setting.
+   */
+  const [tab, setTab] = useState(ALL)
+  const tabs = groups.filter((group) => group.available)
+  // A tab whose kind has just left the workspace — the last database
+  // disconnected while the palette was open — would otherwise filter every row
+  // away with no tab lit to say why.
+  const active = tabs.some((group) => group.kind === tab) ? tab : ALL
+  // A heading with nothing under it reads as something having failed to load;
+  // cmdk hides a group whose rows are all filtered out, but not one that never
+  // had any — the tab row above is drawn from the full list instead.
+  const shown = groups.filter(
+    (group) =>
+      group.entries.length > 0 && (active === ALL || group.kind === active)
+  )
+
+  function cycle(by: number) {
+    const order = [ALL, ...tabs.map((group) => group.kind)]
+    const at = order.indexOf(active)
+    setTab(order[(at + by + order.length) % order.length] ?? ALL)
+  }
+
   async function run(entry: Entry) {
     /*
      * Every panel's own `select` is synchronous. The exception is a table in a
@@ -147,7 +191,20 @@ function Palette({ onOpened }: { onOpened: () => void }) {
   }
 
   return (
-    <Command filter={score}>
+    <Command
+      filter={score}
+      /*
+       * `⇥` walks the tabs, the way it does in a browser's own find bar.
+       * Claimed here rather than left to the input, where it would move focus
+       * out of the palette and into whatever the dialog has next — there is
+       * nothing else in here to tab to.
+       */
+      onKeyDown={(event) => {
+        if (event.key !== "Tab" || tabs.length === 0) return
+        event.preventDefault()
+        cycle(event.shiftKey ? -1 : 1)
+      }}
+    >
       <CommandInput
         autoFocus
         placeholder="Search files, tables, requests, sessions and notes…"
@@ -158,6 +215,30 @@ function Palette({ onOpened }: { onOpened: () => void }) {
           setNotice(null)
         }}
       />
+
+      {tabs.length > 0 && (
+        <div className="no-scrollbar flex items-center gap-1 overflow-x-auto px-1 pt-1.5">
+          {[{ kind: ALL, heading: "All" }, ...tabs].map((group) => (
+            <button
+              key={group.kind}
+              type="button"
+              // The input keeps focus: the arrow keys and Enter are still the
+              // way the list is worked, and a click that stole focus would end
+              // the search that the tab is meant to narrow.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setTab(group.kind)}
+              className={cn(
+                "shrink-0 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors",
+                group.kind === active
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {group.heading}
+            </button>
+          ))}
+        </div>
+      )}
 
       {notice && (
         <p
@@ -174,13 +255,18 @@ function Palette({ onOpened }: { onOpened: () => void }) {
 
       <CommandList className="max-h-[min(60vh,24rem)]">
         <CommandEmpty className="text-muted-foreground">
-          {groups.length === 0
+          {tabs.length === 0
             ? "Nothing to open yet. Connect a database, add a request or write a note."
             : "No match."}
         </CommandEmpty>
 
-        {groups.map((group) => (
-          <CommandGroup key={group.heading} heading={group.heading}>
+        {shown.map((group) => (
+          <CommandGroup
+            key={group.kind}
+            // Narrowed to one kind, the heading would only repeat the tab that
+            // is already lit above it.
+            heading={active === ALL ? group.heading : undefined}
+          >
             {group.entries.map((entry) => (
               <CommandItem
                 key={entry.value}
@@ -423,19 +509,57 @@ function useEntries(query: string): Group[] {
       }
     })
 
-    return [
-      // First, the way Explorer is first on the rail — and because a query
-      // that names a file is usually a query about that file.
-      { heading: "Files", entries: fileEntries },
-      { heading: "Database", entries: tables },
-      { heading: "API", entries: apiEntries },
-      { heading: "Chats", entries: chatEntries },
-      { heading: "Boards", entries: boardEntries },
-      { heading: "Notes", entries: noteEntries },
-      // A heading with nothing under it reads as something having failed to
-      // load; cmdk hides a group whose rows are all filtered out, but not one
-      // that never had any.
-    ].filter((group) => group.entries.length > 0)
+    /*
+     * Every kind, empty ones included — the tab row is drawn from this list and
+     * has to know a kind exists before a query has matched any of it. What
+     * `available` says is whether the workspace holds that kind at all, which
+     * is why Files asks the index rather than the rows: the shortlist is empty
+     * until something is typed.
+     *
+     * The order is the sections' own. Files first, the way Explorer is first on
+     * the rail — and because a query that names a file is usually a query about
+     * that file.
+     */
+    const all: Group[] = [
+      {
+        kind: "files",
+        heading: "Files",
+        entries: fileEntries,
+        available: files.length > 0,
+      },
+      {
+        kind: "database",
+        heading: "Database",
+        entries: tables,
+        available: databases.length > 0,
+      },
+      {
+        kind: "api",
+        heading: "API",
+        entries: apiEntries,
+        available: apiEntries.length > 0,
+      },
+      {
+        kind: "chats",
+        heading: "Chats",
+        entries: chatEntries,
+        available: chatEntries.length > 0,
+      },
+      {
+        kind: "boards",
+        heading: "Boards",
+        entries: boardEntries,
+        available: boardEntries.length > 0,
+      },
+      {
+        kind: "notes",
+        heading: "Notes",
+        entries: noteEntries,
+        available: noteEntries.length > 0,
+      },
+    ]
+
+    return all
   }, [
     files,
     query,

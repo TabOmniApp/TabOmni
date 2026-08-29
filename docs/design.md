@@ -96,8 +96,25 @@ ids and `section-marks.tsx` the label, icon and hue, because a hue that means
 "table" has to mean it wherever a table is listed.
 
 **The right column is the Explorer**, its whole height. `⌘B` closes it, and the
-left column closes on its own button in the title bar. Two keys for two columns,
-deliberately: one that took both would leave the workbench with no edges at all.
+left column closes on its own button. Two keys for two columns, deliberately:
+one that took both would leave the workbench with no edges at all.
+
+**Both columns close to a 36px rail rather than to nothing** — the same
+`RAIL_WIDTH`, each holding the button that brings its column back. Explorer's is
+the one the argument is written out under (see Closing it leaves the rail); this
+column's is the mirror of it, with one difference: it is on the column's **inner**
+edge rather than the window's. Each rail sits at the end its column is
+collapsible from, which for this one is the right, beside the handle that shut
+it — and it leaves the window's left edge to the traffic lights alone.
+
+That mirror cost the left column its top row. The toggle used to sit up there
+beside the lights, and that row had to be **drawn twice** — once in the column,
+once in the crumb bar — so the button could survive the column it collapsed.
+With the button at the edge in both states, `WindowLeftEdge` is what it was
+always for and nothing else: clearance for the lights. The column is 36px of the
+84 they need, so the crumb bar's half of that clearance is `3rem` rather than
+`5.25rem`.
+
 The dock — `Run` and `Terminal` — is under the **pane**, spanning its width; it
 used to be the lower half of this column, and see The dock for why it moved.
 
@@ -172,10 +189,90 @@ was not the kanban idea, which it did not have: it was that a task was a second
 place every other panel's contents were filed, so every panel had to know about
 it, and what it bought over simply having those things open was a name.
 
-A card here holds a **title, a line, a column and at most one chat**. Nothing
-else in the app is filed under it, and nothing outside the board and that chat's
-own header knows a card exists. That is the whole difference, and it is why this
-one is not on the path to being that one.
+A card here holds a **title, a line, a column, its own marks, and at most one
+chat**. Nothing else in the app is filed under it, and nothing outside the board
+and that chat's own header knows a card exists. That is the whole difference, and
+it is why this one is not on the path to being that one.
+
+### What a card carries, and what it does not
+
+Three marks were added on top of the title and the line: **tags**, a
+**priority**, and a **due date**. Each is drawn only when it is set, so a plain
+card is exactly as tall as it was.
+
+They earn their place for the same reason and it is worth saying once: each is a
+thing about the work that a **person types once and reads at a glance
+afterwards**, and each has a place to be drawn that costs nothing when it is
+empty. The test for anything else proposed for a card is that one.
+
+- **Tags are text, not records.** There is nothing about a tag to keep beyond the
+  word — no rename, no palette, no listing — so a tag store would be a second
+  file to keep in agreement with the cards for no answer either could give alone.
+  The hue is derived from the text (`tagTone`), which is what makes the same word
+  the same colour on every card of every project without anything remembering
+  that it is. Two unrelated tags can collide on a hue; the chip carries the word
+  too, so what is lost is nothing.
+- **Priority is three levels and absent is the default.** Not five, because the
+  only thing a priority on a personal board is read for is which card to pick up
+  next, and a scale nobody can rank consistently stops being maintained. Not
+  defaulted to `medium`, because a board where every card claims a priority is a
+  board where the field says nothing.
+- **A due date is a day, not an instant** — `YYYY-MM-DD`, and the one date in
+  this app that is not an ISO timestamp. A due date rendered from an instant is a
+  day early or late depending on the reader's offset, and a board that calls a
+  card overdue because the machine woke up in another timezone is a board that
+  cannot be trusted. Its colour is `overdue` / `soon` / `later`, where `soon` is
+  today or tomorrow and nothing further: a week-wide window paints most of a
+  healthy board amber.
+
+What was **refused** in the same pass, from a mock-up of a team board:
+**assignee and avatars**, **comments**, **attachments**, an **activity log**, and
+a `Status` field in the card's drawer.
+
+The first four are the same refusal: this app has one user, no accounts, and no
+server. There is nobody to assign a card to, nobody to comment to, and no event
+stream for an activity log to draw — the agent cannot write to the board either,
+because this app serves no MCP server of its own (below). The nearest honest
+thing to all of them already exists and is already on the card: the **linked
+chat**, which says who is on it, is where the discussion about it happens, and
+whose age says whether it is still moving.
+
+`Status` is refused for the reason the drawer has no column picker: the column
+_is_ the status, and a second control saying it is a second answer that can
+disagree with the board behind the drawer.
+
+### Opening a card
+
+A **click** on a card opens a **drawer down the right-hand edge** — Base UI's
+drawer with `swipeDirection="right"`, and the first use of that component in the
+app.
+
+It was a centred dialog behind a **double click**, and both halves were wrong for
+the same reason. A card is read against the board around it — which column it is
+in, what is beside it, what else is due that week — and a modal over the middle
+covers exactly the thing the card is being read against; a panel down one edge
+leaves the board legible behind it. Once opening a card is that cheap it can be
+what a plain click does, and a double click is a gesture nothing announces and
+that no card on this board looked like it wanted.
+
+Two consequences, both of which had to be handled rather than discovered: the
+`⋯` menu button and the chat footer live **inside** a card that now opens on a
+click, so both stop the click from reaching it — otherwise pressing `⋯` opens the
+drawer under its own menu, and following a card to its chat opens both. A drag
+does not fire a click at all, so letting a card go in another column cannot open
+it.
+
+An editor **in the column** was never the alternative: the point of the card on
+the board is that it is a few lines high, and one that grew a text area where it
+sat would push the rest of the column out of view every time somebody fixed a
+typo.
+
+Fields on `BoardCard` are **optional and read through functions** — `tagsOf`,
+`priorityOf`, `dueOf` — never off the record. Board files were on people's disks
+before these existed and nothing in main normalises one on the way through
+(`listBoardCards` is a read of the JSON), so each reader has to answer for a card
+written by an older build and by a newer one. That is `toneOf`'s rule, applied to
+three more fields, and `test/board-cards.ts` is where it is checked.
 
 ### The columns are the project's own
 
@@ -218,13 +315,26 @@ to say nothing. The record holds the **id** and `lib/board/tones.ts` holds what
 that is worth in pixels — the split `GitFileState` has from `GIT_TONES`, so a
 change of palette touches nothing that was saved.
 
-Four strengths per hue, and deliberately not one colour at four opacities: the
+Five strengths per hue, and deliberately not one colour at five opacities: the
 dot in the header is the hue at full strength because it is the thing being read;
 the header tint behind it is faint, because a column is furniture and a card is
 content; the card's **left border** is what carries the hue down the column, so a
 card dragged into the wrong one reads as wrong without the header being in view;
-and the insertion line while dragging takes the hue of the column it is in, so
-the gap being aimed at says which column it is in.
+the insertion line while dragging takes the hue of the column it is in, so the
+gap being aimed at says which column it is in; and `chip` is a filled label on a
+card — a tag or a priority — which is the only one carrying a text colour as well
+as a tint, because it is read over the card's own background rather than tinting
+something that already had its own.
+
+The same six hues serve the tags, which is why there are not two palettes: a tag
+picks its hue from its own text (`tagTone`) out of the five that are not the
+neutral. A column may say nothing about itself; a tag somebody chose to type
+always has something to say.
+
+A card's marks are **shapes as well as colours** — the priority has an arrow and
+a word, the due date a calendar. Three chips in a row separated only by hue fails
+for anyone who cannot tell them apart, and fails for everyone at a glance, which
+is the only way a board is ever read.
 
 ### Dragging
 
@@ -560,6 +670,32 @@ call. The sentence comes back when the call **failed**, which is the one time it
 is the thing worth reading — an edit that could not find its `old_string` says so
 there and nowhere else.
 
+**A todo list is read the same way, for the same reason.** `TodoWrite` is the
+one call whose argument _is_ the thing worth reading, and it matched none of the
+keys `argumentOf` looks for — so every one of them drew
+`{"todos":[{"content":"…","status":"pending","activeForm":"…"}` cut at 120
+characters. `todosOf` reads the list off the input the way `changeOf` reads a
+change off one, and returns `null` for a payload of any other shape, so a CLI
+that renames the field lands back on that JSON rather than on an empty
+checklist. The row then says the two things a list has: `1/3` where a result
+would go, and the item being worked on as its argument. The list itself is under
+the row — the one block in that panel that is not a `pre`, because a todo is a
+sentence and wraps, where a command is text whose indentation is its own.
+
+The CLI's third field, `activeForm`, is dropped: it is the same task in the
+present participle, and a chat is rewritten whole to disk on every appended
+line. Which item is running is drawn rather than said.
+
+**And the closed fold carries it**, which nothing else about the working gets to
+do. A list is the one call that is about the _turn_ rather than about a file —
+what it is going to do and how far through it is — and a long turn's working is
+folded precisely while that is the question being asked, so the fold's own line
+ends `· Wire the IPC (1/3)`. The alternative was drawing the latest list outside
+the fold like a refusal: a checklist per turn in the transcript for ever, most of
+them stale and none of them the answer anybody came back for. It is the **last**
+list in the run, since `TodoWrite` is called again for every item that starts and
+finishes and only its final state is true (`countsOf`, `test/chat-activity.ts`).
+
 **The lines open on a click, in a popover, and the whole row is the button.**
 Both halves of that were got wrong first and are worth the record. It was a
 `title`, which cannot hold a line break. Then it was a _tooltip_, which is the
@@ -606,7 +742,7 @@ this stretch of work has been going, not the current turn.
 **Every turn ends with a line saying what it spent**, and it is not folded:
 
 ```
-Opus 5 · 39.1k prompt, 96% cached · 1.9k out · 41.3k context · $0.31
+Opus 5 · 39.1k prompt, 96% cached · 1.9k out · 1m5s · 41.3k context · $0.31
 ```
 
 The numbers were being read and dropped — the SDK reports them once, on the
@@ -639,6 +775,19 @@ a turn that compacted on Haiku is still an Opus turn. `thinking` is the one
 figure that comes off `usage`, the only place the SDK breaks the output down; it
 is main-loop only, so it is a floor, and a floor answers what it is read for —
 whether reasoning is where the output went.
+
+**How long the turn took is on the line too**, in the spinner's own words
+(`1m5s`, via the same `duration` in `lib/worktree-chat/since.ts` that the clock
+under `Working…` counts up with) — the figure that was on screen while the turn
+ran is worth keeping once it has stopped moving, and the chat's total is the
+afternoon added up beside what it cost. It is **measured in main, around the
+turn**, not read off the SDK's `duration_ms`: everything on a result line is the
+streaming session's running total, so a wall time taken from it would grow with
+the chat the way `modelUsage` does. A message sent into a chat that is already
+working does not restart it — the queued turn's clock starts where the running
+one's result landed — which is the per-turn reading of the same stretch the
+spinner draws as one. A line written before the field existed has no time rather
+than `0s`.
 
 **The context figure is the one number on the line that is not a spend**, and it
 is read differently from all of them. Everything else is a sum — over the turn's
@@ -796,6 +945,29 @@ model this build has never heard of — which gets every level, because refusing
 one the CLI would have taken is worse than offering one it ignores
 (`chatEfforts`, `test/chat-models.ts`).
 
+**And the effort menu has no `Default` row.** It had one, above the five, and it
+was `effort: null` — pass no `--effort` and let the CLI decide. What that did was
+put the tick on a word: a chat sitting on it ran at a level nothing on screen
+named, and nothing _could_ name it, because `supportedModels()` lists the levels
+a model accepts and does not say which one it falls back to. The honest choices
+were a menu admitting it does not know, or a level this app names out loud, and
+this is the second: `DEFAULT_CHAT_EFFORT` is `medium`, every pick goes through
+`effortFor` and lands on a level the chosen model accepts, and `chatOptions`
+reads a null off disk as that level — so a chat written before this has a tick
+too, and the toolbar and the argument list say the same thing. The one exception
+is `Inherit`, which keeps `null`: it is the row that means "whatever your own
+`claude` is set to", and naming a level under it would override the setting it
+exists to defer to.
+
+The same complaint applies to the **model** row called `Default (recommended)`,
+and the answer there is different, because that row is the CLI's own and it
+follows the account — replacing it with the alias behind it would pin a chat to
+a model the account might stop recommending. So the row stays and says what it
+is: `ModelInfo.resolvedModel` is the wire id behind each row, and the alias row
+sharing the default's is the default under a name (`defaultModelAlias`), drawn
+beside the label. A CLI too old to send the field draws the row as it was — a
+missing suffix is the failure this is allowed to have, not a wrong one.
+
 **A new chat opens on `default` rather than on nothing.** `null` means no
 `--model` at all, which leaves the turn on whatever `~/.claude/settings.json`
 says — and that is not a neutral default: on the machine this was written on it
@@ -815,9 +987,10 @@ control is `Plan` / `Read only` / `Ask` / `Edits` / `Full access`, held as `perm
 on `WorktreeChatOptions`, and `PERMISSIONS` in `main/worktree-chat.ts` is the one
 table saying what each runs as — what it permits, what the turn is told and
 whether it may stop to ask, out of one entry, so a turn cannot
-be assembled half in one mode and half in another. It is the only control here
-that never reads **Default**, because there is no such thing: a turn runs at
-whatever this says, and `Edits` is what it says until somebody changes it.
+be assembled half in one mode and half in another. It was the first control here
+to have no **Default**, because there is no such thing for it: a turn runs at
+whatever this says, and `Edits` is what it says until somebody changes it. The
+effort picker has since gone the same way, for the same reason — see above.
 
 Four of the five decide up front, which is what print mode forced and what a
 chat that never interrupts still wants. **Read only** is what `default` used to
@@ -2078,6 +2251,103 @@ chat and the shell together, so the files beside a chat are the files it is
 editing. A `⌘P` hit anywhere else switches the selection on the way to revealing
 it, since the index walks every root.
 
+### Closing it leaves the rail
+
+**The column collapses to a 36px rail**, not to nothing: `collapsedSize` is
+`RAIL_WIDTH` from `lib/store.ts`, and what stays against the window's
+right edge is one button — `PanelRightOpen` — that brings the column back.
+
+This is the dock's `DOCK_STRIP_HEIGHT` argument turned on its side, and it was
+written against the same failure. The column is `collapsible`, so dragging its
+handle past the minimum shuts it, and while it collapsed to `0` the only ways
+back were `⌘B` and the View menu — neither of which is where somebody who has
+just dragged a column off the screen is looking. A handle is a one-way door if
+what it closes leaves nowhere to hold the way back.
+
+**The rail is on screen whether the column is open or shut**, which is the part
+worth arguing. A rail that only appeared once the column had gone would put the
+button in a different place depending on the state it exists to change.
+
+**It is positioned, not laid out** (`absolute`), and that was got wrong first.
+The rail was a 36px flex column beside the tree — the honest way to build it,
+and the one that made every panel around it pay: the tree lost that width on
+every row of a list hundreds of rows long, for a button used at the top, and the
+panel's `defaultSize` / `minSize` / `maxSize` all had to be written as "the
+tree's own width plus the rail's". Out of flow those numbers go back to being
+the tree's, and what is left to arrange is the single row the button lands on —
+the tree's header, which carries a `pr-11` for it. The left column does the same
+for its `Search` row.
+
+The tree is **hidden rather than unmounted** when the column closes: it is what
+watches the checkout's changes for the count on its `Changes` tab, and one taken
+out of the React tree would stop watching and come back scrolled to the top. It
+is hidden rather than squeezed to zero width, which is the other half of the
+rail being out of flow: a rail in flow clipped what was beside it, and a
+positioned one does not, so a column shut to 36px showed a sliver of the tree
+behind the button.
+
+### The flicker, and the two fixes that were not it
+
+Closing a column left its rows lit in the rail for a beat before they went, and
+the first two explanations were both about **render ordering** — plausible,
+cheap to believe, and wrong.
+
+The first was that the store hides the contents a frame before the panel
+narrows, so hiding moved to the panel's own `onResize`; that only turned the
+flash around, into contents clipped to 36px for a frame. The second was that
+`collapse()` ran in a `useEffect`, which is after the paint, so it became a
+`useLayoutEffect`. That one is a real improvement and is kept — the width and
+the hiding now land in one frame, and the dock's identical call got the same
+change — but it was not the bug either.
+
+**What it actually was: `visibility` is a transitionable property, and
+`Button` carries `transition-all`.** Every row in these columns is a `Button`,
+Tailwind's default duration is 150ms, and a `visibility` transition is discrete
+in one direction only — `visible → hidden` holds at _visible_ for the whole
+duration and flips at the end. So the rows outlived the collapse by exactly
+150ms, while `PROJECTS` — a header, not a button — went immediately.
+
+**It was found by measuring rather than reasoning.** A screen recording taken
+off the app, split into frames with `ffmpeg`, put the collapse on the frame it
+was clicked and the rows on nine frames after it, vanishing in one step with no
+fade. Nine frames at 60fps is 150ms, which named the cause outright; a render
+one frame late cannot look like that, and neither of the two theories above
+survived the first frame that was actually looked at. Two rounds of plausible
+reasoning cost more than one recording would have.
+
+So the contents are hidden with **`opacity-0` and not `invisible`**: opacity
+does not inherit, so the children's own transitions never see it, and the box
+it is set on has no transition of its own. `pointer-events-none` goes with it,
+since an invisible box still takes clicks.
+
+The hiding has **two sources**, and the pair is not belt-and-braces: the store
+is what a _click_ changes, and a container query
+(`@max-[100px]:opacity-0` under a `@container` wrapper) is what a _drag_
+crosses, since dragging a column shut only reaches the store afterwards through
+`onResize`. `100px` is anywhere between the rail and the panel's `minSize`.
+
+The rail carries **only the toggle**, and not a vertical copy of `All files` and
+`Changes` the way the dock's strip carries its two tabs. The dock's tabs are
+there because a shut dock has no other way to be opened _on_ the tab you want;
+the Explorer's two tabs are a hair apart in a header that comes back with the
+column, so a second set of them in the rail would be chrome answering a question
+nobody had.
+
+The button is `h-9`, the height of the header it is over, and carries no border
+of its own — the header's own bottom line runs the full width under it, and the
+resize handle beside it is a 1px line in the same colour, so a border here would
+draw one of them twice.
+
+**The resize handle stays on screen** while the column is shut, unlike the
+dock's, which is hidden when it collapses. There is an edge for it to be now, so
+dragging is the second way back beside the rail's button.
+
+**The left column's rail is the mirror of this one** (`project-rail.tsx`), down
+to the `h-9` it sits in, so the two toggles are on the same line across the
+window. It is on that column's **inner** edge — see The left column — and it is
+_under_ the column's top strip, so the traffic lights sit in one uninterrupted
+drag region whichever state the column is in.
+
 **There is no bar above the list.** There was one — the project's name, the
 branch on screen and a picker — and it went for the reason the panel's title
 went: the left column already lists every project and marks the one selected, so
@@ -2145,12 +2415,46 @@ once — one question answered twice, which is the thing this app keeps deleting
 (the Terminal sidebar's second folder list, the assistant panel beside a
 project's chat) — so the pane holds the diff and nothing else.
 
-A row is one line: the directory, dimmed, then the file's name in its git
-colour, then the state's letter and `+112 −8` at the end. The **directory** is
-what gives way when the column is narrow — `min-w-0` on it and `shrink-0` on the
-name — because the name is the part anybody scans a list for, and truncating the
-other way round gives a column of rows that all begin `src/renderer/comp…` and
-end nowhere. The counts come from `git diff --numstat` against
+**The rows are a folder tree, the shape a pull request is read in everywhere
+else, and that is a reversal.** Each row was one line — the directory dimmed,
+then the file's name in its git colour — on the argument that a turn's changes
+are a dozen files scattered through the checkout and a tree of them would be
+mostly folders. Two things settled it the other way. A dozen is the small case:
+after a long turn the column is twenty rows that all begin
+`src/renderer/components/studio/`, and the question actually being asked —
+_which area did this touch_ — has to be reassembled by eye from prefixes,
+which is exactly the work a tree does once at the top. And the directory was
+the part that gave way when the column was narrow, so the answer was truncated
+first. The rest of the panel is unchanged: a file row is still the name, the
+state's letter and `+112 −8`, and it still opens the checkout's one diff tab.
+
+`lib/files/change-tree.ts` builds the rows and is pure, with
+`test/change-tree.ts` on it. **A chain of single-child directories is one row** —
+`src/renderer/lib/files` rather than four levels of indentation buying nothing,
+which is what GitHub does — and the fold stops at any directory holding a file
+of its own, or that file would lose the level it sits at. Node ids are relative
+and `/`-joined and are keys, never paths: the folders in this tree exist only
+because some file's path passed through them, git named the files, and this
+renderer builds no paths at all (`lib/files/paths.ts`). Only the file rows carry
+git's absolute path, which is the only thing that goes back over IPC. A path
+from outside the checkout stays whole as one top-level row rather than being
+split into folders it is not in. Directories sort before files, which is not
+git's own order — that is by path, so `src/a.ts` would come between two folders,
+and a folder between files is a folder that gets missed.
+
+A directory row folds, carries its descendants' counts added up, and stages,
+unstages or discards **everything under it** — one click on a folder rather than
+nine on its files, which is the thing the tree buys beyond legibility. It is
+drawn in the panel's own muted text rather than in a git colour: a folder
+holding an added file and a deleted one has no single state, and picking one
+would be the row asserting something git did not say. What is folded is stored
+as the **shut** ids, not the open ones, so a pile just opened shows every change
+in it — the files are the point here, unlike in `All files`, where a checkout
+has thousands. A wholly untracked directory (`change.directory`) is a **leaf**,
+not a folder to open: git named one path and never listed what is under it, and
+the row still goes to `All files`.
+
+The counts come from `git diff --numstat` against
 `HEAD`, except for an untracked file, which is in no diff at all and so is
 counted by being read — under a cap, since an untracked directory of generated
 output is not worth reading and a minified bundle is one line and twelve
@@ -2305,6 +2609,55 @@ zero, and forwards a change made in one view to every other view on the same
 path. Before any of that, whichever editor unmounted first took the buffer out
 from under the other. The left side holds `git show HEAD:<path>`, the content of
 a commit, and belongs to nothing.
+
+**Where the changed lines come from is git, not CodeMirror.** For a long time
+the pane handed the merge view two texts and let it work out the difference, and
+that was fine to look at and quietly wrong to reason about: the `+`/`-` counts
+beside the row in this same list have always been `git diff --numstat`, so the
+list and the pane were two algorithms answering one question. They agree on
+almost everything and disagree exactly where it is hardest to notice — a moved
+block, a file whose every line changed, whitespace. A studio that says `+12 −9`
+on a row and then draws eleven bands is a studio nobody can use to check
+anything.
+
+So `main/git.ts` also answers `git diff HEAD --unified=0` for the path, and the
+renderer reads the changed ranges off the `@@` headers
+(`lib/files/git-diff.ts`). `--unified=0` because nothing here reads context: with
+no context lines a hunk header **is** the changed range. `HEAD` is named
+deliberately, unlike in `numstat`, because the left-hand side on screen is the
+commit — a patch that stopped at the index would describe a pair nobody is
+looking at.
+
+The seam that makes this cost nothing is `DiffConfig.override` in
+`@codemirror/merge`: the package funnels every diff it computes through one
+function, and everything built on the result — the chunking, the folded
+unchanged bands, the gutters, the review column, both layouts — is the same code
+either way. **Not one line of the view changed.** The ranges still go through the
+package's own `makePresentable`, so changes a line or two apart still merge into
+one band rather than becoming one band per `@@`; the pane looks exactly as it
+did.
+
+**Git's patch is a hint and not a promise, and that is the whole of the design.**
+The override has to answer synchronously and git does not, so the patch is
+fetched alongside the committed text — one IPC call answering both, since the
+pane draws nothing until it has both and two calls would be two waits for one
+paint — and it describes exactly one pair of texts. Two things routinely make it
+describe some other pair: git reads the file **on disk** while the pane's right
+side is the shared buffer, which may hold edits nobody has saved; and the
+extension calls the override again on **substrings** of the two documents when a
+chunk is recomputed. Rather than enumerate the ways a patch can be stale — a
+line-ending filter, a `diff=` driver, a file written between the read and the
+diff — the ranges are checked against the two texts, and the check is total: a
+list of changed ranges describes a pair of texts **if and only if everything it
+leaves unchanged is equal in both**, which is a walk of the gaps between the
+hunks. If any gap disagrees the whole patch is dropped and the merge view's own
+algorithm runs, unchanged. A partly-trusted patch would draw a diff that is
+quietly wrong, which is worse than the thing this replaced.
+
+What that costs, honestly: a file with unsaved edits is diffed by CodeMirror
+again, because there is no patch for a text git has never seen. Binary files, a
+repository with no commits and an untracked file all fall down the same path,
+which is the one they were already on.
 
 A **deleted** file is the case worth naming: it has no row in the tree, it is a
 row in this list, and its diff is the whole of it removed. So the diff is drawn

@@ -42,6 +42,31 @@ export type ActivityCounts = {
   /** What the turn said on the way: its narration and its thinking. */
   messages: number
   subagents: number
+  /** Where the turn's own list had got to, when it kept one. Absent for a run
+   * with no `TodoWrite` in it, which is most of them. */
+  todo?: ActivityTodo
+}
+
+/**
+ * A todo list as the folded line says it.
+ *
+ * **Why this is on the closed fold at all**, when nothing else about the working
+ * is. A todo list is the one tool call whose argument is about the *turn* rather
+ * than about a file — it is the model saying what it is going to do and how far
+ * through it is — and a long turn's working is folded precisely while that is
+ * the question being asked. The alternative was drawing the latest list outside
+ * the fold, which is a checklist per turn in the transcript for ever, most of
+ * them stale and none of them the answer somebody came back for.
+ *
+ * The **last** list in the run, not the first: `TodoWrite` is called again for
+ * every item that starts and finishes, so the run holds the same list five times
+ * and only its final state is true.
+ */
+export type ActivityTodo = {
+  done: number
+  total: number
+  /** The item that was in progress, if one was. */
+  running: string | null
 }
 
 /** The tool a subagent runs under, which is counted and drawn as an agent
@@ -102,6 +127,66 @@ export function blocksOf(messages: AssistantMessage[]): ChatBlock[] {
   return blocks
 }
 
+/** One row of an *open* fold: a run of tool calls that folds again, or a line
+ * drawn as itself. */
+export type ActivityRow =
+  | {
+      kind: "tools"
+      id: string
+      lines: AssistantMessage[]
+      counts: ActivityCounts
+    }
+  | { kind: "line"; id: string; line: AssistantMessage }
+
+/**
+ * An open fold's own rows, with each run of tool calls gathered behind a second
+ * fold.
+ *
+ * **Why a fold inside a fold.** Opening the working answers "what did it do",
+ * and the thing that says *why* it did any of it is the narration between the
+ * calls — which is exactly what a flat list buries: eleven tool rows and the two
+ * sentences that explain them, in the order they happened, is two sentences
+ * nobody scrolls to. Folding the calls puts a turn's reasoning back on one
+ * screen and leaves the calls one more click away, which is the same bargain the
+ * outer fold makes and the reason it works.
+ *
+ * A run of one folds too. A row that is sometimes the call and sometimes a line
+ * about the call makes the reader work out which of the two they are looking at
+ * before they can read it, and the count is the thing being scanned either way.
+ *
+ * Subagents are not split out from the run: they are tool calls in the
+ * transcript, and `summaryOf` already names them separately in the line.
+ */
+export function rowsOf(lines: AssistantMessage[]): ActivityRow[] {
+  const rows: ActivityRow[] = []
+
+  let run: AssistantMessage[] = []
+  const flush = () => {
+    if (run.length === 0) return
+    rows.push({
+      kind: "tools",
+      // Same reasoning as `blocksOf`'s id: the first line's, which is stable
+      // across a re-render and unique because a line id is.
+      id: `tools-${run[0]!.id}`,
+      lines: run,
+      counts: countsOf(run),
+    })
+    run = []
+  }
+
+  for (const line of lines) {
+    if (line.role === "tool") {
+      run.push(line)
+      continue
+    }
+    flush()
+    rows.push({ kind: "line", id: line.id, line })
+  }
+  flush()
+
+  return rows
+}
+
 /**
  * A line that is never folded.
  *
@@ -130,17 +215,30 @@ export function countsOf(lines: AssistantMessage[]): ActivityCounts {
   let tools = 0
   let messages = 0
   let subagents = 0
+  let todo: ActivityTodo | undefined
 
   for (const line of lines) {
     if (line.role === "tool") {
       if (line.name === AGENT_TOOL) subagents += 1
       else tools += 1
+      // Overwritten rather than kept from the first: the same list is written
+      // again every time an item starts or finishes, and only the last of them
+      // says where the turn actually is.
+      if (line.todos) {
+        todo = {
+          done: line.todos.filter((one) => one.status === "completed").length,
+          total: line.todos.length,
+          running:
+            line.todos.find((one) => one.status === "in_progress")?.content ??
+            null,
+        }
+      }
       continue
     }
     if (line.role === "assistant" || line.role === "thinking") messages += 1
   }
 
-  return { tools, messages, subagents }
+  return { tools, messages, subagents, ...(todo ? { todo } : {}) }
 }
 
 /** The folded line's own words. Left out of the component so the phrasing is
@@ -152,7 +250,18 @@ export function summaryOf(counts: ActivityCounts): string {
   if (counts.subagents > 0) parts.push(plural(counts.subagents, "subagent"))
   // Nothing but the lines that are never folded can produce this, and a run of
   // those is never made — so it is a fallback rather than a case.
-  return parts.join(", ") || "working"
+  const line = parts.join(", ") || "working"
+  if (!counts.todo) return line
+
+  /* After the counts rather than instead of them, and separated the way a tool
+     row separates its own second label: the counts say how much happened, and
+     this says what it was for. The item being worked on carries the progress in
+     brackets, because "3/7" on its own is the fact somebody wanted only until
+     there is a sentence to put beside it. */
+  const { done, total, running } = counts.todo
+  return running
+    ? `${line} · ${running} (${done}/${total})`
+    : `${line} · ${done}/${total} done`
 }
 
 function plural(count: number, what: string): string {

@@ -71,7 +71,7 @@ const api: DesktopApi = {
   gitDiscard: (folderId, paths) =>
     ipcRenderer.invoke(IPC.gitDiscard, folderId, paths),
   gitDiscardAll: (folderId) => ipcRenderer.invoke(IPC.gitDiscardAll, folderId),
-  fileAtHead: (filePath) => ipcRenderer.invoke(IPC.fileAtHead, filePath),
+  fileDiff: (filePath) => ipcRenderer.invoke(IPC.fileDiff, filePath),
 
   listDirectory: (dirPath) => ipcRenderer.invoke(IPC.listDirectory, dirPath),
   readTextFile: (filePath) => ipcRenderer.invoke(IPC.readTextFile, filePath),

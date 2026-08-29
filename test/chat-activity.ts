@@ -2,6 +2,7 @@ import type { AssistantMessage } from "../src/shared/api"
 import {
   blocksOf,
   countsOf,
+  rowsOf,
   summaryOf,
 } from "../src/renderer/lib/worktree-chat/activity"
 import {
@@ -10,6 +11,7 @@ import {
   detailOf,
   resultLine,
   resultText,
+  todosOf,
 } from "../src/main/claude-agent"
 import { check, finish, section } from "./harness"
 
@@ -215,6 +217,54 @@ check(
   summaryOf({ tools: 1, messages: 0, subagents: 0 }) === "1 tool call"
 )
 
+section("what an open fold draws")
+
+/*
+ * The shape the second fold was written for: the narration is what says why any
+ * of the calls happened, and flat it is two sentences buried under eleven rows.
+ */
+const rows = rowsOf([
+  tool("Read", "/a.png"),
+  said("message 1"),
+  tool("Edit", "/b.tsx"),
+  tool("Edit", "/c.tsx"),
+  said("message 2"),
+])
+
+check(
+  "a run of calls is one row, the narration is its own",
+  rows.map((row) => row.kind).join(" ") === "tools line tools line",
+  rows.map((row) => row.kind)
+)
+
+check(
+  "and each run says how many it has",
+  rows[0]?.kind === "tools" &&
+    summaryOf(rows[0].counts) === "1 tool call" &&
+    rows[2]?.kind === "tools" &&
+    summaryOf(rows[2].counts) === "2 tool calls",
+  rows
+)
+
+// A run of one folds too — a row that is sometimes the call and sometimes a
+// line about the call has to be worked out before it can be read.
+check(
+  "a single call is still a run",
+  rowsOf([tool("Read", "/a")])[0]?.kind === "tools"
+)
+
+check(
+  "thinking breaks a run the way narration does",
+  rowsOf([tool("Read", "/a"), thought("hmm"), tool("Read", "/b")]).length === 3
+)
+
+check(
+  "a fold of nothing but talk has no runs",
+  rowsOf([said("hi")]).length === 1
+)
+
+check("and an empty fold is no rows", rowsOf([]).length === 0)
+
 section("what a tool call says it is")
 
 check(
@@ -367,6 +417,120 @@ check(
     )
   })(),
   "this is a tooltip, not a pane"
+)
+
+section("the list the turn keeps")
+
+/*
+ * The row this was written against: `TodoWrite`'s input matches none of the keys
+ * `argumentOf` looks for, so every one of them drew
+ * `{"todos":[{"content":"…","status":"pending","activeForm":"…"}` cut at 120
+ * characters — the one call in a transcript whose argument *is* the thing worth
+ * reading.
+ */
+const list = describeCall("TodoWrite", {
+  todos: [
+    { content: "Read the store", status: "completed", activeForm: "Reading" },
+    { content: "Wire the IPC", status: "in_progress", activeForm: "Wiring" },
+    { content: "Write the test", status: "pending", activeForm: "Writing" },
+  ],
+})
+
+check("the list is read out of the call", list.todos?.length === 3, list.todos)
+check("the row says how far through it is", list.stat === "1/3", list.stat)
+check(
+  "and leads with the item being worked on",
+  list.summary === "Wire the IPC",
+  list.summary
+)
+// Or the panel below would open onto the same JSON the row exists to have
+// removed.
+check("with no argument left to open", list.input === undefined)
+
+check(
+  "activeForm is dropped — it is the same sentence in another tense",
+  !JSON.stringify(list.todos).includes("Wiring")
+)
+
+check(
+  "a list with nothing running says so by having nothing running",
+  describeCall("TodoWrite", {
+    todos: [{ content: "a", status: "completed" }],
+  }).summary === ""
+)
+
+check(
+  "an unknown status is read as pending rather than dropping the list",
+  todosOf("TodoWrite", { todos: [{ content: "a", status: "blocked" }] })?.[0]
+    ?.status === "pending"
+)
+
+check(
+  "an item with no content is dropped",
+  todosOf("TodoWrite", {
+    todos: [{ content: "a", status: "pending" }, { status: "pending" }],
+  })?.length === 1
+)
+
+/* A newer CLI that changes the shape lands back on the JSON argument the row
+ * drew before any of this existed, rather than on an empty checklist. */
+check(
+  "a payload of another shape is not a list",
+  todosOf("TodoWrite", {}) === null
+)
+check(
+  "and neither is another tool's input",
+  todosOf("Read", { todos: [{ content: "a", status: "pending" }] }) === null
+)
+
+section("what the folded line says about it")
+
+const kept = (
+  todos: { content: string; status: "pending" | "in_progress" | "completed" }[]
+): AssistantMessage => ({
+  id: id(),
+  role: "tool",
+  name: "TodoWrite",
+  summary: "",
+  todos,
+})
+
+check(
+  "the closed fold carries the list's progress",
+  summaryOf(
+    countsOf([
+      tool("Read", "/a"),
+      kept([
+        { content: "Read the store", status: "completed" },
+        { content: "Wire the IPC", status: "in_progress" },
+      ]),
+    ])
+  ) === "2 tool calls · Wire the IPC (1/2)",
+  summaryOf(countsOf([tool("Read", "/a")]))
+)
+
+// The same list is written again every time an item starts or finishes, so a
+// run holds five copies of it and only the last one is true.
+check(
+  "the last list wins, not the first",
+  countsOf([
+    kept([{ content: "a", status: "pending" }]),
+    kept([
+      { content: "a", status: "completed" },
+      { content: "b", status: "pending" },
+    ]),
+  ]).todo?.done === 1
+)
+
+check(
+  "a finished list drops the sentence and keeps the count",
+  summaryOf(countsOf([kept([{ content: "a", status: "completed" }])])) ===
+    "1 tool call · 1/1 done"
+)
+
+check(
+  "a run with no list says nothing about one",
+  countsOf([tool("Read", "/a")]).todo === undefined
 )
 
 section("what a row opens onto")

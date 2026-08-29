@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useState } from "react"
 import {
   ResizableHandle,
   ResizablePanel,
@@ -6,7 +6,6 @@ import {
   usePanelRef,
 } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
-import { PanelLeft } from "lucide-react"
 
 import { useDatabases } from "@/lib/db/databases-store"
 import { useFiles } from "@/lib/files/store"
@@ -20,7 +19,7 @@ import {
 } from "@/lib/shortcuts"
 import { useSettings } from "@/lib/settings"
 import { useDock, DOCK_STRIP_HEIGHT } from "@/lib/dock"
-import { useStudio, type Pane } from "@/lib/store"
+import { useStudio, RAIL_WIDTH, type Pane } from "@/lib/store"
 import { useRun } from "@/lib/run/store"
 import { useProjects } from "@/lib/projects"
 import { useClaudeProfiles } from "@/lib/worktree-chat/claude-profiles"
@@ -28,10 +27,12 @@ import { useWorktreeChats } from "@/lib/worktree-chat/store"
 import { useBoard } from "@/lib/board/store"
 import { Dock } from "./dock"
 import { ProjectCrumbs } from "./project/project-crumbs"
+import { ProjectRail } from "./project/project-rail"
 import { WorkspaceSidebar } from "./workspace-sidebar"
 import { WorktreeChatPane } from "./worktree/chat-pane"
 import { ApiWorkspace } from "./api/api-workspace"
 import { FileTree } from "./files/file-tree"
+import { ExplorerRail } from "./files/explorer-rail"
 import { ChangesPane } from "./files/changes-pane"
 import { BoardPane } from "./board/board-pane"
 import { FileWorkspace } from "./files/file-workspace"
@@ -39,7 +40,6 @@ import { DatabaseWorkspace } from "./db/database-workspace"
 import { AddFolderDialog } from "./add-folder-dialog"
 import { CommandPalette } from "./command-palette"
 import { NoteWorkspace } from "./note/note-workspace"
-import { IconButton } from "./icon-button"
 import { NothingOpen } from "./nothing-open"
 import { SettingsDialog } from "./settings-dialog"
 import { SystemBar } from "./system-bar"
@@ -248,16 +248,27 @@ function Workbench() {
    * where a sidebar taken out of the group would come back at its default. The
    * sidebar it holds is one of five lists, and unmounting is the rail's
    * business, not this.
+   *
+   * **`useLayoutEffect`, and that is the flicker.** These run off a store the
+   * button flips, so the render that hides the column's contents lands one
+   * paint *before* the panel is told to narrow — and the browser drew that
+   * paint: a frame of an empty column at its full width, then the collapse.
+   * Moving the hiding to the panel's own width only turned the flash around,
+   * into a frame of contents clipped to 36px behind the rail. There is no
+   * order of the two that works, because the two were in different frames at
+   * all. A layout effect runs after the DOM is updated and *before* the paint,
+   * and the `collapse()` in it re-renders synchronously, so both land in the
+   * one frame.
    */
   const sidebarPanel = usePanelRef()
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (sidebar) sidebarPanel.current?.expand()
     else sidebarPanel.current?.collapse()
   }, [sidebar, sidebarPanel])
 
   /** The same for the left column, which collapses on its own button. */
   const projectPanel = usePanelRef()
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (projectSidebar) projectPanel.current?.expand()
     else projectPanel.current?.collapse()
   }, [projectSidebar, projectPanel])
@@ -270,7 +281,7 @@ function Workbench() {
    * killed whatever was running in the Terminal tab.
    */
   const dockPanel = usePanelRef()
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (dockOpen) dockPanel.current?.expand()
     else dockPanel.current?.collapse()
   }, [dockOpen, dockPanel])
@@ -410,38 +421,68 @@ function Workbench() {
             `SIDEBAR_SECTIONS` in `lib/projects.ts`.
           */}
           <ResizablePanel
+            // The column's own widths, unchanged by the rail: it is positioned
+            // rather than laid out, so it costs the panel nothing to arrange.
             defaultSize={228}
             minSize={168}
             maxSize={360}
             collapsible
-            collapsedSize={0}
+            // Collapsed to its rail rather than to nothing, so the button that
+            // shut it is still where it was — see `RAIL_WIDTH`.
+            collapsedSize={RAIL_WIDTH}
             panelRef={projectPanel}
+            // The Explorer's panel needs this for the same reason: `Panel`
+            // wraps its children in a scroll container (`overflow: auto`,
+            // inline), and a collapse to exactly the rail's width lands on a
+            // fractional pixel, which shows up as a scrollbar over the rail.
+            style={{ overflow: "hidden" }}
             onResize={(size, _id, previous) => {
               // Undefined on mount is the panel reporting the width it was
               // handed, not a drag — read as one, a launch that remembered a
               // closed column would reopen it. Same trap as the panels' below.
               if (previous === undefined) return
 
-              const shown = size.inPixels > 0
+              const shown = size.inPixels > RAIL_WIDTH
               if (shown !== useProjects.getState().sidebar) {
                 toggleProjectSidebar()
               }
             }}
           >
             <div className="flex h-full min-h-0 flex-col">
-              <WindowLeftEdge
-                projectSidebar={projectSidebar}
-                onToggle={toggleProjectSidebar}
-              />
-              <div className="min-h-0 flex-1">
-                <WorkspaceSidebar
-                  onOpenSettings={() => setSettingsOpen(true)}
-                />
+              {/* The window's corner, over the rail as well as the column, so
+                  the traffic lights sit in one strip whichever of them is on
+                  screen. */}
+              <WindowLeftEdge />
+              <div className="@container relative min-h-0 flex-1">
+                {/* Hidden while the column is at its rail, and **hidden by a
+                    container query** — see the Explorer's, which carries the
+                    argument. Not unmounted: the column holds the folding state
+                    and the project the workbench is scoped to. */}
+                <div
+                  className={cn(
+                    "h-full overflow-hidden @max-[100px]:pointer-events-none @max-[100px]:opacity-0",
+                    // Two sources for one fact, and each covers what the other
+                    // cannot: the store is what a *click* changes, and lands in
+                    // the same frame as the collapse now the effect above is a
+                    // layout one; the container query is what a *drag* crosses,
+                    // where the store only hears about it afterwards, through
+                    // `onResize`.
+                    !projectSidebar && "pointer-events-none opacity-0"
+                  )}
+                >
+                  <WorkspaceSidebar
+                    onOpenSettings={() => setSettingsOpen(true)}
+                  />
+                </div>
+                <ProjectRail />
               </div>
             </div>
           </ResizablePanel>
 
-          <ResizableHandle className={cn(!projectSidebar && "hidden")} />
+          {/* Left on screen when the column is shut, like the Explorer's: what
+              is left is the rail, so the handle still has an edge to be, and
+              dragging it is the second way back. */}
+          <ResizableHandle />
 
           {/* Everything about the one checkout: the bar that names it, the pane,
               and the Explorer with the dock under it. Its minimum is the two
@@ -449,17 +490,10 @@ function Workbench() {
           <ResizablePanel minSize={560}>
             <div className="flex h-full min-h-0 flex-col">
               <header className="flex h-11 shrink-0 items-center gap-1 border-b">
-                {/* The window's left edge when the column is shut, which is the
-                    other half of `WindowLeftEdge` — the lights and the toggle
-                    have to be somewhere, and with no column there they are
-                    here. */}
-                {!projectSidebar && (
-                  <WindowLeftEdge
-                    projectSidebar={projectSidebar}
-                    onToggle={toggleProjectSidebar}
-                    bare
-                  />
-                )}
+                {/* The rest of the traffic lights' clearance when the column
+                    is shut: the rail is 36px of the 84 they need, and this bar
+                    is what the other 48 have to come out of. */}
+                {!projectSidebar && <WindowLeftEdge bare />}
 
                 {/*
                   `project › branch`, and the `…` that acts on it.
@@ -562,6 +596,17 @@ function Workbench() {
                         collapsible
                         collapsedSize={DOCK_STRIP_HEIGHT}
                         panelRef={dockPanel}
+                        // `Panel` wraps its children in a div that is a scroll
+                        // container (`overflow: auto`, inline, so a class will
+                        // not reach it), and this panel has nothing to scroll —
+                        // the dock's own two panes are `absolute inset-0` and
+                        // scroll themselves. Left as `auto` it showed a
+                        // scrollbar over the shut dock's strip, because a
+                        // collapse to exactly `DOCK_STRIP_HEIGHT` lands on a
+                        // fractional pixel once the layout has been through the
+                        // library's percentages, and the strip is that height
+                        // to the pixel.
+                        style={{ overflow: "hidden" }}
                         // The same two-way binding the Explorer column has:
                         // dragging the dock shut past its minimum collapses the
                         // panel, and without this the store would still say open
@@ -581,11 +626,17 @@ function Workbench() {
                     </ResizablePanelGroup>
                   </ResizablePanel>
 
-                  <ResizableHandle className={cn(!sidebar && "hidden")} />
+                  {/* Not hidden when the column is shut, unlike the dock's:
+                      what is left is the rail rather than nothing, so the
+                      handle still has an edge to be — and dragging it is the
+                      second way back, beside the rail's own button. */}
+                  <ResizableHandle />
 
                   {/* The Explorer: the contents of the checkout being worked
                       in, and the whole height of the column. */}
                   <ResizablePanel
+                    // The tree's own widths, unchanged by the rail: it is
+                    // positioned rather than laid out, so it takes none of them.
                     defaultSize={320}
                     minSize={240}
                     maxSize={520}
@@ -594,13 +645,24 @@ function Workbench() {
                     // follows the panel as well as driving it, or a column
                     // dragged shut would leave `⌘B` needing two presses to
                     // bring it back.
+                    //
+                    // Collapsed to its rail rather than to nothing, so that
+                    // shutting the column leaves the button that reopens it —
+                    // see `RAIL_WIDTH`.
                     collapsible
-                    collapsedSize={0}
+                    collapsedSize={RAIL_WIDTH}
                     panelRef={sidebarPanel}
+                    // The dock's panel needs this for the same reason: `Panel`
+                    // wraps its children in a scroll container (`overflow:
+                    // auto`, inline), and a collapse to exactly the rail's width
+                    // lands on a fractional pixel once the library's
+                    // percentages have been through the layout, which shows up
+                    // as a scrollbar over the shut column.
+                    style={{ overflow: "hidden" }}
                     onResize={(size, _id, previous) => {
                       if (previous === undefined) return
 
-                      const shown = size.inPixels > 0
+                      const shown = size.inPixels > RAIL_WIDTH
                       if (shown !== useStudio.getState().sidebar) {
                         toggleSidebar()
                       }
@@ -610,7 +672,49 @@ function Workbench() {
                         The other three lists are sections of the left column
                         (hidden for now), and a strip of four tabs with one tab
                         on it is a row of chrome that answers nothing. */}
-                    <FileTree onAddFolder={() => setAdding(true)} />
+                    <div className="@container relative h-full min-h-0">
+                      {/*
+                        Hidden rather than unmounted while the column is shut:
+                        the tree is what watches the checkout's changes for the
+                        count on its `Changes` tab, and one taken out of the
+                        React tree would stop watching and come back scrolled
+                        to the top. Hidden rather than squeezed, too, because
+                        the rail is out of flow and clips nothing under it — a
+                        column shut to 36px would otherwise show a sliver of the
+                        tree behind the button.
+
+                        **`opacity-0` and not `invisible`, and that is the
+                        flicker.** The rows here are `Button`s, `Button` carries
+                        `transition-all`, and `visibility` is one of the
+                        properties `all` covers — it transitions discretely, so
+                        `visible → hidden` holds at *visible* for the whole
+                        150ms before flipping. Measured off a screen recording:
+                        the column collapsed on the frame it was clicked and the
+                        rows stayed lit for ten more, then vanished in one step.
+                        Nothing about that was a render being a frame late,
+                        which is what the two attempts before this assumed.
+                        Opacity does not inherit, so the children's own
+                        transitions never see it, and this box has none.
+
+                        Two sources for the one fact, each covering what the
+                        other cannot: the store is what a *click* changes, and
+                        the container query is what a *drag* crosses, since
+                        dragging only reaches the store afterwards through
+                        `onResize`. `100px` is anywhere between the rail and the
+                        panel's `minSize`.
+                      */}
+                      <div
+                        className={cn(
+                          "h-full overflow-hidden @max-[100px]:pointer-events-none @max-[100px]:opacity-0",
+                          // The store for a click, the query for a drag — see
+                          // the left column's, which carries the note.
+                          !sidebar && "pointer-events-none opacity-0"
+                        )}
+                      >
+                        <FileTree onAddFolder={() => setAdding(true)} />
+                      </div>
+                      <ExplorerRail />
+                    </div>
                   </ResizablePanel>
                 </ResizablePanelGroup>
               </div>
@@ -635,58 +739,38 @@ function Workbench() {
 }
 
 /**
- * The window's top-left corner: the traffic lights' clearance, and the toggle.
+ * The window's top-left corner: the traffic lights' clearance, and nothing else.
  *
- * Written once and drawn in two places, because the corner belongs to whichever
- * box is at the window's left edge — the left column's own top row while it is
- * showing, the crumb bar when it is not. The alternative was leaving it in one
- * of them and having the lights land on the column's first project row, or the
- * toggle disappear with the column it collapses.
+ * It used to hold the left column's toggle as well, and that is why it is drawn
+ * in two places — the column's own top row while the column is showing, the
+ * crumb bar when it is not, so the button survived the column it collapsed.
+ * The button lives in the rail now (`ProjectRail`), which is on screen in both
+ * states, and what is left here is what this strip was always for: keeping the
+ * lights off whatever the app draws underneath them.
  *
- * What is draggable here is the space either side of the button rather than the
- * whole strip with a `no-drag` hole punched in it. macOS drops that hole often
- * enough that the toggle inside it was another control that "worked sometimes";
- * a button that was never in a drag region has nothing to be dropped. The
- * `5.25rem` is what clears the traffic lights at `x: 18`, since macOS insets its
- * own buttons into whatever the app draws up here (`titleBarStyle` and
- * `trafficLightPosition` in `main/main.ts`).
+ * There is no `no-drag` hole in it any more either, and that is a relief rather
+ * than a detail: macOS drops those holes often enough that the toggle inside
+ * one was a control that "worked sometimes".
+ *
+ * The `5.25rem` is what clears the lights at `x: 18`, since macOS insets its own
+ * buttons into whatever the app draws up here (`titleBarStyle` and
+ * `trafficLightPosition` in `main/main.ts`). The `bare` variant is `3rem`
+ * because the rail is already 36px of that clearance and is to the left of it.
  */
 function WindowLeftEdge({
-  projectSidebar,
-  onToggle,
   bare = false,
 }: {
-  projectSidebar: boolean
-  onToggle: () => void
   /** In the crumb bar rather than being a row of its own, so it brings no
    * height and no border with it. */
   bare?: boolean
 }) {
-  return (
-    <div className={cn("flex h-11 shrink-0 items-center", !bare && "border-b")}>
-      {IS_MAC && <div className="drag-region h-full w-[5.25rem] shrink-0" />}
-      <div className="no-drag flex h-full shrink-0 items-center">
-        {/*
-          The left column's own toggle, and not the panels' `⌘B`: the two
-          columns are about different things — one is the workspace, one is the
-          contents of what is being worked on — and one key taking both would
-          leave the workbench with no edges at all.
-        */}
-        <IconButton
-          label={projectSidebar ? "Hide projects" : "Show projects"}
-          pressed={projectSidebar}
-          onClick={onToggle}
-          side="bottom"
-          className="size-7 shrink-0"
-        >
-          <PanelLeft />
-        </IconButton>
-      </div>
+  if (bare) {
+    return IS_MAC ? <div className="drag-region h-full w-12 shrink-0" /> : null
+  }
 
-      {/* The rest of the column's top row, so it can still drag the window.
-          Not in the crumb bar, where the header has a spacer of its own after
-          the crumb and one here would push the crumb across. */}
-      {!bare && <div className="drag-region h-full flex-1" />}
+  return (
+    <div className="flex h-11 shrink-0 items-center border-b">
+      <div className="drag-region h-full flex-1" />
     </div>
   )
 }

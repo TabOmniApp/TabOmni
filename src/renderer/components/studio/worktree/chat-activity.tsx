@@ -1,8 +1,14 @@
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { ChevronRight } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { summaryOf, type ChatBlock } from "@/lib/worktree-chat/activity"
+import {
+  rowsOf,
+  summaryOf,
+  type ActivityCounts,
+  type ChatBlock,
+} from "@/lib/worktree-chat/activity"
+import type { AssistantMessage } from "@shared/api"
 import { ChatMessage } from "./chat-message"
 import { marksOf, toolMark } from "./chat-marks"
 
@@ -23,14 +29,68 @@ import { marksOf, toolMark } from "./chat-marks"
  * The marks after the summary are which *kinds* of tool ran, deduplicated —
  * scanning a closed transcript for "did this turn touch the shell" is the
  * question a fold would otherwise have to be opened to answer.
+ *
+ * **What is inside it folds again.** An open fold draws the turn's narration as
+ * itself and each run of tool calls behind a fold of its own — see `rowsOf`,
+ * which is where the argument for that lives.
  */
 export function ChatActivity({
   of,
 }: {
   of: Extract<ChatBlock, { kind: "activity" }>
 }) {
+  return (
+    <Fold summary={summaryOf(of.counts)} lines={of.lines}>
+      {rowsOf(of.lines).map((row) =>
+        row.kind === "line" ? (
+          <ChatMessage key={row.id} of={row.line} />
+        ) : (
+          <ToolRun key={row.id} counts={row.counts} lines={row.lines} />
+        )
+      )}
+    </Fold>
+  )
+}
+
+/** A run of tool calls inside an open fold. */
+function ToolRun({
+  counts,
+  lines,
+}: {
+  counts: ActivityCounts
+  lines: AssistantMessage[]
+}) {
+  return (
+    <Fold summary={summaryOf(counts)} lines={lines}>
+      {lines.map((line) => (
+        <ChatMessage key={line.id} of={line} />
+      ))}
+    </Fold>
+  )
+}
+
+/**
+ * The fold itself: a summary that opens onto its rows.
+ *
+ * Shared by both levels rather than written twice, because the inner one is the
+ * outer one applied again — a chevron that behaved differently one level down
+ * would read as a different control.
+ *
+ * `children` is built by the caller whether or not the fold is open, which costs
+ * an array of elements and no render: an element is not a mounted component, and
+ * it is the mounting that `chat-message.tsx` is careful about.
+ */
+function Fold({
+  summary,
+  lines,
+  children,
+}: {
+  summary: string
+  lines: AssistantMessage[]
+  children: ReactNode
+}) {
   const [open, setOpen] = useState(false)
-  const marks = marksOf(of.lines)
+  const marks = marksOf(lines)
 
   return (
     <div className={cn(open && "space-y-3")}>
@@ -50,7 +110,7 @@ export function ChatActivity({
             open && "rotate-90"
           )}
         />
-        <span className="truncate">{summaryOf(of.counts)}</span>
+        <span className="truncate">{summary}</span>
         {/* Hidden once it is open: the rows below say the same thing in full,
             and a summary beside them is the same fact twice. */}
         {!open && marks.length > 0 && (
@@ -70,11 +130,7 @@ export function ChatActivity({
           that line — which is the only thing saying where a long turn's rows
           end and the next block begins. */}
       {open && (
-        <div className="ml-2.5 space-y-3 border-l pl-2.5">
-          {of.lines.map((line) => (
-            <ChatMessage key={line.id} of={line} />
-          ))}
-        </div>
+        <div className="ml-2.5 space-y-3 border-l pl-2.5">{children}</div>
       )}
     </div>
   )

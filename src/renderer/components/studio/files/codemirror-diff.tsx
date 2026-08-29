@@ -1,5 +1,11 @@
 import { useEffect, useRef } from "react"
-import { MergeView, unifiedMergeView } from "@codemirror/merge"
+import {
+  Change,
+  diff,
+  MergeView,
+  unifiedMergeView,
+  type DiffConfig,
+} from "@codemirror/merge"
 import type { Extension } from "@codemirror/state"
 import { EditorView, highlightWhitespace } from "@codemirror/view"
 import { useTheme } from "next-themes"
@@ -20,6 +26,7 @@ import {
   githubDiffTheme,
 } from "@/lib/files/diff-chrome"
 import { languageExtension, languageForFile } from "@/lib/editor-languages"
+import { gitDiffRanges } from "@/lib/files/git-diff"
 import { reviewGutter, setReviewMarks } from "@/lib/files/review-marks"
 import { useReview, type ReviewSide } from "@/lib/files/review"
 import {
@@ -78,6 +85,7 @@ export default function CodeMirrorFileDiff({
   sideBySide,
   whitespace,
   original,
+  patch,
   reviewRootId = null,
 }: {
   path: string
@@ -93,6 +101,9 @@ export default function CodeMirrorFileDiff({
   /** What `HEAD` has, or null for a file it does not have — a new file, whose
    * diff is the whole of it added. */
   original: string | null
+  /** Git's own patch between the two, or null when there is none to be had —
+   * see `gitDiffConfig` below. */
+  patch: string | null
   /**
    * The checkout being reviewed, or null for a diff that is not a review.
    *
@@ -197,6 +208,11 @@ export default function CodeMirrorFileDiff({
       minSize: DIFF_MIN_COLLAPSE,
     }
     const committed = original ?? ""
+    // The working side, hoisted because it is half of the pair `gitDiffConfig`
+    // has to recognise — and it is the shared buffer rather than `initialText`
+    // whenever a text editor already holds this path open.
+    const working = docTextOf(path) ?? initialText
+    const diffConfig = gitDiffConfig(patch, committed, working)
 
     let views: EditorView[]
     let destroy: () => void
@@ -214,6 +230,7 @@ export default function CodeMirrorFileDiff({
         highlightChanges: false,
         gutter: true,
         collapseUnchanged,
+        diffConfig,
         // Side by side is GitHub's split view: one number column per side,
         // which is what `panelChrome`'s own gutter already is. Only the tints
         // and the word-level highlighting are Primer's here.
@@ -230,7 +247,7 @@ export default function CodeMirrorFileDiff({
           ],
         },
         b: {
-          doc: docTextOf(path) ?? initialText,
+          doc: working,
           extensions: [
             ...panelChrome(),
             ...common(),
@@ -277,6 +294,7 @@ export default function CodeMirrorFileDiff({
               // Accept/reject buttons are edits; see above.
               mergeControls: false,
               collapseUnchanged,
+              diffConfig,
             }),
           ],
           { editable: false }
@@ -309,8 +327,12 @@ export default function CodeMirrorFileDiff({
     // `initialText` is deliberately not one: it is the seed for a buffer that
     // may already exist, and re-seeding it on every keystroke elsewhere would
     // rebuild the pane under the reader.
+    // `patch` is one because it arrives with `original` and describes the same
+    // pair: a rebuild for the commit that did not carry the patch with it would
+    // draw the new file through the old file's ranges — which `gitDiffRanges`
+    // would refuse, quietly costing the thing this was done for.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, original, sideBySide, isDark, reviewRootId])
+  }, [path, original, patch, sideBySide, isDark, reviewRootId])
 
   /*
    * What the review column draws, pushed in.
@@ -366,4 +388,69 @@ export default function CodeMirrorFileDiff({
       className="h-full w-full overflow-hidden [&_.cm-editor]:h-full [&>.cm-mergeView]:h-full"
     />
   )
+}
+
+/**
+ * What the package's own default `diffConfig` is when none is passed.
+ *
+ * Repeated here rather than imported because it is not exported, and it has to
+ * be exact: the fallback below is the same call the view would have made on its
+ * own, and a diff computed without this limit is the quadratic one the limit
+ * exists to prevent on a large, wholly rewritten file.
+ */
+const DEFAULT_DIFF_CONFIG: DiffConfig = { scanLimit: 500 }
+
+/**
+ * Git's answer, wired in as the view's diff algorithm.
+ *
+ * `DiffConfig.override` is the whole of the seam: `@codemirror/merge` funnels
+ * every diff it computes through one function, and everything built on top of
+ * the result — the chunking, the folded unchanged bands, the gutters, the
+ * review column, both layouts — is the same code either way. Nothing about the
+ * view changes; only who decided where the changed lines are.
+ *
+ * **The override has to answer synchronously, and git does not.** So the patch
+ * is fetched alongside the committed text and the ranges are read out of it
+ * here, for the one pair of texts it was computed for. That guard is not
+ * belt-and-braces: the extension calls this again on **substrings** of the two
+ * documents when a chunk is recomputed after an edit, and it is called on the
+ * live buffer, which git — reading the file on disk — knows nothing about the
+ * unsaved state of. Both land on the fallback, which is the algorithm this
+ * replaced, unchanged.
+ *
+ * The result still goes through the package's `makePresentable`, since
+ * `presentableDiff` is what calls `diff`: adjacent ranges separated by a line or
+ * two get merged into one chunk exactly as they always did. That is why the
+ * bands look the way they did before rather than one per `@@`.
+ *
+ * One knowingly-left rough edge: the package tracks whether its last diff fell
+ * back to the imprecise algorithm in a module-level flag, and the git path never
+ * touches it. It is only read to decide whether a chunk may be shown as an
+ * inline word-level diff, which needs `allowInlineDiffs` — not set here, and
+ * `highlightChanges` is off anyway.
+ */
+function gitDiffConfig(
+  patch: string | null,
+  committed: string,
+  working: string
+): DiffConfig {
+  if (patch === null) return DEFAULT_DIFF_CONFIG
+
+  const ranges = gitDiffRanges(patch, committed, working)
+  if (ranges === null) return DEFAULT_DIFF_CONFIG
+
+  const changes = ranges.map(
+    (range) => new Change(range.fromA, range.toA, range.fromB, range.toB)
+  )
+
+  return {
+    ...DEFAULT_DIFF_CONFIG,
+    override: (a, b) =>
+      a === committed && b === working
+        ? changes
+        : // A substring, or a buffer that has moved on. `diff` is the package's
+          // own export, and calling it without the override is what keeps this
+          // from recurring into itself.
+          diff(a, b, DEFAULT_DIFF_CONFIG),
+  }
 }

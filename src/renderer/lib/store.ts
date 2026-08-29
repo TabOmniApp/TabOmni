@@ -8,6 +8,24 @@ import * as repo from "./workspace"
 /** Where the strip's arrangement and the pane on screen are kept. */
 const STRIP_KEY = "workbench.strip"
 
+/**
+ * The width of a column's rail, in px — `studio.tsx` gives it to both outer
+ * panels as their `collapsedSize`, so closing a column leaves its rail against
+ * the window's edge instead of taking the column away entirely.
+ *
+ * The dock's own `DOCK_STRIP_HEIGHT` is the same argument turned on its side,
+ * and for the same failure: a panel that collapses to nothing has nowhere left
+ * to hold the way back, so a column dragged shut could only be reopened by
+ * knowing the shortcut. The rail is where the question is asked.
+ *
+ * One number for both, and not one per column: they sit at either edge of the
+ * same window, and two rails a few pixels apart in width would read as a
+ * mistake. It is also the number rather than a Tailwind `w-9` in the rails,
+ * because it and the `collapsedSize` have to agree or a column closes to a
+ * sliver of its own button.
+ */
+export const RAIL_WIDTH = 36
+
 /** Every pane there is — the list `lib/panels.ts` walks to reach all five
  * panels' tabs without naming any of them. */
 export const PANES: Pane[] = [

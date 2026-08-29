@@ -209,7 +209,10 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
             has: what the project has changed, which after an agent's turn is
             the only question being asked. The names are Conductor's, since this
             is Conductor's column. */}
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b pr-2 pl-1.5">
+        {/* `pr-11` rather than `pr-2`: the column's collapse button is
+            positioned over the right of this row (`explorer-rail.tsx`), and it
+            is out of flow, so the room for it has to be left here. */}
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b pr-11 pl-1.5">
           {/* `overflow-hidden` is the safety valve: with one button beside
               them the two tabs fit the panel's minimum with room to spare, and
               a sidebar dragged narrower than that clips them rather than

@@ -1,7 +1,9 @@
 import {
+  BOARD_PRIORITY_IDS,
   DEFAULT_BOARD_COLUMNS,
   type BoardCard,
   type BoardColumn,
+  type BoardPriority,
   type WorktreeChat,
 } from "@shared/api"
 
@@ -190,11 +192,33 @@ export function moveCard(
 }
 
 /**
+ * Which one column of which one board — the test every column write applies.
+ *
+ * Exported because the store's renames, recolours and deletes have exactly the
+ * same collision to avoid as `moveColumn` does; see the note there.
+ */
+export function columnKey(
+  folderId: string,
+  id: string
+): (column: BoardColumn) => boolean {
+  return (column) => column.folderId === folderId && column.id === id
+}
+
+/**
  * A project's column moved to `index` among its own — the whole list back.
  *
  * The same shape as `moveCard` and for the same reasons: order is order in the
  * list, other projects' columns keep their places, and `index` counts against
  * this project's columns with the one being moved taken out.
+ *
+ * **A column is named by its project and its id together**, which is not
+ * belt-and-braces: the three seeded columns are the *same three ids* on every
+ * project (`DEFAULT_BOARD_COLUMNS`, so that cards written before columns were
+ * records need no migration). Finding one by id alone picked whichever project
+ * came first in the file, and taking one out by id alone deleted every
+ * project's `doing` at once — a column that vanished off a board nobody was
+ * dragging. `columnKey` is that pair, and every caller that touches one column
+ * of one board goes through it.
  *
  * No timestamp is spent. Where a column sits is the board being arranged, not
  * something that happened to the column — the argument `moveCard` makes about a
@@ -202,13 +226,15 @@ export function moveCard(
  */
 export function moveColumn(
   columns: BoardColumn[],
+  folderId: string,
   id: string,
   index: number
 ): BoardColumn[] {
-  const moving = columns.find((column) => column.id === id)
+  const is = columnKey(folderId, id)
+  const moving = columns.find(is)
   if (!moving) return columns
 
-  const rest = columns.filter((column) => column.id !== id)
+  const rest = columns.filter((column) => !is(column))
   const own = rest.filter((column) => column.folderId === moving.folderId)
 
   const anchor = own[Math.max(0, index)]
@@ -252,4 +278,102 @@ export function linkedChat(
 ): WorktreeChat | null {
   if (!card.chatId) return null
   return chats.find((chat) => chat.id === card.chatId) ?? null
+}
+
+/**
+ * A card's tags, cleaned — the only way the fields are read.
+ *
+ * Three fields were added to a type whose records are **already on disk**
+ * (tags, priority, due), and nothing in main normalises a board file on the way
+ * through: `listBoardCards` is a read of the JSON. So each is read through a
+ * function that answers for a card written by any version, including a newer
+ * one — the rule `toneOf` follows for a column's hue.
+ *
+ * Trimmed, blanks dropped, and de-duplicated **case-insensitively** while
+ * keeping the first spelling: `api` and `API` typed on two cards are one label
+ * to whoever is reading the board, and two chips of different colours on it.
+ */
+export function tagsOf(card: BoardCard): string[] {
+  if (!Array.isArray(card.tags)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of card.tags) {
+    if (typeof raw !== "string") continue
+    const tag = raw.trim()
+    if (!tag) continue
+    const key = tag.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(tag)
+  }
+  return out
+}
+
+/** What the dialog's one line of text means as tags. Commas, because a tag can
+ * hold a space (`design system`) and a board is not worth a chip editor. */
+export function parseTags(text: string): string[] {
+  return tagsOf({ tags: text.split(",") } as BoardCard)
+}
+
+/** The same line back, for the field to start from. */
+export function tagText(card: BoardCard): string {
+  return tagsOf(card).join(", ")
+}
+
+/** A card's priority, or null for one that has none — and for one naming a
+ * level this build has never heard of. */
+export function priorityOf(card: BoardCard): BoardPriority | null {
+  const priority = card.priority
+  if (typeof priority !== "string") return null
+  return BOARD_PRIORITY_IDS.includes(priority as BoardPriority)
+    ? (priority as BoardPriority)
+    : null
+}
+
+/**
+ * A card's due day as `YYYY-MM-DD`, or null.
+ *
+ * The shape is checked rather than the date parsed: this is compared against
+ * today as a **string** everywhere (see `dueState`), which is only sound for
+ * the one format, and a `Date` round-trip is exactly the timezone shift the
+ * field was written to avoid.
+ */
+export function dueOf(card: BoardCard): string | null {
+  const due = card.due
+  if (typeof due !== "string") return null
+  return /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : null
+}
+
+/**
+ * How a due day reads against today — which is the whole of what its colour
+ * says.
+ *
+ * `soon` is **today or tomorrow**, deliberately short: a board is scanned for
+ * what to do now, and a window of a week would paint most of a healthy board
+ * amber. String comparison, which is exact for `YYYY-MM-DD` and needs no clock
+ * beyond the day the caller passes in.
+ */
+export function dueState(
+  due: string,
+  today: string
+): "overdue" | "soon" | "later" {
+  if (due < today) return "overdue"
+  return due <= addDays(today, 1) ? "soon" : "later"
+}
+
+/** Today where the user is, as a due date is written. Not `toISOString`, which
+ * is UTC and so is yesterday for anyone west of it after 5pm. */
+export function todayKey(now: Date = new Date()): string {
+  const month = String(now.getMonth() + 1).padStart(2, "0")
+  const day = String(now.getDate()).padStart(2, "0")
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
+/** `days` on from a `YYYY-MM-DD`, back in the same shape. Through UTC on
+ * purpose: these are calendar arithmetic on a bare day, and a local `Date`
+ * would land on the hour a DST change skips. */
+function addDays(day: string, days: number): string {
+  const at = new Date(`${day}T00:00:00Z`)
+  at.setUTCDate(at.getUTCDate() + days)
+  return at.toISOString().slice(0, 10)
 }
