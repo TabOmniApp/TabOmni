@@ -800,9 +800,9 @@ function StorageError({ message }: { message: string }) {
         <p className="font-mono text-xs text-destructive">{message}</p>
         <p className="text-xs leading-relaxed text-muted-foreground">
           Your workspace is <code className="font-mono">manifest.json</code>{" "}
-          under <code className="font-mono">~/.tabomni</code>, listing the
-          folders it points at. Those folders are untouched — check that the
-          manifest is readable.
+          under <code className="font-mono">~/.yasuo</code>, listing the folders
+          it points at. Those folders are untouched — check that the manifest is
+          readable.
         </p>
       </div>
     </div>

@@ -23,7 +23,7 @@ copied into the studio and nothing is written into them that you did not ask
 for; the manifest records an absolute path and the files stay yours.
 
 ```
-~/.tabomni/
+~/.yasuo/
   manifest.json     the workspace, its folders, its databases, settings
   workspace/
     requests.json   the API panel's collection
@@ -509,7 +509,7 @@ dock's shell key and a chat's root all being the same folder id, with no `??`
 chain anywhere deciding which of two directories was meant.
 
 A workspace that used the feature still has its checkouts on disk under
-`~/.tabomni/workspace/worktrees/`. Nothing reads them and nothing deletes them,
+`~/.yasuo/workspace/worktrees/`. Nothing reads them and nothing deletes them,
 for the reason `mail.json` survives its own panel; `git worktree list` in the
 project is what still knows about them, and `git worktree remove` is how they
 go. A chat written in one has a `worktreeId` naming nothing, which `chatRootId`
@@ -1246,7 +1246,7 @@ which is all it has to do — the menu that follows is the one a typed `@` opens
 
 **The MCP servers a turn gets are the user's own**, and this app hands over none
 of its own. It used to: the databases, the saved requests and the notes went over
-as three `tabomni-*` servers pre-approved by name, with two `delete_*` tools
+as three `yasuo-*` servers pre-approved by name, with two `delete_*` tools
 refused, and that whole feature has been removed — see MCP below for the argument
 and for what replaced the section in Settings. What is left needs no flag at all.
 The CLI reads `~/.claude.json`, the repository's own `.mcp.json`, the enabled
@@ -1333,7 +1333,7 @@ and a chat can still have been named.
 
 An `--append-system-prompt` says where the turn is, and nothing else. Short,
 because the CLI can see the working directory for itself. It was two sentences
-while there were `tabomni-*` tools to explain — a tool list says what a tool does,
+while there were `yasuo-*` tools to explain — a tool list says what a tool does,
 not that the databases behind it belong to the workspace rather than to this
 directory — and it is one now that there are none.
 
@@ -2075,8 +2075,8 @@ same route as the strip's arrangement.
 ## MCP: what the user's own `claude` has
 
 **There were three MCP servers here, and they are gone.** `src/main/mcp.ts`
-served the workspace's panels to a turn as `tabomni-database`, `tabomni-api` and
-`tabomni-notes` — streamable HTTP on loopback, an OS-picked port, a per-run
+served the workspace's panels to a turn as `yasuo-database`, `yasuo-api` and
+`yasuo-notes` — streamable HTTP on loopback, an OS-picked port, a per-run
 secret in the path, one switch per server in Settings › MCP under
 `mcp.database` / `mcp.api` / `mcp.notes`, a `0600` config file written at the
 moment a turn started and pointed at with `--mcp-config`, and every tool call
@@ -2090,7 +2090,7 @@ socket, including every way in that should be refused — a wrong secret, a long
 path, a `GET`, an `Origin`, half a JSON body.
 
 All of it is deleted: the module, the tests, the three setting keys, the config
-file, the `--mcp-config` flag, the `tabomni-*` entries on every tool list, the
+file, the `--mcp-config` flag, the `yasuo-*` entries on every tool list, the
 two `delete_*` refusals, the sentence in the system prompt naming the tools, and
 the `notes:changed` / `http:changed` channels that existed only so a panel could
 notice what an agent had written underneath it (with `reread` on the API store,
@@ -2315,7 +2315,7 @@ strip.
 
 What is left on disk is left there, as the Mail panel's `mail.json` was: a
 workspace that ran the old build still has `workspace/chats.json`, its
-`workspace/chats/` directory and an `~/.tabomni/assistant` scratch directory, and
+`workspace/chats/` directory and an `~/.yasuo/assistant` scratch directory, and
 this app no longer reads or deletes any of them. Somebody's conversations are
 theirs to keep. The `claude` transcripts those turns wrote are, as ever, the
 CLI's own and reachable with `claude --resume`.
@@ -3986,7 +3986,7 @@ parser drops the component tags rather than drawing them.
 **A `.note` is the third file, and the only one the studio invented.** It opens
 in the block editor — the one the Notes panel brought and left behind (see
 Notes, removed) — over a file in one of the workspace's folders instead of over
-a record under `~/.tabomni`. `New note…` sits beside `New file…`
+a record under `~/.yasuo`. `New note…` sits beside `New file…`
 in a folder's right-click menu and on the folder heading's, and creates an empty
 file with that extension: there is nothing to write into it, because an empty
 body is the empty document the editor starts on anyway.
@@ -4525,7 +4525,7 @@ checks the shape of that name before it becomes one.
 Notes panel's — a note being duplicated or deleted was the only thing that ever
 owned a picture — and they went with it. A file dropped into a `.note` in
 somebody's repository is kept until they say otherwise, which for a file under
-`~/.tabomni` is the safer of the two ways to be wrong; the alternative is a
+`~/.yasuo` is the safer of the two ways to be wrong; the alternative is a
 delete that has to be right about a document the user may still be undoing.
 
 **The URL is `note-file://workspace/<name>`, a scheme this app serves**
@@ -4759,7 +4759,7 @@ Three details are load-bearing:
 - **There is no success path to report.** The app is gone before the script
   ends, so the renderer's `installing` state is never cleared, and the honest
   end of it is the window closing. A failure to _start_ the installer is
-  reported in the dialog; a failure inside it lands in `~/.tabomni/update.log`,
+  reported in the dialog; a failure inside it lands in `~/.yasuo/update.log`,
   which is the only place left to put it.
 - **`isNewer` is strictly newer, and numeric.** A string comparison makes
   `1.0.9` newer than `1.0.19` and offers everybody a downgrade forever, and a

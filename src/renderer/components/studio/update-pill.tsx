@@ -44,7 +44,7 @@ export function UpdatePill() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        title={`TabOmni ${update.version} is available. You are on ${update.current}.`}
+        title={`Yasuo ${update.version} is available. You are on ${update.current}.`}
         className="flex shrink-0 items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary outline-none hover:bg-primary/20 focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <ArrowUpCircle className="size-3 shrink-0" />
@@ -55,12 +55,12 @@ export function UpdatePill() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Update to TabOmni {update.version}?
+              Update to Yasuo {update.version}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               {update.installable ? (
                 <>
-                  TabOmni will quit, install {update.version} into{" "}
+                  Yasuo will quit, install {update.version} into{" "}
                   <code className="font-mono">/Applications</code> and reopen —
                   the same <code className="font-mono">install.sh</code> the
                   README hands you, run from inside the app. Terminal sessions

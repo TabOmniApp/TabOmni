@@ -78,7 +78,7 @@ import { expandHome } from "./shell-env"
  * rather than leaving anything merely unlisted.
  *
  * **No MCP config goes over at all.** This app used to serve its own panels as
- * three `tabomni-*` servers and hand a turn the config naming them; that whole
+ * three `yasuo-*` servers and hand a turn the config naming them; that whole
  * feature is gone (see `docs/design.md`). What is left is the CLI's own
  * discovery, which is what a turn has always also had: `~/.claude.json`, a
  * repository's own `.mcp.json`, enabled plugins, claude.ai connectors, all
@@ -349,7 +349,7 @@ const PERMISSIONS: Record<
  * One `permits` for `claude-agent.ts`, out of a mode's list.
  *
  * Names, matched whole. It used to also read an entry as a server prefix, so
- * `mcp__tabomni-api` stood for every tool on that server; nothing names a
+ * `mcp__yasuo-api` stood for every tool on that server; nothing names a
  * server here any more — this app configures none — and a prefix rule with no
  * entry to apply to is a rule that only matters the day somebody misreads it.
  * A tool from a server the CLI found on its own is on no mode's list, which is
@@ -376,10 +376,10 @@ function permitting(allowed: string[] | undefined): (name: string) => boolean {
  * much it bothers to ask.
  *
  * One sentence rather than the two it was: the second told the turn what the
- * `tabomni-*` tools were attached to, and there are no such tools now.
+ * `yasuo-*` tools were attached to, and there are no such tools now.
  */
 const SYSTEM_PROMPT =
-  "You are a chat in a project inside TabOmni, a desktop studio: this directory is the user's own working tree on whatever branch they have checked out, so edits and commands here change the files they are working in. There is no isolation to fall back on — prefer the smallest change that does the job, and say what you are about to do before doing anything wide-reaching."
+  "You are a chat in a project inside Yasuo, a desktop studio: this directory is the user's own working tree on whatever branch they have checked out, so edits and commands here change the files they are working in. There is no isolation to fall back on — prefer the smallest change that does the job, and say what you are about to do before doing anything wide-reaching."
 
 export class WorktreeChats {
   /** A turn per chat, keyed by chat id. Several chats can be answering at once,

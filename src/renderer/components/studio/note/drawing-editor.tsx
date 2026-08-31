@@ -234,7 +234,7 @@ export function DrawingEditor({
     await saveDrawing(drawingId, {
       type: "excalidraw",
       version: 2,
-      source: "tabomni",
+      source: "yasuo",
       elements: [...editor.getSceneElements()],
       appState,
       files: editor.getFiles(),

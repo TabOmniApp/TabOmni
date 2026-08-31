@@ -112,7 +112,7 @@ export function Splash({
             style={step(300)}
             className="animate-rise bg-gradient-to-b from-foreground to-foreground/55 bg-clip-text font-heading text-lg font-medium tracking-tight text-transparent"
           >
-            TabOmni
+            Yasuo
           </span>
           <p
             style={step(420)}

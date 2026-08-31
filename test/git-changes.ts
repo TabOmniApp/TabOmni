@@ -44,7 +44,7 @@ async function rowsIn(dir: string) {
 }
 
 async function main() {
-  const root = await mkdtemp(path.join(tmpdir(), "tabomni-changes-"))
+  const root = await mkdtemp(path.join(tmpdir(), "yasuo-changes-"))
 
   section("a folder that is not a repository")
 
@@ -191,7 +191,7 @@ async function main() {
 
   section("a repository with no commits")
 
-  const fresh = await mkdtemp(path.join(tmpdir(), "tabomni-changes-empty-"))
+  const fresh = await mkdtemp(path.join(tmpdir(), "yasuo-changes-empty-"))
   await git(fresh, "init", "--initial-branch", "main")
   await writeFile(path.join(fresh, "first.ts"), "a\n")
 

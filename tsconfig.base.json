@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "display": "TabOmni — settings both sides share",
+  "display": "Yasuo — settings both sides share",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["es2022", "DOM", "DOM.Iterable"],

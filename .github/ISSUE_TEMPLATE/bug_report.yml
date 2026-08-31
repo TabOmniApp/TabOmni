@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in TabOmni behaves wrongly
+description: Something in Yasuo behaves wrongly
 labels: [bug]
 body:
   - type: markdown
@@ -45,7 +45,7 @@ body:
     id: os
     attributes:
       label: OS
-      description: TabOmni is developed on macOS; Linux and Windows are far less travelled.
+      description: Yasuo is developed on macOS; Linux and Windows are far less travelled.
       options:
         - macOS (Apple Silicon)
         - macOS (Intel)

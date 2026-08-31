@@ -357,7 +357,7 @@ function ToolLine({
  *
  * The name rather than the path, with the path on the hover line, for the
  * reason the diff header does the same: a checkout's own path is forty
- * characters of `~/.tabomni/workspace/worktrees/<uuid>/<branch>/` before it says
+ * characters of `~/.yasuo/workspace/worktrees/<uuid>/<branch>/` before it says
  * anything about the file, and in a row that truncates, the forty characters are
  * what survives.
  */

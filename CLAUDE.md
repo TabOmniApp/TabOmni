@@ -13,7 +13,7 @@ area's behaviour. When the two disagree, `design.md` is the fuller account.
 
 ## What this is
 
-**TabOmni**: an Electron studio that collapses a project's tooling into one tab
+**Yasuo**: an Electron studio that collapses a project's tooling into one tab
 strip — its folders, its databases, its HTTP endpoints, and the agent
 conversations run against them.
 
@@ -83,7 +83,7 @@ reaches the contract through the `@shared/*` alias; `@/*` is `src/renderer`.
 handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
 `ProcessManager`, `TerminalManager`, `WorktreeChats`).
 
-- **`store.ts`** — all state on disk under `~/.tabomni`: `manifest.json` for the
+- **`store.ts`** — all state on disk under `~/.yasuo`: `manifest.json` for the
   workspace/databases/settings, `workspace/` for the panels' own files. A
   folder's own files are never under here — the manifest records an absolute
   path and they are read where they are. Database passwords are encrypted in the

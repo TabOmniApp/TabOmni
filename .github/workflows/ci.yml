@@ -29,7 +29,7 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
-    # TabOmni is developed on macOS, but the main process reaches for ptys, unix
+    # Yasuo is developed on macOS, but the main process reaches for ptys, unix
     # sockets and git on every platform it claims to support. Running the suite
     # on Linux too is what keeps "it works on my machine" from being the whole
     # of the Linux story.

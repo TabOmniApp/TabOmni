@@ -1,4 +1,4 @@
-# Contributing to TabOmni
+# Contributing to Yasuo
 
 Thanks for looking. This document is the part of the repository that is not
 code: how to get it running, the two or three rules that are not negotiable,
@@ -157,7 +157,7 @@ written it.
 
 Include your OS and architecture, whether you are running `bun dev` or a
 packaged build, and what the console said. For anything touching a database,
-the engine and its version. TabOmni is developed on macOS; Linux and Windows
+the engine and its version. Yasuo is developed on macOS; Linux and Windows
 builds exist but are far less travelled, so platform is rarely irrelevant.
 
 Security issues go to `SECURITY.md` instead — please don't open a public issue

@@ -298,7 +298,7 @@ async function main() {
     "null is what sends the tree back to its own glyphs"
   )
 
-  const root = await mkdtemp(path.join(tmpdir(), "tabomni-files-"))
+  const root = await mkdtemp(path.join(tmpdir(), "yasuo-files-"))
   try {
     section("listDirectory")
 

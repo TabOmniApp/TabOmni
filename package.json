@@ -1,7 +1,7 @@
 {
-  "name": "tabomni",
-  "productName": "TabOmni",
-  "version": "1.0.20",
+  "name": "yasuo",
+  "productName": "Yasuo",
+  "version": "1.0.21",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -97,8 +97,8 @@
   ],
   "//build.extraResources": "install.sh is carried in the bundle so the in-app update button runs this build's own installer rather than a script fetched at the moment it is pressed. Outside the asar because bash has to execute a real file. This note lives out here because electron-builder validates the `build` object against a schema and rejects any key it does not know, `//`-prefixed or not.",
   "build": {
-    "appId": "vn.app.tabomni",
-    "productName": "TabOmni",
+    "appId": "vn.app.yasuo",
+    "productName": "Yasuo",
     "files": [
       "dist-electron/**/*",
       "dist-renderer/**/*"
