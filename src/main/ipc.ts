@@ -40,6 +40,7 @@ import {
 import { agentCommands } from "./agent-commands"
 import { agentModels } from "./agent-models"
 import { claudeAccount } from "./claude-auth"
+import { claudeBinary } from "./claude-bin"
 import { WorktreeChats } from "./worktree-chat"
 import { SqlConnections } from "./database"
 import { DockerRuntime } from "./docker"
@@ -60,7 +61,7 @@ import { sendHttp } from "./http"
 import { installedMcpServers, removeMcpServer } from "./mcp-servers"
 import { ProcessManager } from "./process"
 import { reviewChanges, reviewReply } from "./review-agent"
-import { expandHome } from "./shell-env"
+import { expandHome, quote } from "./shell-env"
 import { systemUsage } from "./system-usage"
 import { DEFAULT_WORKSPACE_ID, Store } from "./store"
 import { TerminalManager } from "./terminal"
@@ -334,9 +335,11 @@ export function registerIpc(
   ipcMain.handle(IPC.saveClaudeProfiles, (_event, profiles: ClaudeProfile[]) =>
     // `~` expanded here, like `addFolder`'s path field: the SDK spawns
     // `claude` directly rather than through a shell, so nothing else would
-    // ever turn a typed `~/.claude-group/hung` into an absolute path before
-    // it became `CLAUDE_CONFIG_DIR` — and a literal `~` in that variable is a
+    // ever turn a `~/.claude-group/hung` into an absolute path before it
+    // became `CLAUDE_CONFIG_DIR` — and a literal `~` in that variable is a
     // directory named `~` relative to the turn's cwd, not the user's home.
+    // Nothing types one any more (the store names the directory itself), but
+    // the profiles that field wrote are on people's disks.
     store.saveClaudeProfiles(
       profiles.map((profile) => ({
         ...profile,
@@ -347,6 +350,52 @@ export function registerIpc(
 
   ipcMain.handle(IPC.claudeAccount, (_event, configDir: string) =>
     claudeAccount(configDir)
+  )
+
+  /**
+   * `claude auth login` for one profile's directory, in a pty of its own.
+   *
+   * The one place this app runs a `claude` the user could not have run
+   * themselves in a shell — and it runs exactly that, through the same login
+   * shell every other pty is started in, so a CLI installed by an alias or a
+   * shell function is found the way `locate` finds one.
+   */
+  ipcMain.handle(
+    IPC.claudeLogin,
+    async (_event, configDir: string, cols: number, rows: number) => {
+      const dir = configDir.trim() ? expandHome(configDir.trim()) : ""
+
+      // Made here rather than left to the CLI, which is the opposite of what
+      // `claudeAccount` does with the same path: that one probes something
+      // somebody may still be typing, and a directory conjured out of a typo is
+      // the failure it is written against. This is a directory somebody asked
+      // for by name, so the only thing the pty can then fail at is the login.
+      if (dir) await mkdir(dir, { recursive: true })
+
+      const binary = claudeBinary()
+      // Quoted only when it is a path: `CLAUDE_BIN` can name a file with a
+      // space in it, while a bare `claude` is often an alias or a shell
+      // function, and quoting one stops the shell expanding it at all.
+      const command = `${binary.includes("/") ? quote(binary) : binary} auth login`
+
+      return terminals.create(
+        {
+          // The user's home rather than a project, for `claudeAccount`'s
+          // reason: a login is about the config directory, and a repository's
+          // own settings have no say in whose account it holds.
+          cwd: app.getPath("home"),
+          // On the command line as well as in the environment, because the pty
+          // is a *login* shell: somebody already running several identities is
+          // exactly the person whose own `.zshrc` exports `CLAUDE_CONFIG_DIR`,
+          // and that export runs after this env is handed over — it would win,
+          // and sign the wrong directory in.
+          command: dir ? `CLAUDE_CONFIG_DIR=${quote(dir)} ${command}` : command,
+          env: dir ? { CLAUDE_CONFIG_DIR: dir } : {},
+        },
+        cols,
+        rows
+      )
+    }
   )
 
   ipcMain.handle(IPC.listWorktreeChats, () => worktreeChats.list())

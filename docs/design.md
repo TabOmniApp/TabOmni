@@ -2038,6 +2038,69 @@ The default account — no `CLAUDE_CONFIG_DIR` at all, which is what a chat with
 profile picked runs under — gets a row of its own above the list, because it is
 the one the others are being told apart from.
 
+**Adding a profile is a name, a click and a login**, and getting there deleted
+the field the feature was first built around. That field asked for the path:
+`configDir` started empty, on the honest grounds that there is no sensible
+default for somebody else's `CLAUDE_CONFIG_DIR`, and the paragraph under the
+section explained that nothing here starts a directory off — point a profile at
+one that exists, or at one a `claude` run with that variable set will create.
+Which meant adding an account was: read the paragraph, invent a path, type it
+into the row, open Terminal.app, export the variable, run `claude`, log in, come
+back, press Check. **Eight steps, seven of which existed only because the app
+could read a config directory and not make one.** The path in particular was the
+one thing being asked of the user that they had no way to know the answer to —
+it is not a setting, it is a place, and any place would have done.
+
+So the app names it (`main/claude-profiles.ts`) and the app signs it in
+(`claudeLogin`: `claude auth login` in a pty of its own with that directory as
+`CLAUDE_CONFIG_DIR`, opened in a dialog by **Log in**). A row in Settings is now
+a name, a badge and two buttons; there is no path on screen at all. **What that
+costs is real and was chosen anyway**: a profile can no longer be pointed at a
+config directory somebody already keeps — `~/.claude-group/hung`, say — so an
+existing login is reached by signing into a new directory rather than by naming
+the old one. It is one click, against a text field that had to be explained in a
+paragraph. Profiles already holding such a path keep it: nothing renames a
+directory an account's tokens are already in.
+
+The directory is `workspace/claude-profiles/<slug of the name>`, and each half
+of that is a decision. **Under `workspace/`** because a profile is a record of
+the workspace, the same as its list — a second workspace will have profiles of
+its own, and two of them named `Personal` must not be one login. **Named after
+the profile** rather than given its id, because the directory outlives every
+listing that explains it: somebody in a file browser, or exporting
+`CLAUDE_CONFIG_DIR` at a prompt to reach the same login from their own terminal,
+has nothing but the folder name to go on. A rename does not move it, for the
+reason above. And it is deduped, because two profiles on one directory are a
+single login wearing two names — the renderer's `accounts` map is keyed by
+directory, so the second row would draw the first one's account and neither
+would look wrong.
+
+**Named in the main process**, which is not a formality: the root is under the
+store's own workspace directory and `YASUO_DATA_DIR` can move that, so a
+renderer building `~/.yasuo/…` for itself would write the wrong path for anybody
+who had moved the tree. The renderer therefore sends a profile with an **empty**
+`configDir` and takes back what `saveClaudeProfiles` stored — the one field on
+that list it does not own. Reading normalises too, which is how the rows written
+by the old field with nothing in them get a directory rather than being
+unusable for ever.
+
+Three decisions in the login itself. **It is a terminal, not a form**: the flow
+belongs to the CLI — a URL, a browser, console-or-subscription, sometimes an SSO
+prompt — and anything smoother would be this app pretending to know a sequence
+that is free to change under it. What the dialog is worth is not hiding that
+screen but removing the need to know which variable to export. **The directory
+is created there**, the exact opposite of what `claudeAccount` does with the same
+path, and both are right for the same reason: a probe of a path somebody may
+still be typing must not make a typo real, while a login asked for by name
+should fail at the login and nowhere else. **The variable goes on the command
+line as well as into the environment**, because the pty is a login shell and the
+person running several identities is precisely the person whose own `.zshrc`
+exports `CLAUDE_CONFIG_DIR` — that export runs after the env is handed over, so
+it would win and sign the wrong directory in. The row re-checks itself when the
+pty exits, whatever it exited with: that is the one moment the app knows the
+answer has changed, and leaving it to the Check button would be asking somebody
+to know that.
+
 **The composer's own picker says it too**, and that is where it matters most:
 Settings is where profiles are set up, but the account menu in a chat's toolbar
 is where one is _chosen_, and "Claude Hùng" over "Claude Personal" over "Claude

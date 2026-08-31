@@ -88,6 +88,11 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   folder's own files are never under here — the manifest records an absolute
   path and they are read where they are. Database passwords are encrypted in the
   manifest and stripped field-by-field before a record crosses to the renderer.
+  A **Claude profile's `CLAUDE_CONFIG_DIR`** is one of those workspace files —
+  `workspace/claude-profiles/<slug>`, named by `claude-profiles.ts` because the
+  renderer cannot see `YASUO_DATA_DIR`, created by the `claude auth login` that
+  `IPC.claudeLogin` runs in a pty. Settings has no path field: a profile is a
+  name, and `saveClaudeProfiles` answers with the directory it was given.
 - **`daemon.ts` + `daemon-client.ts`** — ptys live in a detached, per-machine
   daemon over a Unix socket/named pipe with newline-delimited JSON.
   `TerminalManager.killAll()` is awaited on quit and nothing reattaches.
@@ -407,7 +412,8 @@ Logic worth testing is split out from the drawing: `lib/worktree-chat/activity.t
 (`test/chat-mentions.ts`), `lib/worktree-chat/mcp-servers.ts` with
 `main/mcp-servers.ts`'s own `readServer` (`test/mcp-servers.ts`),
 `lib/worktree-chat/claude-profiles.ts`'s `accountLabel` / `accountCaption` with
-`main/claude-auth.ts`'s own `readAuthStatus` (`test/claude-account.ts`). Put new logic on that side of the line.
+`main/claude-auth.ts`'s own `readAuthStatus` and `main/claude-profiles.ts`'s
+naming of a profile's directory (`test/claude-account.ts`). Put new logic on that side of the line.
 
 ## Conventions
 

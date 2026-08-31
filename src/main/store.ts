@@ -27,6 +27,7 @@ import type {
   WorkspaceFolder,
   WorkspaceRecord,
 } from "../shared/api"
+import { withConfigDirs } from "./claude-profiles"
 import { dataDir } from "./data-dir"
 import { decrypt, encrypt } from "./encryption"
 
@@ -103,6 +104,17 @@ export const ENVIRONMENTS_FILE = "environments.json"
 
 /** The workspace's `CLAUDE_CONFIG_DIR` profiles — see `ClaudeProfile`. */
 export const CLAUDE_PROFILES_FILE = "claude-profiles.json"
+
+/**
+ * And the directories those profiles point at, one per profile: the CLI's own
+ * login, settings and history, written by `claude` and read by nobody here.
+ *
+ * Beside the list rather than at the top of `~/.yasuo`, because a profile is a
+ * record **of the workspace** — the same reason its list is a workspace file.
+ * A second workspace will have profiles of its own, and two of them named
+ * `Personal` must not be one login.
+ */
+export const CLAUDE_PROFILES_DIR = "claude-profiles"
 
 /** The groups those requests are filed under. */
 export const FOLDERS_FILE = "folders.json"
@@ -579,12 +591,38 @@ export class Store {
     return this.writeList(ENVIRONMENTS_FILE, environments)
   }
 
-  listClaudeProfiles(): Promise<ClaudeProfile[]> {
-    return this.readList(CLAUDE_PROFILES_FILE)
+  /**
+   * The profiles, each with a directory of its own — see `withConfigDirs`.
+   *
+   * A row written before the path was the app's to choose has an empty field
+   * and no field left to type into, so one is filled in here and the file
+   * rewritten: a migration, run once, rather than a profile that can never be
+   * signed in.
+   */
+  async listClaudeProfiles(): Promise<ClaudeProfile[]> {
+    const stored = await this.readList<ClaudeProfile>(CLAUDE_PROFILES_FILE)
+    const profiles = withConfigDirs(stored, this.claudeProfilesDir)
+    if (profiles !== stored) {
+      await this.writeList(CLAUDE_PROFILES_FILE, profiles)
+    }
+    return profiles
   }
 
-  saveClaudeProfiles(profiles: ClaudeProfile[]): Promise<void> {
-    return this.writeList(CLAUDE_PROFILES_FILE, profiles)
+  /** Answers with what was stored, since a profile arrives with nothing but a
+   * name and leaves with a directory the caller has to draw. */
+  async saveClaudeProfiles(
+    profiles: ClaudeProfile[]
+  ): Promise<ClaudeProfile[]> {
+    const filled = withConfigDirs(profiles, this.claudeProfilesDir)
+    await this.writeList(CLAUDE_PROFILES_FILE, filled)
+    return filled
+  }
+
+  /** Where a profile's own `CLAUDE_CONFIG_DIR` goes. Not created here: the
+   * login that first needs it makes it (`IPC.claudeLogin`), and a profile
+   * nobody signed in should leave nothing behind. */
+  private get claudeProfilesDir(): string {
+    return path.join(this.workspaceDir, CLAUDE_PROFILES_DIR)
   }
 
   listRequestFolders(): Promise<HttpFolder[]> {

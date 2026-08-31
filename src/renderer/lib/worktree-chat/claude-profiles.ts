@@ -17,9 +17,9 @@ type ClaudeProfilesState = {
   /**
    * What each directory's login turned out to be, **keyed by the directory
    * rather than by the profile**: two profiles pointing at one directory are
-   * one account, a rename changes nothing about it, and a path edited to
-   * something not checked yet simply misses the map — which is the honest
-   * answer, rather than the previous directory's status under a new path.
+   * one account, and a rename changes nothing about it. A directory nothing has
+   * asked about yet simply misses the map, which is the honest answer rather
+   * than some other directory's status under this profile's name.
    *
    * The empty string is the default login, the one a chat with no profile
    * picked runs under.
@@ -42,11 +42,16 @@ type ClaudeProfilesState = {
    * the Check button in Settings.
    */
   checkUnknown: (configDirs: string[]) => void
-  /** A new, unnamed-for-a-directory profile — `configDir` starts empty, since
-   * there is no honest default for somebody else's `CLAUDE_CONFIG_DIR`. */
+  /**
+   * A new profile — a name and nothing else.
+   *
+   * Its directory is main's to name (`main/claude-profiles.ts`), which is why
+   * this does not take one and there is no setter for it below: the path is
+   * under the store's own workspace directory, and `YASUO_DATA_DIR` can move
+   * that somewhere this side cannot see.
+   */
   create: (name: string) => void
   rename: (id: string, name: string) => void
-  setConfigDir: (id: string, configDir: string) => void
   remove: (id: string) => void
 }
 
@@ -106,6 +111,7 @@ export const useClaudeProfiles = create<ClaudeProfilesState>((set, get) => ({
   },
 
   create(name) {
+    // No `configDir`: main fills one in and `save` takes its answer back.
     save(set, [
       ...get().profiles,
       { id: crypto.randomUUID(), name, configDir: "" },
@@ -117,15 +123,6 @@ export const useClaudeProfiles = create<ClaudeProfilesState>((set, get) => ({
       set,
       get().profiles.map((profile) =>
         profile.id === id ? { ...profile, name } : profile
-      )
-    )
-  },
-
-  setConfigDir(id, configDir) {
-    save(
-      set,
-      get().profiles.map((profile) =>
-        profile.id === id ? { ...profile, configDir } : profile
       )
     )
   },
@@ -143,15 +140,27 @@ export const useClaudeProfiles = create<ClaudeProfilesState>((set, get) => ({
  * same trade `setOptions` and `rename` make on `useWorktreeChats`: a field that
  * only moved once a file had been written would lag behind the keystroke that
  * changed it, and the failure it trades against does not outlive the launch.
+ *
+ * The exception is a profile with no directory yet, which is the one thing on
+ * this list the renderer does not know: main names it and the answer is adopted
+ * when it arrives. Only then, deliberately — a rename saves per keystroke, and
+ * a reply to an earlier one landing late would type over what is on screen.
  */
 function save(
   set: (partial: Partial<ClaudeProfilesState>) => void,
   profiles: ClaudeProfile[]
 ) {
   set({ profiles })
-  void window.desktop.saveClaudeProfiles(profiles).catch((error: unknown) => {
-    console.error("Could not save the Claude profiles", error)
-  })
+
+  const filling = profiles.some((profile) => !profile.configDir.trim())
+  void window.desktop
+    .saveClaudeProfiles(profiles)
+    .then((stored) => {
+      if (filling) set({ profiles: stored })
+    })
+    .catch((error: unknown) => {
+      console.error("Could not save the Claude profiles", error)
+    })
 }
 
 /**

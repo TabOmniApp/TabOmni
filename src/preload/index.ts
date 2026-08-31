@@ -136,6 +136,8 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.saveClaudeProfiles, profiles),
   claudeAccount: (configDir) =>
     ipcRenderer.invoke(IPC.claudeAccount, configDir),
+  claudeLogin: (configDir, cols, rows) =>
+    ipcRenderer.invoke(IPC.claudeLogin, configDir, cols, rows),
   listWorktreeChats: () => ipcRenderer.invoke(IPC.listWorktreeChats),
   createWorktreeChat: (place, seed) =>
     ipcRenderer.invoke(IPC.createWorktreeChat, place, seed),

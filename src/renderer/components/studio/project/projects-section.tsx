@@ -12,6 +12,16 @@ import {
 } from "lucide-react"
 
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -31,7 +41,7 @@ import {
   ungroupedChats,
   useWorktreeChats,
 } from "@/lib/worktree-chat/store"
-import type { WorktreeChat } from "@shared/api"
+import type { WorkspaceFolder, WorktreeChat } from "@shared/api"
 import { since } from "@/lib/worktree-chat/since"
 
 /**
@@ -89,6 +99,13 @@ export function ProjectsSection() {
   const orphans = ungroupedChats(saved(chats, unsaved))
   const ungroupedShut = collapsed.includes(UNGROUPED_ID)
 
+  /**
+   * Which project the confirmation is up for. One dialog for the whole list
+   * rather than one per row: only ever one is open, and a dialog mounted inside
+   * a row is unmounted by the very removal it asked about.
+   */
+  const [removing, setRemoving] = useState<WorkspaceFolder | null>(null)
+
   return (
     <nav
       aria-label="Projects"
@@ -114,6 +131,7 @@ export function ProjectsSection() {
                     .create({ folderId: folder.id })
                 }
                 onOpenBoard={() => useBoard.getState().open(folder.id)}
+                onRemove={() => setRemoving(folder)}
                 onToggle={() => {
                   toggleFolder(folder.id)
                   // And the dock's shell follows: a project row is the one
@@ -145,12 +163,53 @@ export function ProjectsSection() {
               // the absence of one.
               onNewChat={null}
               onOpenBoard={null}
+              onRemove={null}
               onToggle={() => toggleFolder(UNGROUPED_ID)}
             />
             {!ungroupedShut && <ProjectChats folderId={null} />}
           </div>
         )}
       </div>
+
+      <AlertDialog
+        open={removing !== null}
+        onOpenChange={(next) => {
+          if (!next) setRemoving(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this project?</AlertDialogTitle>
+            {/*
+              The same three sentences Explorer's own dialog says, and
+              deliberately so: this is the same call, and a second wording for it
+              would leave a user comparing two dialogs to work out whether their
+              repository is at stake. The folder is theirs — saying the directory
+              is untouched, by path, is the whole job here.
+            */}
+            <AlertDialogDescription>
+              “{removing?.name}” is removed from the workspace, along with any
+              tabs open on files inside it and any terminal sessions running in
+              it. The folder itself —{" "}
+              <code className="font-mono">{removing?.path}</code> — is left
+              exactly as it is.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (removing)
+                  void useStudio.getState().removeFolder(removing.id)
+                setRemoving(null)
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </nav>
   )
 }
@@ -202,6 +261,7 @@ function ProjectRow({
   onToggle,
   onNewChat,
   onOpenBoard,
+  onRemove,
 }: {
   name: string
   shut: boolean
@@ -209,6 +269,13 @@ function ProjectRow({
   onNewChat: (() => void) | null
   /** Opens this project's board. Nullable for the same row `onNewChat` is. */
   onOpenBoard: (() => void) | null
+  /**
+   * Asks to take this project out of the workspace. It only asks — the
+   * confirmation and the call itself are the section's, since a dialog owned by
+   * a row would be unmounted by the removal it is confirming. Nullable for the
+   * same row the other two are.
+   */
+  onRemove: (() => void) | null
 }) {
   // Open and shut rather than one mark rotated: a folder is the thing being
   // drawn, and its two states are two glyphs rather than two angles.
@@ -281,6 +348,17 @@ function ProjectRow({
             <Columns3 className="text-muted-foreground" />
             Open board
           </ContextMenuItem>
+        )}
+        {onRemove && (
+          <>
+            <ContextMenuSeparator />
+            {/* "Remove", not "Delete": the directory is the user's own and
+                stays where it is — only the workspace forgets it. */}
+            <ContextMenuItem variant="destructive" onClick={onRemove}>
+              <Trash2 />
+              Remove project
+            </ContextMenuItem>
+          </>
         )}
       </ContextMenuContent>
     </ContextMenu>

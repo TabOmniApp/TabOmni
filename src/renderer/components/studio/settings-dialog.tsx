@@ -57,6 +57,7 @@ import {
   withToolOff,
 } from "@/lib/worktree-chat/mcp-servers"
 import { useAgentModels } from "@/lib/worktree-chat/models"
+import { ClaudeLoginDialog } from "./claude-login-dialog"
 import { IconButton } from "./icon-button"
 import { serverMark } from "./worktree/chat-marks"
 import { ModelMenu, ProfileMenu } from "./worktree/chat-composer"
@@ -371,7 +372,15 @@ function UpdatesSection() {
  * pointing at a directory nobody ever logged into looks exactly like one that
  * works, right up until a turn fails — so the account is asked of `claude`
  * itself (`claudeAccount`). Checked on open and on demand rather than watched:
- * a login happens in a terminal, and there is nothing here to notice it.
+ * nothing here can see a `claude login` run in somebody's own terminal.
+ *
+ * **Adding one is a name, a click and a login.** There is no path here at all
+ * any more: the directory is main's to name (`main/claude-profiles.ts`) and the
+ * login is the app's to run (`ClaudeLoginDialog`), because the path was the one
+ * thing being asked of the user that they had no way to know the answer to — a
+ * row could only be filled in by reading the paragraph at the bottom of this
+ * section, and then only in a terminal. `docs/design.md` § Settings has what
+ * deleting the field cost.
  */
 function ClaudeSection() {
   const profiles = useClaudeProfiles((state) => state.profiles)
@@ -379,7 +388,6 @@ function ClaudeSection() {
   const check = useClaudeProfiles((state) => state.check)
   const create = useClaudeProfiles((state) => state.create)
   const rename = useClaudeProfiles((state) => state.rename)
-  const setConfigDir = useClaudeProfiles((state) => state.setConfigDir)
   const remove = useClaudeProfiles((state) => state.remove)
 
   // The list is loaded once at launch (`studio.tsx`) for the composer's own
@@ -454,34 +462,30 @@ function ClaudeSection() {
                   onChange={(event) => rename(profile.id, event.target.value)}
                   placeholder="Name"
                   aria-label="Profile name"
-                  className="h-7 w-32 shrink-0 text-xs md:text-xs"
-                />
-                <Input
-                  value={profile.configDir}
-                  onChange={(event) =>
-                    setConfigDir(profile.id, event.target.value)
-                  }
-                  placeholder="~/.claude-group/hung"
-                  spellCheck={false}
-                  aria-label="CLAUDE_CONFIG_DIR"
-                  className="h-7 flex-1 font-mono text-xs md:text-xs"
+                  className="h-7 w-48 shrink-0 text-xs md:text-xs"
                 />
                 <IconButton
                   label="Remove profile"
-                  className="hover:text-destructive"
+                  className="ml-auto hover:text-destructive"
                   onClick={() => remove(profile.id)}
                 >
                   <Trash2 />
                 </IconButton>
               </div>
-              {/* Nothing to check until there is a path: asking with an empty
-                  `CLAUDE_CONFIG_DIR` answers for the default account, which is
-                  the one thing this row must not be mistaken for. */}
+              {/* A profile has a directory as soon as main has answered the
+                  save that created it — one round trip, and this is the frame
+                  in between. It is not skipped for tidiness: an empty
+                  `CLAUDE_CONFIG_DIR` is what `claudeAccount` answers for the
+                  *default* login, so a row drawn before the answer arrives
+                  would show somebody else's account as its own. */}
               {profile.configDir.trim() ? (
-                <AccountStatus configDir={profile.configDir} />
+                <AccountStatus
+                  configDir={profile.configDir}
+                  name={profile.name || "Profile"}
+                />
               ) : (
                 <p className="text-[0.7rem] text-muted-foreground">
-                  No directory set — this profile cannot run a turn yet.
+                  Setting up its directory…
                 </p>
               )}
             </div>
@@ -503,10 +507,10 @@ function ClaudeSection() {
         the same variable a terminal would export to point{" "}
         <code className="font-mono">claude</code> at a login, its settings and
         its conversation history kept apart from the default{" "}
-        <code className="font-mono">~/.claude</code>. Nothing here starts that
-        directory off: point a profile at one that already exists, or one a{" "}
-        <code className="font-mono">claude</code> run with that variable set
-        will create.
+        <code className="font-mono">~/.claude</code>. Each profile gets a
+        directory of its own under{" "}
+        <code className="font-mono">~/.yasuo/workspace/claude-profiles</code>,
+        which <strong>Log in</strong> creates and signs in.
       </p>
     </div>
   )
@@ -524,31 +528,52 @@ function AccountRow({ configDir, name }: { configDir: string; name: string }) {
           ~/.claude
         </span>
       </p>
-      <AccountStatus configDir={configDir} />
+      <AccountStatus configDir={configDir} name={name} />
     </div>
   )
 }
 
 /**
- * Whether a directory is signed in, and the button that asks.
+ * Whether a directory is signed in, the button that asks, and the button that
+ * signs it in.
  *
  * **Asked, never assumed**: nothing is drawn as good until `claude` has said
  * so, which is why the unchecked state is its own quiet badge rather than an
- * optimistic one. The button is the only thing that spawns a process — a row
- * per keystroke would be a `claude` per keystroke, and the path is being typed
- * for most of the time this section is open.
+ * optimistic one. Neither button runs on a render, and a row is not checked
+ * because it was drawn — a section of four profiles opened to rename one is
+ * otherwise four `claude` processes.
+ *
+ * **Log in** is offered on every row, the signed-in ones included: switching
+ * which account a directory holds is the same act as filling an empty one, and
+ * a button that vanished once it had worked would be missing exactly when
+ * somebody's session expired.
  */
-function AccountStatus({ configDir }: { configDir: string }) {
+function AccountStatus({
+  configDir,
+  name,
+}: {
+  configDir: string
+  /** What the login dialog calls this account. */
+  name: string
+}) {
   const key = configDir.trim()
   const account = useClaudeProfiles((state) => state.accounts[key])
   const busy = useClaudeProfiles((state) => state.checking.includes(key))
   const check = useClaudeProfiles((state) => state.check)
+  const [loggingIn, setLoggingIn] = useState(false)
 
   const { label, tone } = accountLabel(account)
   const caption = accountCaption(account)
 
   return (
     <div className="flex items-center gap-2">
+      {loggingIn && (
+        <ClaudeLoginDialog
+          configDir={key}
+          name={name}
+          onClose={() => setLoggingIn(false)}
+        />
+      )}
       <StateBadge
         label={busy ? "Checking" : label}
         tone={busy ? "waiting" : tone}
@@ -562,6 +587,10 @@ function AccountStatus({ configDir }: { configDir: string }) {
       >
         {account?.error ?? caption}
       </span>
+      <Button size="xs" variant="ghost" onClick={() => setLoggingIn(true)}>
+        <KeyRound data-icon="inline-start" />
+        Log in
+      </Button>
       <Button
         size="xs"
         variant="ghost"

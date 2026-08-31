@@ -1490,10 +1490,21 @@ export type ClaudeProfile = {
   /**
    * The absolute path handed to `claude` as `CLAUDE_CONFIG_DIR`.
    *
-   * Left exactly as typed rather than resolved here: main expands a leading
-   * `~` the same way `addFolder`'s path field does, and a turn that never
-   * started because the directory does not exist yet is the CLI's own refusal
-   * to report, not this app's to anticipate.
+   * **Chosen by main, not by whoever added the profile** — a directory under
+   * this app's own data directory, named after the profile
+   * (`main/claude-profiles.ts`), created by the login that first needs it. It
+   * used to be a text field, and what that cost is in `docs/design.md`.
+   *
+   * So a profile arrives from the renderer with this **empty** and comes back
+   * from `saveClaudeProfiles` with it filled in. Empty here is never the
+   * default login — that is `profileId: null` on a chat, and the empty string
+   * only means "no `CLAUDE_CONFIG_DIR`" where `claudeAccount` and `claudeLogin`
+   * take one directly.
+   *
+   * A path already stored is left alone whatever shape it is in, including the
+   * `~/…` ones the field used to accept: main expands a leading `~` the way
+   * `addFolder` does, since the SDK spawns `claude` with no shell in between to
+   * do it.
    */
   configDir: string
 }
@@ -2582,9 +2593,16 @@ export type DesktopApi = {
    * and the Claude section of Settings — see `ClaudeProfile`.
    */
   listClaudeProfiles: () => Promise<ClaudeProfile[]>
-  /** Replaces the whole collection: the renderer owns the list, the same way
-   * it owns `HttpEnvironment`'s. */
-  saveClaudeProfiles: (profiles: ClaudeProfile[]) => Promise<void>
+  /**
+   * Replaces the whole collection: the renderer owns the list, the same way it
+   * owns `HttpEnvironment`'s.
+   *
+   * **Answers with what was stored**, which is the one thing this list does not
+   * own — a profile with no `configDir` is given one on the way in (see that
+   * field), and a row cannot draw an account for a directory it does not know
+   * the name of.
+   */
+  saveClaudeProfiles: (profiles: ClaudeProfile[]) => Promise<ClaudeProfile[]>
   /**
    * Whether one of those directories is signed in, and as whom — `claude auth
    * status` run with that `CLAUDE_CONFIG_DIR`, and with none at all for the
@@ -2596,6 +2614,30 @@ export type DesktopApi = {
    * while somebody is looking at this section.
    */
   claudeAccount: (configDir: string) => Promise<ClaudeAccount>
+  /**
+   * Signs one of those directories in: `claude auth login` in a pty of its own,
+   * with that directory as `CLAUDE_CONFIG_DIR`. Resolves with the id its output
+   * is tagged with — `onTerminalData`, `terminalWrite`, `terminalResize`,
+   * `terminalKill` and `onTerminalExit` carry it from there, the same as a
+   * shell's.
+   *
+   * **A pty rather than something quieter, because the login is a
+   * conversation**: the CLI prints a URL, opens a browser, asks which account,
+   * and can stop for an SSO prompt. Anything that hid that would be this app
+   * guessing at a flow the CLI is free to change, so what the user gets is the
+   * CLI's own screen — the difference from running it in a terminal is only
+   * that they did not have to know which variable to export.
+   *
+   * The directory is **created** if it is not there, unlike `claudeAccount`,
+   * which refuses to: that one probes a path somebody may still be typing, and
+   * this is a login they asked for by name. The empty string is the default
+   * login, and creates nothing.
+   */
+  claudeLogin: (
+    configDir: string,
+    cols: number,
+    rows: number
+  ) => Promise<string>
   /** Every chat in every project — the listing; the lines are read one chat
    * at a time. */
   listWorktreeChats: () => Promise<WorktreeChat[]>
@@ -3000,6 +3042,7 @@ export const IPC = {
   listClaudeProfiles: "claude-profiles:list",
   saveClaudeProfiles: "claude-profiles:save",
   claudeAccount: "claude-profiles:account",
+  claudeLogin: "claude-profiles:login",
   listWorktreeChats: "worktree-chats:list",
   createWorktreeChat: "worktree-chats:create",
   readWorktreeChat: "worktree-chats:read",
