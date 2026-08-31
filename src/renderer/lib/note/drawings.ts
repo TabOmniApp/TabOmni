@@ -24,7 +24,7 @@ export function emptyScene(): DrawingScene {
   return {
     type: "excalidraw",
     version: 2,
-    source: "tabomni",
+    source: "yasuo",
     elements: [],
     appState: {},
     files: {},

@@ -58,7 +58,7 @@ async function exists(target: string): Promise<boolean> {
 }
 
 async function repository(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "tabomni-git-write-"))
+  const root = await mkdtemp(path.join(tmpdir(), "yasuo-git-write-"))
   await git(root, "init", "--initial-branch", "main")
   await git(root, "config", "user.email", "test@example.com")
   await git(root, "config", "user.name", "Test")
@@ -264,7 +264,7 @@ async function main() {
 
   section("outside the folder")
 
-  const outside = await mkdtemp(path.join(tmpdir(), "tabomni-git-outside-"))
+  const outside = await mkdtemp(path.join(tmpdir(), "yasuo-git-outside-"))
   await writeFile(path.join(outside, "theirs.ts"), "not yours\n")
 
   await stage(root, [path.join(outside, "theirs.ts")])

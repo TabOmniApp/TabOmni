@@ -92,7 +92,7 @@ const MAX_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024
  * so reopening where *this* one lives could open the build that was just
  * replaced — or, from a dev run, an Electron binary in `node_modules`.
  */
-const APP_DIR = "/Applications/TabOmni.app"
+const APP_DIR = "/Applications/Yasuo.app"
 
 /** The installer, shipped in the bundle (`extraResources`) rather than fetched:
  * a button that runs a script downloaded at the moment it is pressed is a
@@ -129,7 +129,7 @@ async function imageDataUrl(filePath: string): Promise<string> {
 /**
  * The clipboard's image spilled to a file, so a terminal can paste a path.
  *
- * `tmpdir()` rather than anywhere under `~/.tabomni`: this is a scratch copy of
+ * `tmpdir()` rather than anywhere under `~/.yasuo`: this is a scratch copy of
  * something the user still holds in their clipboard, the OS already knows to
  * clean the directory out, and it is where the system terminals put the same
  * file — the `/var/folders/…` path a pasted screenshot turns into there.
@@ -141,7 +141,7 @@ async function clipboardImagePath(): Promise<string | null> {
   const image = clipboard.readImage()
   if (image.isEmpty()) return null
 
-  const file = path.join(tmpdir(), `tabomni-paste-${Date.now()}.png`)
+  const file = path.join(tmpdir(), `yasuo-paste-${Date.now()}.png`)
   await writeFile(file, image.toPNG())
   return file
 }
@@ -426,7 +426,7 @@ export function registerIpc(
   )
 
   /** The account a Docker-managed database is created with. */
-  const DB_USER = "tabomni"
+  const DB_USER = "yasuo"
 
   function randomDbPassword(): string {
     return randomBytes(18).toString("base64url")

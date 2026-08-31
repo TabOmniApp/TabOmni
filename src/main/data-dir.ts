@@ -9,10 +9,10 @@ import path from "node:path"
  * from there drags a running Electron in with it, which a test running under
  * plain `bun` cannot do.
  */
-export const DATA_DIR_NAME = ".tabomni"
+export const DATA_DIR_NAME = ".yasuo"
 
 /**
- * `TABOMNI_DATA_DIR` moves the whole tree — the manifest, the workspace's own
+ * `YASUO_DATA_DIR` moves the whole tree — the manifest, the workspace's own
  * files and the agent settings alike.
  *
  * Read on every call rather than captured once, so that a test can point it
@@ -22,5 +22,5 @@ export const DATA_DIR_NAME = ".tabomni"
  * inside the process silently do nothing.
  */
 export function dataDir(): string {
-  return process.env.TABOMNI_DATA_DIR ?? path.join(homedir(), DATA_DIR_NAME)
+  return process.env.YASUO_DATA_DIR ?? path.join(homedir(), DATA_DIR_NAME)
 }

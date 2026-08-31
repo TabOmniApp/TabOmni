@@ -6,7 +6,7 @@ import type { DbEngine } from "../shared/api"
 const run = promisify(execFile)
 
 /** Marks a database's own container, keyed by database id rather than project id. */
-const DB_LABEL = "vn.app.tabomni.database"
+const DB_LABEL = "vn.app.yasuo.database"
 
 const DB_IMAGE: Record<DbEngine, string> = {
   postgres: "postgres:16-alpine",
@@ -128,7 +128,7 @@ export class DockerRuntime {
     workspaceId: string,
     container: string,
     /** A second name to answer to, so a database is reachable as `shop`
-     * rather than as `tabomni-db-<uuid>`. */
+     * rather than as `yasuo-db-<uuid>`. */
     alias?: string
   ) {
     const network = networkName(workspaceId)
@@ -178,7 +178,7 @@ export class DockerRuntime {
  * sign-in brings a second one its databases are not reachable by guessing.
  */
 function networkName(workspaceId: string): string {
-  return `tabomni-net-${workspaceId}`
+  return `yasuo-net-${workspaceId}`
 }
 
 /**
@@ -187,7 +187,7 @@ function networkName(workspaceId: string): string {
  * the host, which is a different number and a different address entirely.
  */
 function dbContainerName(databaseId: string): string {
-  return `tabomni-db-${databaseId}`
+  return `yasuo-db-${databaseId}`
 }
 
 /** The env vars each engine's image needs to come up with our credentials. */

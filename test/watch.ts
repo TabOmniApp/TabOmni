@@ -36,7 +36,7 @@ async function waitFor(
 }
 
 async function main() {
-  const root = await mkdtemp(path.join(tmpdir(), "tabomni-watch-"))
+  const root = await mkdtemp(path.join(tmpdir(), "yasuo-watch-"))
   const src = path.join(root, "src")
   const docs = path.join(root, "docs")
   await mkdir(src)

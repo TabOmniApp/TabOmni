@@ -27,13 +27,13 @@ const DEV_ICON = path.join(__dirname, "..", "resources", "icon.png")
 
 /**
  * Packaging sets this from `build.productName`, but a dev run reads
- * `package.json` straight from disk, where the app is called `tabomni`. Naming
- * it here is what puts "TabOmni" in the macOS menu bar, the About panel and
+ * `package.json` straight from disk, where the app is called `yasuo`. Naming
+ * it here is what puts "Yasuo" in the macOS menu bar, the About panel and
  * the window title instead of Electron's own name. It has to happen before
  * `whenReady`: the default menu is built from `app.name`, and `userData` is
  * derived from it.
  */
-app.setName("TabOmni")
+app.setName("Yasuo")
 
 /**
  * Where the studio itself lives — the one place navigation is allowed to go.

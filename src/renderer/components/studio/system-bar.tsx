@@ -109,7 +109,7 @@ function memoryTitle(usage: SystemUsage): string {
 
 function appTitle(usage: SystemUsage): string {
   return [
-    `TabOmni across ${usage.appProcesses} ${
+    `Yasuo across ${usage.appProcesses} ${
       usage.appProcesses === 1 ? "process" : "processes"
     }`,
     `CPU ${formatPercent(usage.appCpuPercent)} of the machine — ${formatPercent(

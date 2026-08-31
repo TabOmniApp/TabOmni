@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="docs/banner.svg" alt="TabOmni: databases, HTTP endpoints, files, shells and notes all flowing into one window, and out as one tab strip" width="900">
+<img src="docs/banner.svg" alt="Yasuo: databases, HTTP endpoints, files, shells and notes all flowing into one window, and out as one tab strip" width="900">
 
-# TabOmni
+# Yasuo
 
 **One window for the applications a project already needs.**
 
-[![CI](https://github.com/TabOmniApp/TabOmni/actions/workflows/ci.yml/badge.svg)](https://github.com/TabOmniApp/TabOmni/actions/workflows/ci.yml)
+[![CI](https://github.com/YasuoApp/Yasuo/actions/workflows/ci.yml/badge.svg)](https://github.com/YasuoApp/Yasuo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F.svg)](https://electronjs.org)
 
@@ -15,7 +15,7 @@
 ---
 
 A database client, an HTTP client, an editor, a terminal, and wherever the agent
-runs: half a dozen applications, half a dozen window layouts. Switching between them costs more than any one of them saves. TabOmni
+runs: half a dozen applications, half a dozen window layouts. Switching between them costs more than any one of them saves. Yasuo
 makes each of them a tab in one window, the way an editor makes files tabs.
 
 There is one **workspace**, holding any number of **folders**: directories
@@ -39,7 +39,7 @@ last line of each section is about.
 macOS 12 (Monterey) or newer, Apple Silicon or Intel.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TabOmniApp/TabOmni/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/YasuoApp/Yasuo/main/install.sh | bash
 ```
 
 [`install.sh`](install.sh) picks the build for your architecture and copies it
@@ -49,7 +49,7 @@ version.
 Use `curl` rather than a browser: macOS quarantines a download and Gatekeeper
 then calls the app _"damaged"_, which only ever means unsigned. A `.dmg` from
 [Releases][releases] works too, after
-`xattr -dr com.apple.quarantine "/Applications/TabOmni.app"` — which skips the
+`xattr -dr com.apple.quarantine "/Applications/Yasuo.app"` — which skips the
 check rather than passing it.
 
 ### Linux
@@ -57,8 +57,8 @@ check rather than passing it.
 x64. The AppImage from [Releases][releases] is the whole install.
 
 ```bash
-chmod +x TabOmni-*-x64.AppImage
-./TabOmni-*-x64.AppImage
+chmod +x Yasuo-*-x64.AppImage
+./Yasuo-*-x64.AppImage
 ```
 
 It needs FUSE (`sudo apt install libfuse2` on Debian and Ubuntu), or
@@ -69,9 +69,9 @@ It needs FUSE (`sudo apt install libfuse2` on Debian and Ubuntu), or
 x64. The `.exe` from [Releases][releases] is an NSIS installer. SmartScreen
 stops it: _More info_ → _Run anyway_.
 
-[releases]: https://github.com/TabOmniApp/TabOmni/releases
+[releases]: https://github.com/YasuoApp/Yasuo/releases
 
-TabOmni is developed and used day to day on macOS; the Linux and Windows builds
+Yasuo is developed and used day to day on macOS; the Linux and Windows builds
 come out of the same workflow and the tests run on Linux, but assume rough
 edges. Docker is needed only for the workspace's own databases and `claude`
 only for agent sessions and the AI features — neither to start the app.
@@ -81,8 +81,8 @@ only for agent sessions and the AI features — neither to start the app.
 Needs [Bun](https://bun.sh) 1.3+ and Node 20+.
 
 ```bash
-git clone https://github.com/TabOmniApp/TabOmni.git
-cd tabomni
+git clone https://github.com/YasuoApp/Yasuo.git
+cd yasuo
 bun install
 bun run dev      # bundles the main process, starts Vite, launches Electron at it
 ```

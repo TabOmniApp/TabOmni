@@ -25,7 +25,7 @@ import { RAW_HTML_BLOCK } from "../note/raw-html-block"
  * A `.note` or a `.md`, in the block editor.
  *
  * **The only thing left that mounts `BlockEditor`.** It came from the Notes
- * panel, which kept a record under `~/.tabomni` and wrote it as it was typed;
+ * panel, which kept a record under `~/.yasuo` and wrote it as it was typed;
  * that panel is gone (`docs/design.md` § Notes, removed) and what it left is
  * this — a file in one of the workspace's folders, going through the files store
  * like every other tab: typing marks it dirty, ⌘S and the header's Save write

@@ -87,7 +87,7 @@ export function isInside(root: string, target: string): boolean {
  * the Changes list writes this under a row's name and draws no line for a file
  * that sits in the checkout's own directory, where the name has already said
  * everything. Handing the absolute path back for that case put the whole of
- * `~/.tabomni/workspace/worktrees/<id>/<branch>` under a file called
+ * `~/.yasuo/workspace/worktrees/<id>/<branch>` under a file called
  * `test.txt`.
  */
 export function relativeTo(root: string, target: string): string {

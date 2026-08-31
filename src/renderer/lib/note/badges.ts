@@ -16,7 +16,7 @@
  * `.excalidraw` file, which is what lets a drawing reopened tomorrow carry on
  * at 4 rather than starting again at 1. A counter held in React would not.
  */
-const BADGE = "tabomniBadge"
+const BADGE = "yasuoBadge"
 
 /** Excalidraw's red, for the transparent background a canvas starts on. */
 const DEFAULT_FILL = "#e03131"

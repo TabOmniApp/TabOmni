@@ -9,11 +9,11 @@ import { homedir } from "node:os"
 import path from "node:path"
 
 /** Where both sides find each other. A named pipe has no filesystem path to
- * agree on on Windows, so it is not "under `~/.tabomni`" there — just a
+ * agree on on Windows, so it is not "under `~/.yasuo`" there — just a
  * name both processes know. */
 export function socketPath(): string {
-  if (process.platform === "win32") return "\\\\.\\pipe\\tabomni-agent-daemon"
-  return path.join(homedir(), ".tabomni", "agent-daemon.sock")
+  if (process.platform === "win32") return "\\\\.\\pipe\\yasuo-agent-daemon"
+  return path.join(homedir(), ".yasuo", "agent-daemon.sock")
 }
 
 export type CreateRequest = {

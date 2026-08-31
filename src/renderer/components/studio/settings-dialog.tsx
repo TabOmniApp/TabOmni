@@ -187,7 +187,7 @@ const SECTIONS: {
   {
     id: "updates",
     label: "Updates",
-    blurb: "Which TabOmni this is, and whether there is a newer one.",
+    blurb: "Which Yasuo this is, and whether there is a newer one.",
     icon: ArrowUpCircle,
   },
   {
@@ -282,8 +282,8 @@ function UpdatesSection() {
           !check
             ? "Asking GitHub what is out."
             : check.status === "current"
-              ? `TabOmni ${check.current} — the latest release.`
-              : `TabOmni ${check.current}.`
+              ? `Yasuo ${check.current} — the latest release.`
+              : `Yasuo ${check.current}.`
         }
       >
         <Button
@@ -299,7 +299,7 @@ function UpdatesSection() {
 
       {update ? (
         <Row
-          title={`TabOmni ${update.version} is available`}
+          title={`Yasuo ${update.version} is available`}
           description={
             update.installable
               ? "Installs into /Applications and reopens the app. Terminal sessions and anything running in the dock end with it."
@@ -334,7 +334,7 @@ function UpdatesSection() {
           // version on screen is worth trusting.
           <Row title="Could not check" description={check.error}>
             <a
-              href="https://github.com/TabOmniApp/TabOmni/releases"
+              href="https://github.com/YasuoApp/Yasuo/releases"
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-1 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
@@ -349,7 +349,7 @@ function UpdatesSection() {
       {error && (
         <p className="px-4 pb-3 text-xs leading-relaxed text-destructive">
           {error} The installer&rsquo;s own output is in{" "}
-          <code className="font-mono">~/.tabomni/update.log</code>.
+          <code className="font-mono">~/.yasuo/update.log</code>.
         </p>
       )}
     </Card>
@@ -582,7 +582,7 @@ function AccountStatus({ configDir }: { configDir: string }) {
  * The MCP servers the user's own `claude` has — what `/mcp` in the CLI lists.
  *
  * **The list is the CLI's; what a chat may call is this app's.** This app used
- * to serve its own panels here as three `tabomni-*` servers with a switch each,
+ * to serve its own panels here as three `yasuo-*` servers with a switch each,
  * and that whole feature is gone (see `docs/design.md`). What is left is the
  * question the section was always really asked: *what can a chat in this project
  * actually reach?* Which servers exist belongs to the user's own `claude` —

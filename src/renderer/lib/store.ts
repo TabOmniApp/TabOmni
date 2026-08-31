@@ -268,7 +268,7 @@ export const useStudio = create<StudioState>((set, get) => {
       set({
         loaded: true,
         storageError:
-          error instanceof Error ? error.message : "Could not read ~/.tabomni",
+          error instanceof Error ? error.message : "Could not read ~/.yasuo",
       })
       return
     }

@@ -42,7 +42,7 @@ export type FrontmatterEntry = { key: string; value: string }
  * otherwise have that table read as its metadata the moment the frontmatter one
  * was deleted.
  */
-export const FRONTMATTER_BLOCK_ID = "tabomni-frontmatter"
+export const FRONTMATTER_BLOCK_ID = "yasuo-frontmatter"
 
 /**
  * Frontmatter as rows, or null for a block that has shape to it.

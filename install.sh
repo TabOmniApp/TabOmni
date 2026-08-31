@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Installs TabOmni into /Applications from a GitHub release.
+# Installs Yasuo into /Applications from a GitHub release.
 #
 #   ./install.sh            the latest release
 #   ./install.sh 0.1.0      that release
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-REPO="TabOmniApp/TabOmni"
+REPO="YasuoApp/Yasuo"
 # Overridable so the script can be exercised against a scratch directory.
 APPLICATIONS="${APPLICATIONS:-/Applications}"
 
@@ -28,7 +28,7 @@ esac
 # launch with nothing that says why.
 MACOS_MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 if [ "$MACOS_MAJOR" -lt 12 ]; then
-  echo "TabOmni needs macOS 12 (Monterey) or newer." >&2
+  echo "Yasuo needs macOS 12 (Monterey) or newer." >&2
   echo "This machine runs $(sw_vers -productVersion)." >&2
   exit 1
 fi
@@ -96,7 +96,7 @@ fi
 APP_NAME=$(basename "$APP_SRC")
 
 # Replacing a bundle out from under a running process leaves it half-swapped,
-# and the pty daemon it spawned holds a socket in ~/.tabomni that a new
+# and the pty daemon it spawned holds a socket in ~/.yasuo that a new
 # build would then talk to.
 if pgrep -qx "${APP_NAME%.app}"; then
   echo "Quitting ${APP_NAME%.app}…"

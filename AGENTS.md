@@ -1,6 +1,6 @@
 # Working in this repo
 
-**TabOmni** — an Electron studio that puts a project's databases, HTTP
+**Yasuo** — an Electron studio that puts a project's databases, HTTP
 endpoints, specs, terminals and agent sessions behind one tab strip rather than
 one application each. One package, no workspaces: `src/main/` is the Electron
 main process, `src/preload/` the bridge script, `src/renderer/` the React app,

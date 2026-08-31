@@ -7,7 +7,7 @@ import type { UpdateCheck } from "../shared/api"
 import { dataDir } from "./data-dir"
 
 /**
- * Whether there is a newer TabOmni, and installing it.
+ * Whether there is a newer Yasuo, and installing it.
  *
  * **Not `electron-updater`, and deliberately.** Squirrel.Mac will not replace a
  * bundle that carries no Developer ID, and these builds carry none — signing
@@ -22,7 +22,7 @@ import { dataDir } from "./data-dir"
  * the same bargain `git.ts` makes.
  */
 
-const REPO = "TabOmniApp/TabOmni"
+const REPO = "YasuoApp/Yasuo"
 
 const LATEST_RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`
 
@@ -105,7 +105,7 @@ async function latestRelease(): Promise<Release> {
       Accept: "application/vnd.github+json",
       // GitHub rejects an anonymous API request with no user agent outright,
       // and the rejection is a 403 that reads like rate limiting.
-      "User-Agent": "TabOmni",
+      "User-Agent": "Yasuo",
     },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
@@ -183,7 +183,7 @@ export async function startInstaller(input: {
       // Arguments rather than an interpolated string: a version is a value from
       // the network, and this one ends up on a command line.
       'bash "$1" "$2" && open "$3"',
-      "tabomni-update",
+      "yasuo-update",
       input.script,
       input.version,
       input.appPath,

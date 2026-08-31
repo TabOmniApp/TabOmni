@@ -14,7 +14,7 @@ import type { FileContent, FileEntry, FileIndexEntry } from "../shared/api"
  * The Explorer's side of the disk: the workspace's folders, read and written
  * where they are.
  *
- * Everything else the studio stores lives under `~/.tabomni` and is addressed by
+ * Everything else the studio stores lives under `~/.yasuo` and is addressed by
  * an id — a note, a request, a database. These are the user's own files at
  * their own absolute paths, which is the whole point of the panel and also the
  * one thing that makes it different: an id names a file this app created, while
