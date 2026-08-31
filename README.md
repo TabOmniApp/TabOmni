@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="docs/banner.svg" alt="Yasuo: databases, HTTP endpoints, files, shells and notes all flowing into one window, and out as one tab strip" width="900">
+<img src="docs/banner.svg" alt="Yasuo: each project's agent conversations, listed and answering, collapsed into one window and one tab strip" width="900">
 
 # Yasuo
 
-**One window for the applications a project already needs.**
+**One window for a project's agents, its board and its diff.**
 
 [![CI](https://github.com/YasuoApp/Yasuo/actions/workflows/ci.yml/badge.svg)](https://github.com/YasuoApp/Yasuo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -14,25 +14,15 @@
 
 ---
 
-A database client, an HTTP client, an editor, a terminal, and wherever the agent
-runs: half a dozen applications, half a dozen window layouts. Switching between them costs more than any one of them saves. Yasuo
-makes each of them a tab in one window, the way an editor makes files tabs.
+Yasuo runs `claude` against the folders you already work in, and makes each conversation a tab. A project's chats sit under its name, whichever is answering says so, and the diff they leave is a tab in the same window.
 
-There is one **workspace**, holding any number of **folders**: directories
-already on this machine, worked on where they are. It deliberately does not
-switch, because someone working across a frontend and its API has both open at
-once.
+Agents run **in the folder itself** — no branch to name, no worktree to remove, nothing to merge back, and what an agent changed is what `git status` says it changed. The cost is that two agents on one folder edit the same files: this is a studio for conversations you are watching, not a farm of them you are not.
 
-The panels are Explorer, Database, API, Terminal and Notes, and
-[`docs/design.md`](docs/design.md) is what each one is for and why it behaves as
-it does. There is no git panel, no code search, no specs panel, no webhook
-catcher and no mail catcher. All five were removed rather than left hidden, and
-your editor and your shell already do the first two.
+One **workspace**, any number of **folders**, no switching between them. Each project has its chats, a board, an Explorer with files and changes, and a terminal; Database and API open in windows of their own. [`docs/design.md`](docs/design.md) is what each one is for and why it behaves as it does.
 
 ## Install
 
-Every build is **unsigned**, so each OS objects in its own way. That is what the
-last line of each section is about.
+Every build is **unsigned**, so each OS objects in its own way. That is what the last line of each section is about.
 
 ### macOS
 
@@ -42,15 +32,9 @@ macOS 12 (Monterey) or newer, Apple Silicon or Intel.
 curl -fsSL https://raw.githubusercontent.com/YasuoApp/Yasuo/main/install.sh | bash
 ```
 
-[`install.sh`](install.sh) picks the build for your architecture and copies it
-into `/Applications`. Run it again to update, or `| bash -s 1.0.0` to pin a
-version.
+[`install.sh`](install.sh) picks the build for your architecture and copies it into `/Applications`. Run it again to update, or `| bash -s 1.0.0` to pin a version.
 
-Use `curl` rather than a browser: macOS quarantines a download and Gatekeeper
-then calls the app _"damaged"_, which only ever means unsigned. A `.dmg` from
-[Releases][releases] works too, after
-`xattr -dr com.apple.quarantine "/Applications/Yasuo.app"` — which skips the
-check rather than passing it.
+Use `curl` rather than a browser: macOS quarantines a download and Gatekeeper then calls the app _"damaged"_, which only ever means unsigned. A `.dmg` from [Releases][releases] works too, after `xattr -dr com.apple.quarantine "/Applications/Yasuo.app"` — which skips the check rather than passing it.
 
 ### Linux
 
@@ -61,20 +45,15 @@ chmod +x Yasuo-*-x64.AppImage
 ./Yasuo-*-x64.AppImage
 ```
 
-It needs FUSE (`sudo apt install libfuse2` on Debian and Ubuntu), or
-`--appimage-extract-and-run` without it.
+It needs FUSE (`sudo apt install libfuse2` on Debian and Ubuntu), or `--appimage-extract-and-run` without it.
 
 ### Windows
 
-x64. The `.exe` from [Releases][releases] is an NSIS installer. SmartScreen
-stops it: _More info_ → _Run anyway_.
+x64. The `.exe` from [Releases][releases] is an NSIS installer. SmartScreen stops it: _More info_ → _Run anyway_.
 
 [releases]: https://github.com/YasuoApp/Yasuo/releases
 
-Yasuo is developed and used day to day on macOS; the Linux and Windows builds
-come out of the same workflow and the tests run on Linux, but assume rough
-edges. Docker is needed only for the workspace's own databases and `claude`
-only for agent sessions and the AI features — neither to start the app.
+Yasuo is developed and used day to day on macOS; the Linux and Windows builds come out of the same workflow and the tests run on Linux, but assume rough edges. Docker is needed only for the workspace's own databases and `claude` only for agent sessions and the AI features — neither to start the app.
 
 ## From source
 
@@ -87,22 +66,15 @@ bun install
 bun run dev      # bundles the main process, starts Vite, launches Electron at it
 ```
 
-`bun run test`, `lint`, `typecheck` and `build` are the rest. A `Makefile`
-wraps packaging: `make dmg` for this machine's architecture, `make help` for
-the others. Builds are unsigned unless `SIGN=1`.
+`bun run test`, `lint`, `typecheck` and `build` are the rest. A `Makefile` wraps packaging: `make dmg` for this machine's architecture, `make help` for the others. Builds are unsigned unless `SIGN=1`.
 
 ## Documentation
 
-- **[`docs/design.md`](docs/design.md)**: what each panel is for and why it
-  behaves as it does. Read this before changing one.
-- **[`CONTRIBUTING.md`](CONTRIBUTING.md)**: the layout, the IPC contract the
-  main process and the renderer talk over, and where the seams are.
-- **[`SECURITY.md`](SECURITY.md)**: the security model, and how to report a
-  vulnerability.
+- **[`docs/design.md`](docs/design.md)**: what each panel is for and why it behaves as it does. Read this before changing one.
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md)**: the layout, the IPC contract the main process and the renderer talk over, and where the seams are.
+- **[`SECURITY.md`](SECURITY.md)**: the security model, and how to report a vulnerability.
 
-Contributions are welcome. A new database engine, a new agent CLI and a new
-panel are all designed to be added to. Small fixes need no ceremony; anything
-structural is worth an issue first.
+Contributions are welcome. A new database engine, a new agent CLI and a new panel are all designed to be added to. Small fixes need no ceremony; anything structural is worth an issue first.
 
 ## License
 
