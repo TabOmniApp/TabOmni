@@ -477,6 +477,7 @@ function Workbench() {
                 >
                   <WorkspaceSidebar
                     onOpenSettings={() => setSettingsOpen(true)}
+                    onAddFolder={() => setAdding(true)}
                   />
                 </div>
                 <ProjectRail />

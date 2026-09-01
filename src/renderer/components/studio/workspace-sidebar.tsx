@@ -1,4 +1,4 @@
-import { Database, Search, Send, Settings } from "lucide-react"
+import { Database, Plus, Search, Send, Settings } from "lucide-react"
 
 import { usePalette } from "@/lib/palette"
 import {
@@ -36,10 +36,14 @@ import { SideRow } from "./side-row"
  */
 export function WorkspaceSidebar({
   onOpenSettings,
+  onAddFolder,
 }: {
   /** The Settings dialog is the workbench's, mounted there — this is the
    * footer asking for it, the way Explorer's header asks for Add folder. */
   onOpenSettings: () => void
+  /** The same dialog Explorer's tree asks for, and asked for the same way: it
+   * is mounted in the workbench, so both columns ask rather than open. */
+  onAddFolder: () => void
 }) {
   const shut = useProjects((state) => state.shutSections)
   /** Whether there is anything to fold *against* — see `Section`. */
@@ -75,6 +79,7 @@ export function WorkspaceSidebar({
           <Section
             key={section}
             id={section}
+            onAddFolder={onAddFolder}
             // Folding is only meaningful against a neighbour. On its own a
             // section is always open, whatever a previous run left in
             // `shutSections` — a column that came back empty because the one
@@ -150,10 +155,13 @@ function Section({
   id,
   open,
   fold: folds,
+  onAddFolder,
 }: {
   id: SidebarSection
   open: boolean
   fold: boolean
+  /** Only `projects` has anything to do with this — see `ProjectsSection`. */
+  onAddFolder: () => void
 }) {
   const toggleSection = useProjects((state) => state.toggleSection)
   const fold: Fold | undefined = folds
@@ -168,7 +176,21 @@ function Section({
         <>
           {/* Projects has no panel component of its own to hand the fold to —
               it is this column's own list — so its header is drawn here. */}
-          <PanelHeader title={TITLES.projects} {...fold} />
+          <PanelHeader title={TITLES.projects} {...fold}>
+            {/* The `+` every other section's header carries, doing the same
+                thing: `Add a database` opens that panel's dialog, this opens
+                the workbench's Add folder one — the same dialog the Explorer's
+                tree and the File menu ask for, because a project *is* a folder
+                in the workspace and two ways in that behaved differently would
+                be two ideas of what adding one means.
+
+                Only on the open header. A folded section is a header this
+                column draws instead, and a button that adds to a list nobody
+                can see is a button that answers nothing. */}
+            <IconButton label="Add project" onClick={onAddFolder}>
+              <Plus />
+            </IconButton>
+          </PanelHeader>
           <div className="min-h-0 flex-1">
             <ProjectsSection />
           </div>
