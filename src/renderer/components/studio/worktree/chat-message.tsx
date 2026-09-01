@@ -46,7 +46,7 @@ import { toolLabel, toolMark } from "./chat-marks"
 export function ChatMessage({ of }: { of: AssistantMessage }) {
   if (of.role === "user") {
     return (
-      <div className="relative ml-4">
+      <div className="group relative ml-4">
         <div className="rounded-lg rounded-br-sm bg-accent/60 py-1.5 pr-8 pl-2.5 text-xs">
           <MentionText text={of.text} />
         </div>
@@ -149,7 +149,7 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
   // The renderer the Explorer's Markdown preview uses, so a table or a code
   // block in a reply reads the way it does in a file.
   return (
-    <div className="relative">
+    <div className="group relative">
       <MarkdownView source={of.text} className="pr-8 pl-1 text-xs" />
       <CopyMessage text={of.text} />
     </div>
@@ -157,15 +157,19 @@ export function ChatMessage({ of }: { of: AssistantMessage }) {
 }
 
 /**
- * A message's copy button, always on screen in the message's top-right corner.
+ * A message's copy button, in its top-right corner and revealed by hovering it.
  *
- * In the corner rather than under, and always there rather than on hover: the
- * button belongs to the message, so it sits against the message itself, and a
- * button that is only revealed by hovering is one nobody new knows is there.
- * The content clears it by the right padding the message already reserves, so
- * it never covers a word. The check on the button and the tooltip both say
- * "Copied" for a moment, the way the grid's cell dialog does, so a click
- * answers itself.
+ * In the corner rather than under, so the button sits against the message it
+ * belongs to. It was drawn permanently, on the argument that a button nobody
+ * sees is a button nobody finds — but a transcript is a column of messages and
+ * that put an icon against every one of them, which reads as chrome rather than
+ * as an affordance. The space is reserved either way (the message's own right
+ * padding), so nothing reflows when it appears and it never covers a word.
+ *
+ * It stays up while focused and for as long as the check is showing: a click
+ * that fades the button out from under the cursor would take its own answer
+ * with it. The check and the tooltip both say "Copied" for a moment, the way
+ * the grid's cell dialog does.
  */
 function CopyMessage({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -178,7 +182,11 @@ function CopyMessage({ text }: { text: string }) {
         setCopied(true)
         setTimeout(() => setCopied(false), 1200)
       }}
-      className="absolute top-0.5 right-0.5 text-muted-foreground"
+      className={cn(
+        "absolute top-0.5 right-0.5 text-muted-foreground",
+        "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+        copied && "opacity-100"
+      )}
     >
       {copied ? <Check /> : <Copy />}
     </IconButton>
