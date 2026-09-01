@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import {
   Dialog,
@@ -52,6 +52,14 @@ export function ClaudeLoginDialog({
   // ref rather than state — the same trade `ShellView` makes.
   const terminalId = useRef<string | null>(null)
 
+  // Through a ref because `onReady` starting the pty must not depend on a
+  // callback the parent re-makes each render: a new identity would tear the
+  // terminal down and open a second login.
+  const close = useRef(onClose)
+  useEffect(() => {
+    close.current = onClose
+  }, [onClose])
+
   const onReady = useCallback(
     (terminal: TerminalHandle) => {
       let disposed = false
@@ -90,7 +98,14 @@ export function ClaudeLoginDialog({
              * press. Asked whatever the CLI exited with: a login abandoned
              * half-way is still worth telling the truth about.
              */
-            void check(configDir)
+            void check(configDir).then(() => {
+              // Closing on the *answer*, not on the exit code: `claude` exits 0
+              // for a login somebody backed out of too, and a dialog that shut
+              // itself on that would hide the one line saying it did not work.
+              const account =
+                useClaudeProfiles.getState().accounts[configDir.trim()]
+              if (account?.state === "signedIn") close.current()
+            })
           })
         })
         .catch((error: unknown) => {
