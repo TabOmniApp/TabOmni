@@ -1,7 +1,5 @@
 import { useEffect } from "react"
-import { Plus } from "lucide-react"
 
-import { useExplorer } from "@/lib/db/explorer-store"
 import {
   closeAllTabs,
   closeOtherTabs,
@@ -15,7 +13,6 @@ import {
 } from "@/lib/panels"
 import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio, type Pane } from "@/lib/store"
-import { IconButton } from "./icon-button"
 import { useTabItems } from "./tab-items"
 import { TabStrip } from "./tab-strip"
 
@@ -50,9 +47,6 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
   // and both are computed rather than held, so this is what tells the component
   // that a drag has changed the answer.
   useStudio((state) => state.tabOrder)
-
-  const databaseId = useExplorer((state) => state.databaseId)
-  const openQueryTab = useExplorer((state) => state.openQueryTab)
 
   const byId = useTabItems()
   const items = tabIds().flatMap((id) => {
@@ -104,20 +98,6 @@ export function WorkspaceTabs({ pane }: { pane: Pane }) {
       label="Open tabs"
       items={items}
       activeId={activeId}
-      trailing={
-        // Only the query tab: a new session and a new request are both
-        // buttons in their own sidebar already, and a query tab has nowhere
-        // else to be started from.
-        pane === "database" ? (
-          <IconButton
-            label="New query tab"
-            disabled={!databaseId}
-            onClick={() => openQueryTab()}
-          >
-            <Plus />
-          </IconButton>
-        ) : undefined
-      }
       onSelect={selectTab}
       onKeep={keepTab}
       onClose={closeTab}

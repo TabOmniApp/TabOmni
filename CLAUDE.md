@@ -13,15 +13,14 @@ area's behaviour. When the two disagree, `design.md` is the fuller account.
 
 ## What this is
 
-**Yasuo**: an Electron studio that collapses a project's tooling into one tab
-strip — its folders, its databases, its HTTP endpoints, and the agent
-conversations run against them.
+**Yasuo**: an Electron studio for running several `claude` conversations
+against a project at once and reading what they did — its folders, its chats,
+its diffs and the board the work is tracked on, in one tab strip.
 
 There is one **workspace**, holding any number of **folders** — directories
 already on this machine, worked on where they are. It is deliberately not
-switchable. Databases, requests and cookies belong to the workspace;
-what is per folder is what is genuinely per repository — a shell's cwd, a run
-command, a branch name. Sign-in will bring a second workspace; until then
+switchable. What is per folder is what is genuinely per repository — a shell's
+cwd, a run command, a branch name. Sign-in will bring a second workspace; until then
 `DEFAULT_WORKSPACE_ID` is a constant.
 
 One package, no monorepo workspaces. `src/main/` is the Electron main process,
@@ -84,11 +83,12 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
 `ProcessManager`, `TerminalManager`, `WorktreeChats`).
 
 - **`store.ts`** — all state on disk under `~/.yasuo`: `manifest.json` for the
-  workspace/databases/settings, `workspace/` for the panels' own files. A
+  workspace and its settings, `workspace/` for the panels' own files. A
   folder's own files are never under here — the manifest records an absolute
-  path and they are read where they are. Database passwords are encrypted in the
-  manifest and stripped field-by-field before a record crosses to the renderer.
-  A **Claude profile's `CLAUDE_CONFIG_DIR`** is one of those workspace files —
+  path and they are read where they are. The manifest also carries a
+  `databases?: unknown` nothing reads: it is the deleted Database panel's
+  records, kept because a manifest is rewritten whole and dropping the key would
+  delete somebody's saved connections. A **Claude profile's `CLAUDE_CONFIG_DIR`** is one of those workspace files —
   `workspace/claude-profiles/<slug>`, named by `claude-profiles.ts` because the
   renderer cannot see `YASUO_DATA_DIR`, created by the `claude auth login` that
   `IPC.claudeLogin` runs in a pty. Settings has no path field: a profile is a
@@ -97,9 +97,11 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   daemon over a Unix socket/named pipe with newline-delimited JSON.
   `TerminalManager.killAll()` is awaited on quit and nothing reattaches.
   `daemon.ts` gets its own esbuild entry point and is `asarUnpack`ed.
-- **`http.ts`** — API requests are sent from the main process, so there is no
-  page origin, no CORS preflight, and forbidden headers go out as typed. The
-  cookie jar in `cookies.json` is the panel's own, not Chromium's.
+- **`notify.ts`** — which transitions in a chat's event stream are worth an OS
+  notification: quiet (**not** `done` — a message sent mid-turn is queued behind
+  it), a failure, a question. Free of `electron` so `test/notify.ts` can import
+  it; `ipc.ts` rings the bell, only while the window is unfocused, and the click
+  comes back as `IPC.revealWorktreeChat`.
 - **`files.ts`** — every `files:*` call goes through `insideAny`, which is what
   keeps an absolute path from the renderer inside the roots the workspace was
   pointed at. Deleting is `shell.trashItem`, never `unlink`. `fileRoots` in
@@ -277,21 +279,17 @@ dialog`), not by hand. Vite's root is `src/renderer`, so `index.html` and
 `public/` are there too.
 
 The shape, in one pass: the **left column** (`workspace-sidebar.tsx`) is
-`Projects` and nothing else for now — `SIDEBAR_SECTIONS` in `lib/projects.ts` is
-the one line saying which sections are drawn, and putting `Database` / `API`
-back is adding an id to it; those panels, stores and tabs all still work. Its
-footer's two buttons open each of them in a **window of its own**
-(`openPanelWindow` in `main.ts`, `?view=<panel>` read by `App.tsx`,
-`panel-window.tsx` around the panel's own components). That is only affordable
-because neither panel is _pushed_ anything — every event main sends still goes
-to the studio window alone, which is what `getWindow` in `ipc.ts` answers with.
-**Those two panes are out of `PANES`** (`lib/store.ts`), so the studio draws
-neither: their tab memory is the workspace's (`db.tabs`, `http.tabs`, read by
-every window), and while the studio walked them a table opened in the Database
-window came back next launch in the studio's strip beside the chats. Putting one
-back is that one id — but so are the two things that went with it, `⌘P` no
-longer listing tables or requests and the studio's boot no longer reading the
-databases. `docs/design.md` § Panel windows has the argument.
+`Projects` and nothing else — `SIDEBAR_SECTIONS` in `lib/projects.ts` is the one
+line saying which sections are drawn, and the next section to arrive is an id
+added to it. It stacked three: the **Database and API panels are deleted**, and
+with them the panel windows they were the only users of, so there is one window
+again and `Section` / `SidebarSection` are unions of one. `docs/design.md`
+§ Database and API, removed has the argument.
+A project's rows say what is happening in them — a spinner, a shield for a chat
+stopped on a question, and a count on the project's own row **while it is shut**
+(`activityOf` in `lib/worktree-chat/running.ts`, tested; waiting wins over
+working, since both are true while a card is up). Out of the window, that is a
+notification — see `main/notify.ts`.
 The **right-hand panel** is Explorer, with `All files` and `Changes` tabs, and it
 is the whole height of its column. **Both columns collapse to a 36px rail**
 rather than to nothing (`explorer-rail.tsx`, `project-rail.tsx`) — one button
@@ -371,7 +369,8 @@ there is no assignee, no comments and no attachments.
 - **`PANELS` in `lib/panels.ts` is where a tab's identity lives.** `rootOf` says
   which project a tab belongs to (it is in the strip only while that project is
   active); `groupOf` says what a folder means per panel when grouping is on. A
-  table and a saved request have no `rootOf` and never leave the strip.
+  panel that leaves `rootOf` off is one whose tabs belong to the _workspace_
+  rather than to a project, and so never leave the strip.
   `reconcileScope` is called from an effect in `studio.tsx`, not from `setActive`
   — a store reaching into `lib/panels.ts` would be a cycle.
 - **`lib/files/roots.ts` holds two lists and the difference matters**:
@@ -391,6 +390,13 @@ there is no assignee, no comments and no attachments.
   `workspace/note-files/`, addressed by a `note-file://` URL —
   `shared/note-files.ts` is the shape and `main/protocol.ts` serves it. Nothing
   deletes one: the walks that did were the Notes panel's.
+- **The Database and API panels are gone** (`docs/design.md` § Database and API,
+  removed) — `main/database.ts`, `main/docker.ts`, `main/http.ts`,
+  `main/encryption.ts`, `shared/http-request.ts`, `lib/db/`, `lib/http/`, both
+  component directories, nineteen channels, `pg` / `mysql2` / `@codemirror/lang-sql`.
+  The **panel windows** went with them (`openPanelWindow`, `?view=`,
+  `panel-window.tsx`): they existed for these two and nothing else.
+  `RenameDialog` is the one thing rescued, now `components/studio/rename-dialog.tsx`.
 - **The Notes panel is gone** (`docs/design.md` § Notes, removed) — the store,
   the list, the pane, the preview server, the `notes:*` channels and the note
   types with it. What stayed is the **block editor**, because the Explorer's
@@ -406,6 +412,8 @@ Logic worth testing is split out from the drawing: `lib/worktree-chat/activity.t
 `lib/files/review.ts` (`test/review.ts`), `lib/tab-groups.ts`
 (`test/tab-groups.ts`), `lib/files/roots.ts` (`test/file-roots.ts`),
 `lib/board/cards.ts` (`test/board-cards.ts`),
+`lib/worktree-chat/running.ts` (`test/chat-running.ts`) with `main/notify.ts`'s
+own `ChatNotices` (`test/notify.ts`),
 `lib/files/change-tree.ts` (`test/change-tree.ts`),
 `lib/files/git-diff.ts` with `main/git.ts`'s own `fileDiff` (`test/git-diff.ts`),
 `lib/files/block-doc.ts`, `lib/worktree-chat/mention-text.ts`

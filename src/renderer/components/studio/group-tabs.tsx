@@ -24,17 +24,11 @@ const LABELS: Record<Pane, string> = {
   files: "Files in this folder",
   // Never drawn: `Changes` has no `groupOf`, so its tabs never fold.
   changes: "Changed files",
-  database: "Tables in this schema",
-  api: "Requests in this folder",
   worktree: "Chats in this project",
   // Never drawn either, for the same reason `changes` is not: one board per
   // project, so a board tab has no group to fold into.
   board: "Boards",
 }
-
-/** The Database panel's one group that is not a schema: the console's own
- * tabs, which belong to no schema and gather together. */
-const DB_QUERIES = ""
 
 /** Where the `+` at the end of a chat group's strip would put a chat: the group
  * is a root id, and what `create` takes is the project. */
@@ -86,11 +80,7 @@ export function GroupTabs({ pane }: { pane: Pane }) {
 
   return (
     <TabStrip
-      label={
-        pane === "database" && shown.group === DB_QUERIES
-          ? "Query tabs"
-          : LABELS[pane]
-      }
+      label={LABELS[pane]}
       items={items}
       activeId={shown.active}
       trailing={

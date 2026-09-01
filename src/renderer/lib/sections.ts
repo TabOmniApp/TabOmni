@@ -1,28 +1,25 @@
 /**
- * The three kinds of thing the workbench opens: a file, a table, a request.
+ * The one kind of thing the workbench opens: a file.
  *
- * **Not three ways into a panel any more.** These were the activity rail's
- * icons, then the right-hand panel's tabs; today the Explorer's list is the
- * right-hand panel on its own and the other two have a window each
- * (`openPanelWindow`). What survives every move is the *kind*: a tab in the
- * strip, a hue, an icon and a label belong to one of these whatever is listing
- * it, which is why the type outlived every bar that was named after it.
+ * **It was three** — a file, a table and a request — first as the activity
+ * rail's icons, then as the right-hand panel's tabs, then as two panels in
+ * windows of their own. The Database and API panels are deleted (`docs/design.md`
+ * § Database and API, removed) and a fourth, `note`, went with the Notes panel
+ * before them. What is left is the Explorer.
  *
- * There was a fourth — `note`, the workspace's own notes — and it is gone with
- * the panel; see `docs/design.md` § Notes, removed.
- *
- * `Pane` in `lib/store.ts` is this plus `worktree` — a project's chat is
- * opened from the left column and draws in a pane with no list of its own.
- * The two were one union while every pane had a way in of its own; then one did
- * not, so the subset is spelled out and the compiler finds what assumed
- * otherwise.
+ * The type stays rather than being folded into a string, because it is what
+ * `Pane` in `lib/store.ts` is built out of and what `SECTIONS` in
+ * `components/studio/section-marks.tsx` keys a label, an icon and a hue by. A
+ * union of one is also the honest shape: the next kind to arrive is an entry
+ * here and a compiler error at every point that assumed there was only ever
+ * one.
  */
-export type Section = "files" | "database" | "api"
+export type Section = "files"
 
 /** Every kind, in the app's own order — see `SECTIONS` in
  * `components/studio/section-marks.tsx`, which is this list with a label, an
  * icon and a hue against each id. */
-export const SECTION_IDS: Section[] = ["files", "database", "api"]
+export const SECTION_IDS: Section[] = ["files"]
 
 export function isSection(value: string): value is Section {
   return (SECTION_IDS as string[]).includes(value)

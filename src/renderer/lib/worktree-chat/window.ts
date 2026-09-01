@@ -104,6 +104,23 @@ export function windowDetail(window: ChatWindow): string {
 }
 
 /**
+ * The nudge under the meter once compaction is close, or null while it is not.
+ *
+ * Said at all because the meter alone reads as weather: a window at 85% looks
+ * like something happening *to* the chat, when the cheapest move is the user's
+ * own. Compaction is one summarisation call over everything in the window —
+ * the most expensive single request a chat ever makes — and it buys a summary
+ * where a new chat for a new task buys a clean window for nearly nothing. Only
+ * where auto-compaction is actually armed: with it off, a filling window is
+ * not counting down to anything this sentence describes.
+ */
+export function windowHint(window: ChatWindow): string | null {
+  if (!window.autoCompactAt) return null
+  if (bandOf(window) === "calm") return null
+  return "Compacting summarises the whole conversation, which is a chat's most expensive single call — if the next thing is a new task, a new chat is cheaper."
+}
+
+/**
  * The rows of the breakdown, largest first, with the empty ones dropped.
  *
  * `Free space` is dropped rather than sorted with the rest: it is the remainder

@@ -168,65 +168,6 @@ The **Board** below is not that layer coming back, and the difference is the
 reason it was worth building where the other was worth deleting — see the
 section for which of the two claims each makes.
 
-## Panel windows
-
-`Database` and `API` are not sections of the left column any more —
-`SIDEBAR_SECTIONS` is `projects` and nothing else — so the two buttons at the
-left end of that column's footer open each of them in a **window of its own**
-(`openPanelWindow`, `main.ts`). One window per panel, focused rather than
-duplicated if it is already open.
-
-**They are the same renderer**, loaded with `?view=database` or `?view=api`,
-which `App.tsx` reads before it decides what to draw (a query rather than a
-route: there is no router here, and one flag is not a reason to add one). So the
-tree, the request list, the tabs and the grid are the components the studio
-draws, against the same stores — nothing in a panel window is a second
-implementation of anything. What `PanelWindow` leaves out is the workbench: no
-rail, no dock, no projects, and a strip holding one panel's tabs rather than
-five panels' — `lib/tabs.ts` arranges a mixture, and a window with one panel in
-it has nothing to interleave, which is also why its tab ids carry no `PREFIX`.
-
-**The reason it can be a window at all is that neither panel is pushed
-anything.** Every call they make — `databases:list`, `db:query`,
-`docker:status`, `http:*` — is a call and an answer, and an answer goes back to
-whoever asked. The push events (`processOutput`, `terminalData`,
-`files:changed`, a chat's frames) still go to the studio window alone, which is
-what `getWindow` in `ipc.ts` answers with; a panel that needed one of those
-would need its own manager in main, and would not be worth a window on these
-terms. The channel is checked rather than trusted (`isPanelWindowView`): a
-string from the renderer names a window this process is about to open.
-
-The two windows share what the stores **remember** — `db.tabs`, `db.selected`,
-`http.tabs` are the workspace's settings, not a window's — and that used to
-follow all the way through: open a table in the Database window, close it, quit,
-and the table came back next launch in the **studio's** strip, beside the chats.
-It was defended as "they are one workspace", and it was wrong. What a window
-opens is what that window is for; a tab surfacing in a strip whose column has
-not listed the panel since `SIDEBAR_SECTIONS` was cut to `Projects` reads as the
-app having lost track of where things live, and there was no way to put it back
-short of closing it.
-
-So **the studio does not draw either pane at all**. `PANES` in `lib/store.ts` is
-the list of panes the workbench walks, and `database` and `api` are out of it;
-both stay in `Pane`, in `PANELS` and in their stores, so putting either back is
-that one id — the same bargain `SIDEBAR_SECTIONS` makes. The memory is still per
-workspace and still shared, which is the right shape: it is now read by the only
-window that draws it.
-
-Two things went with that pane. `⌘P` no longer lists **tables or requests** — a
-palette row that selects a tab into a strip which never shows it is found,
-opened and invisible, which is the failure `useHasOpenTabs` is commented
-against; each window has its own list down its left side, which is the way in
-that is still there. And the studio's boot no longer reads the databases: that
-read was what pulled the remembered tabs back in, and nothing in this window
-lists them. `DatabaseWindow` does its own read on mount — which is why a window
-refreshes what its own list needs rather than waiting for a studio boot that may
-never happen in it, and why there is only ever one window per panel.
-
-They keep their **native title bar**, on macOS too. `hiddenInset` buys the
-studio a header that stands in for the title bar; these have no such header, and
-traffic lights over a tree are lights with nothing behind them.
-
 ## Board
 
 A project's kanban board: columns it names itself — starting at `Todo`, `Doing`,
@@ -555,6 +496,90 @@ each row — a row given `w-auto` to make room for a margin stops being `w-full`
 so it sizes to its content, so `truncate` on the title has no width to truncate
 against, and what that looks like is a column of clipped titles and a horizontal
 scrollbar under the list.
+
+### Saying which chats are working, and calling you back
+
+Several chats answering at once is what this app is for, and the cost of it is
+that somebody starts three and walks away. Three things say what is happening,
+at three distances.
+
+**On the chat's own row**, in the column: a spinner while it is working, and a
+pulsing shield while it has stopped on a question. Waiting **wins** over
+working, which is the rule everywhere below as well — both are true while a card
+is up, since the turn has not ended, and only one of them is something for the
+user to do.
+
+**On the project's row, while it is shut** — `2`, or `1!`, or `2 · 1!`. This is
+the case the feature is really for: a project is normally folded away, because
+that is how somebody runs a chat in one project and starts another somewhere
+else, and without this the column goes completely still while three turns are
+running. It is drawn **only** while the project is shut; open, the rows beneath
+say it one at a time and in more detail, and a count repeating what is directly
+below it is a number somebody has to check against the rows to trust. The
+numbers are deliberately not words: this sits at the right-hand end of a row
+whose left-hand end is a project name that has to keep its width, and "2 chats
+running, 1 waiting" is a sentence that truncates the name. The spoken version is
+on the row's `title`, where width is not the constraint. It hides on hover,
+`invisible` rather than unmounted, because the `+` and the board button are
+positioned over exactly that spot — the same bargain the Changes list makes with
+its `+112 −8`.
+
+**On the rail, while the whole column is shut**: a dot, and nothing more,
+because 36px is what there is. It counts every chat rather than the active
+project's — a shut column is not showing which project is which, so a dot that
+watched one of them would go dark while another was answering.
+
+`activityOf` in `lib/worktree-chat/running.ts` is the counting, split out and
+tested (`test/chat-running.ts`) for the one rule in it: a chat with a question up
+must be counted once, not in both columns, or a project of three chats reads as
+five things happening.
+
+### The notification
+
+The three marks above are all inside the window, and the case they do not cover
+is the one that matters most — the window is not focused, because somebody
+started four turns and went to do something else.
+
+So a chat that **goes quiet**, **fails**, or **stops to ask** rings an OS
+notification, and clicking it opens that chat. Only while the studio window is
+unfocused: somebody looking at the window can see the row spinning, and a banner
+over the composer they are typing into is noise.
+
+**Quiet, not `done`** — and this is the whole of why the watcher is a watcher
+rather than a line in the `done` handler. A `result` ends a _turn_; a message
+sent mid-turn is queued behind it, so announcing `done` would call somebody back
+to a chat that is still typing. What says the chat has nothing left to do is the
+`busy` event going false. A failure is the exception and rings as it happens:
+whatever is queued behind a turn that failed is worth knowing about late rather
+than not at all, and the quiet that follows it is suppressed so one failure does
+not ring twice.
+
+`ChatNotices` in `main/notify.ts` is that watcher, and it is **free of
+`electron`** so `test/notify.ts` can hold it to its edges — the two ways to get
+this wrong are ringing twice for one turn and holding a chat as working forever
+so its next quiet is swallowed, and neither shows up in a screenshot. Ringing
+the bell is `ipc.ts`'s, wired into the same lambda that already forwards every
+chat event to the renderer, so no new manager and no new channel were needed for
+the notice itself. One channel was: `IPC.revealWorktreeChat`, which carries the
+_click_ — the renderer already has the chat, what it does not have is a gesture
+that happened in the OS rather than in the window. It resolves to `select`, and
+nothing else, because `select` already is the whole gesture: the tab, the pane,
+the crumb, the Explorer's root and the dock's shell all move to that chat's
+project.
+
+The chat's **title is read at the moment the notice is due** rather than tracked
+alongside it, because a chat is named by its first message and renamed by
+`retitle` partway through that same turn — a name captured when the turn started
+is the wrong one on exactly the turn somebody is least likely to recognise by id.
+A chat with no row is skipped: that is a `+` nobody has spoken into, so there is
+nothing to call it and nothing to call somebody back to.
+
+It is **on by default**, which is the one switch in Settings that goes that way
+(`CHAT_NOTIFICATIONS_KEY`, and Settings › Chats is the switch). The reason is
+that a user who has to find the row first has already missed the turn they
+walked away from. It lives under its own settings key rather than in the
+renderer's preference bag, for the reason the switched-off MCP tools do: main
+reads it, and a bag only the renderer parses is not a thing both sides can name.
 
 ### The chat is hosted, not tailed
 
@@ -4334,139 +4359,89 @@ composer. `/clear`, `/compact` and the CLI's own slash commands are not reachabl
 the strip of files a turn had touched went with the transcript it was read from:
 Explorer's own watchers are what notice a change now.
 
-## The workspace's databases
+## Database and API, removed
 
-The workspace can have any number of databases, each either Postgres or MySQL:
-created here, in a Docker container of its own, or a connection to a server
-that already exists elsewhere. They belong to the workspace rather than to any
-one folder — a frontend and its API talk to the same database, and there is no
-version of "whose is it" that helps. A Docker-managed database's data goes with
-it, and deleting it removes its container and data too; a connection only ever
-removes the record — the database itself is someone else's to manage.
+**There was a Database panel and an API panel**, and they were the reason half
+of this app's plumbing has the shape it does. The Database panel connected to
+Postgres and MySQL — a workspace's own databases, each either a connection to a
+server that already existed or one created here in a Docker container of its
+own — and gave each a tree of schemas, a data browser with a filter bar, an
+inline editor over the rows and a query console. The API panel was a request
+list, an environment, a cookie jar of the workspace's own, and a send that went
+out of the **main** process so that there was no page origin, no CORS preflight
+and no header a browser would refuse to set.
 
-Removing a folder from the workspace leaves every database exactly where it
-is. That is the whole reason they are not filed under one.
+Both are **gone**, deleted rather than hidden, the way the Mail, Notes and Tasks
+panels went. Out with them: `main/database.ts`, `main/docker.ts`, `main/http.ts`
+and `main/encryption.ts`; `shared/http-request.ts`; `lib/db/` and `lib/http/`
+whole, with the two engine adapters, the filter compiler, the CSV writer and the
+SQL completion under them; `components/studio/db/` and `components/studio/api/`;
+the nineteen `databases:*` / `db:*` / `docker:*` / `http:*` channels and the
+methods over them; `DbEngine`, `DatabaseRecord`, `SqlResult`, `Filter`,
+`HttpRequestRecord`, `HttpCookie` and the rest of that half of the contract;
+`test/date-input.ts`, `test/grid-columns.ts` and `test/row-limit.ts`; and `pg`,
+`mysql2`, `@types/pg` and `@codemirror/lang-sql` from `package.json`, which
+leaves `@lydell/node-pty` as the one esbuild external.
 
-The studio connects to a database from the main process, on the host, at
-`127.0.0.1:<published port>`.
+### Why, when they worked
 
-Such a connection can be edited — host, port, user, password, database — while
-a Docker-managed one cannot: its address is Docker's to decide and its
-credentials were written into the container when it was created, so there is
-nothing there that could be edited into anything but a broken record. An empty
-password field keeps the stored one, which the renderer is never told.
+They did work, and that is the whole difficulty of the decision. The argument
+against them is not that they were broken but that **nobody would choose this
+app for them**. TablePlus and Postman are already open on the same machine, they
+are better at it, and a studio that is a worse version of two tools somebody
+already has is a studio competing where it cannot win. What this app is for is
+running several `claude` conversations against a project and reading what they
+did — and every hour spent on a data browser was an hour not spent there.
 
-## Filtering the data browser
+The state they were left in is what settled it. Both had already been taken out
+of the left column (`SIDEBAR_SECTIONS` cut to `projects`) and out of `PANES`, so
+the studio drew neither; each opened in a **window of its own** instead, which
+was affordable only because neither was ever _pushed_ anything. `⌘P` had stopped
+listing tables and requests. That is the worst position a feature can be in:
+still costing a contract, four stores, a Docker runtime, an encryption module
+and two native drivers to maintain, while being reachable only through a button
+in a footer. Removing a feature means deleting it, and half-removing one is how
+a codebase ends up paying for something it has already decided against.
 
-Filters run as a `where` clause against the database, not against the page in
-front of you, so a condition finds rows on page 40 as readily as page 1 — and
-the row count above the grid is counted through the same clause, or the pager
-would offer pages that no longer exist.
+### What went with them, and what did not
 
-A flat list joined by one `and`/`or` rather than nested groups: what this
-builds still has to be a clause someone can read in the SQL tab. Column names
-are matched against the introspected columns and quoted by the engine; values
-always leave as bound parameters (`$1` for Postgres, `?` for MySQL). A
-condition naming a column that has since been dropped is skipped rather than
-quoted in, and an empty value box is a row still being typed rather than a
-filter for the empty string.
+The **panel windows** went entirely. They existed for these two panels and
+nothing else, so `openPanelWindow`, `PANEL_WINDOWS`, `PanelWindowView`, the
+`?view=` the renderer read off its own URL and `components/studio/panel-window.tsx`
+are all out. There is one window again, which is what `getWindow` in `ipc.ts`
+always answered with anyway.
 
-A filter can also be described in words. That goes to `claude -p` — the CLI
-already installed and signed in for the Terminal panel — rather than to an API
-this app would need a key for. What comes back is a proposal and is treated as
-untrusted: it lands in the panel for the user to read and Apply, and every
-condition is checked against the columns that exist and the operators this app
-can build, so a hallucinated column produces one fewer condition rather than a
-clause nobody wrote.
+`Section` is now a union of **one** (`files`), and `SidebarSection` likewise
+(`projects`). Both are kept as unions rather than folded into a string: they are
+what `Pane`, `SECTIONS` and `SECTION_ACCENT` are keyed by, and the next kind to
+arrive should be an entry plus a compiler error at every point that assumed
+there was only ever one. `PREFIX` in `lib/tabs.ts` lost `db:` and `api:`, and
+`test/tabs.ts`'s fixtures moved to `file:` and `chat:` — the two panels whose
+tabs are still a mixture in one strip.
 
-## The query console
+`RenameDialog` was the one component worth keeping: it lived under
+`components/studio/db/` while a table and a column were its two callers, and the
+Explorer's tree is the caller left, so it moved up to
+`components/studio/rename-dialog.tsx`.
 
-A query tab runs what is selected in its editor, or the whole tab when nothing
-is — so one statement of a script can be tried without deleting the rest of it.
-Editing a row in the result grid reruns exactly what produced that grid,
-selection included, rather than whatever the editor holds by then.
+**What is on somebody's disk is left alone**, and this is the one place that
+took care rather than a decision. A workspace still has `requests.json`,
+`environments.json`, `folders.json`, `cookies.json` and a `workspace/db/`
+directory; nothing reads them and nothing deletes them, which is the rule
+`mail.json` and `tasks.json` established. The **databases are different**,
+because they were not a file of their own — they were a key in `manifest.json`,
+and a manifest is rewritten whole on every settings change and every folder
+added. Dropping the key would have deleted somebody's saved connections,
+encrypted passwords and all, the first time they changed a preference. So
+`Manifest` keeps a `databases?: unknown` that `readManifest` carries and
+`writeManifest` writes back untouched, spread in only when it is actually there
+so a manifest written since does not grow the key back. Their Docker containers
+are the user's, and `docker rm` is how they go.
 
-Completion is the connected database's own schema, handed to
-`@codemirror/lang-sql` (`lib/db/sql-completion.ts`). It offers the tables, and
-after a `.` the columns of whichever table that alias resolves to, off a real
-parse of the statement.
-
-That file was 290 lines and is now about ten, which is the clearest single
-measure of what the two moves between editing stacks cost and refunded. Monaco
-ships grammars for `sql`, `mysql` and `pgsql` and no language service behind any
-of them, so all of this had to be written by hand: a regex for the tables a
-statement names and the aliases they are named under, a keyword list, a
-statement-at-the-cursor split on `;` that a semicolon inside a string literal
-would fool, and a `Map` keyed by model URI — because a Monaco provider is
-registered per _language_ rather than per editor, and two open consoles would
-otherwise answer for each other. Every one of those is a property of Monaco
-rather than of SQL. Here the schema is configuration of the one editor it
-belongs to, so two consoles cannot collide by construction.
-
-A row-returning statement that doesn't limit itself gets `limit 500` appended
-(`lib/db/row-limit.ts`), with "Run without limit" next to the results as the
-escape hatch. Neither driver offers a server-side row cap — Postgres has no
-such setting and `mysql2` has no equivalent of the CLI's `--select-limit` — so
-the alternative to appending the clause is `select * from products` sending
-every row across IPC into one grid, which is enough to hang the app. The cap is
-a heuristic over the statement text, and every uncertain case (a script, its
-own `limit`, `for update`, anything that writes) is left alone: a query that
-runs uncapped is a much cheaper mistake than one rewritten into something the
-user didn't ask for. The panel's own introspection queries never go through it
-— capping those would silently shorten the table tree and the completion list.
-
-Whatever does get through, the grid only mounts what is in view — both ways.
-Rows and columns are each virtualized (`@tanstack/react-virtual`), because it
-is the product that hurts: a 200-column table still leaves 30 rendered rows ×
-200 cells, and 200 headers each carrying a whole `ColumnMenu`. What isn't
-rendered stands in as a spacer — one row above and below, one cell either side
-— so the table keeps its true size and the scrollbars stay honest. Every row is
-exactly `ROW_HEIGHT` tall, so row size is a constant rather than something to
-measure; column widths are already known, and `columnSlots`
-(`lib/db/grid-columns.ts`) turns them into the cells a row renders. Header,
-body and `colgroup` all come from one call, so they cannot disagree about where
-a column sits. The first column is always rendered even when scrolled out of
-view: it is the sticky one, and a sticky cell that isn't in the DOM stops
-holding the left edge.
-
-Indexes stay indexes into the result — a row's `rowIndex`, a column's place in
-the visible list — never into whatever happens to be mounted.
-
-The grid is memoized, and its `result`/`edit`/`control` props are built in a
-`useMemo` by both panels that use it. That is not a micro-optimisation: those
-panels re-render on every keystroke in the SQL editor and every move of its
-cursor, and rebuilding those objects inline handed the grid new props each
-time, which over a wide table meant laying the whole thing out again per
-character typed.
-
-## API requests
-
-The API panel calls whatever endpoints the workspace's code exposes. Requests
-are saved in `requests.json` under the studio's own directory rather than in
-any of the folders, so trying an endpoint never writes a file into someone's
-working tree. One collection for the workspace: an endpoint is called from the
-frontend and served by the API, and which of the two folders it "belongs to" is
-not a question worth making anyone answer.
-
-An environment is a named set of variables, kept in `environments.json` beside
-the requests and chosen one at a time. `{{name}}` is substituted anywhere in a
-request — URL, headers, body — and a name nothing defines is left as written
-rather than blanked, so a missing value is visible instead of silent. `baseUrl`
-is not built in; an environment that defines one is what lets a bare path like
-`/api/users` resolve to something, and is how the same collection is pointed
-at a different host.
-
-Requests are sent from the main process (`src/main/http.ts`), not the renderer.
-From there is no page origin, so there is no CORS preflight and none of the
-studio's own cookies, and headers a renderer is forbidden to set go out as
-typed.
-
-The jar in `cookies.json` is the panel's own, not Chromium's: responses' cookies
-are kept for the workspace and sent back on requests they match by domain and path,
-which is enough for a login route to be followed by a request that is logged in.
-A request carrying its own `Cookie` header sends that instead — the more
-specific instruction wins, and a header the user can read should say what is
-sent.
+Nothing about this is a claim that a studio should not know about a project's
+database. It is a claim that this app's version of it was not the reason anybody
+would open it, and that a feature nobody would choose it for is a feature it
+cannot afford to carry.
 
 ## Mail, removed
 

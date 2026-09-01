@@ -248,7 +248,11 @@ export function BoardPane() {
                   // of tags above its title: at the old width two tags and a
                   // priority wrapped to a second line on most cards, which is
                   // the row costing height on every card to save it on none.
-                  "flex min-h-0 w-72 flex-col overflow-hidden rounded-lg bg-muted/40",
+                  // The hairline is what defines the column in the light half,
+                  // where `bg-muted/40` over a near-white ground is a step of
+                  // almost nothing; in the dark the alpha border is the same
+                  // line every other surface draws.
+                  "flex min-h-0 w-72 flex-col overflow-hidden rounded-lg border border-border/60 bg-muted/40",
                   draggingColumn === column.id && "opacity-40"
                 )}
               >
@@ -360,9 +364,16 @@ export function BoardPane() {
                   />
 
                   {own.length === 0 && drag === null && (
-                    <p className="px-0.5 py-1 text-[0.6875rem] text-muted-foreground">
-                      Nothing here.
-                    </p>
+                    // An affordance rather than a statement: the slot is the
+                    // header's `+` drawn where the card it makes will go, in
+                    // the same dashed voice as `Add column`.
+                    <button
+                      type="button"
+                      onClick={() => setDrawer({ add: column.id })}
+                      className="grid h-20 shrink-0 place-items-center rounded-md border border-dashed border-border text-[0.6875rem] text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
+                    >
+                      Add a card
+                    </button>
                   )}
                 </div>
               </section>

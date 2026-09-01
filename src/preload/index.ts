@@ -52,18 +52,6 @@ const api: DesktopApi = {
   onMenuCommand: (listener) =>
     subscribe<MenuCommand>(IPC.menuCommand, listener),
 
-  openPanelWindow: (view) => ipcRenderer.invoke(IPC.openPanelWindow, view),
-
-  dockerStatus: () => ipcRenderer.invoke(IPC.dockerStatus),
-
-  listDatabases: () => ipcRenderer.invoke(IPC.listDatabases),
-  createDatabase: (input) => ipcRenderer.invoke(IPC.createDatabase, input),
-  updateDatabase: (id, input) =>
-    ipcRenderer.invoke(IPC.updateDatabase, id, input),
-  deleteDatabase: (id) => ipcRenderer.invoke(IPC.deleteDatabase, id),
-  testDatabaseConnection: (input) =>
-    ipcRenderer.invoke(IPC.testDatabaseConnection, input),
-
   gitBranch: (folderId) => ipcRenderer.invoke(IPC.gitBranch, folderId),
   gitStatus: (folderId) => ipcRenderer.invoke(IPC.gitStatus, folderId),
   gitChanges: (folderId) => ipcRenderer.invoke(IPC.gitChanges, folderId),
@@ -108,24 +96,6 @@ const api: DesktopApi = {
   getSetting: (key) => ipcRenderer.invoke(IPC.getSetting, key),
   setSetting: (key, value) => ipcRenderer.invoke(IPC.setSetting, key, value),
 
-  dbQuery: (databaseId, sql, params) =>
-    ipcRenderer.invoke(IPC.dbQuery, databaseId, sql, params),
-  dbExec: (databaseId, sql, params, options) =>
-    ipcRenderer.invoke(IPC.dbExec, databaseId, sql, params, options),
-  dbReset: (databaseId) => ipcRenderer.invoke(IPC.dbReset, databaseId),
-
-  listRequests: () => ipcRenderer.invoke(IPC.listRequests),
-  saveRequests: (requests) => ipcRenderer.invoke(IPC.saveRequests, requests),
-  listEnvironments: () => ipcRenderer.invoke(IPC.listEnvironments),
-  saveEnvironments: (environments) =>
-    ipcRenderer.invoke(IPC.saveEnvironments, environments),
-  listRequestFolders: () => ipcRenderer.invoke(IPC.listRequestFolders),
-  saveRequestFolders: (folders) =>
-    ipcRenderer.invoke(IPC.saveRequestFolders, folders),
-  listCookies: () => ipcRenderer.invoke(IPC.listCookies),
-  saveCookies: (cookies) => ipcRenderer.invoke(IPC.saveCookies, cookies),
-  httpSend: (input) => ipcRenderer.invoke(IPC.httpSend, input),
-
   agentModels: () => ipcRenderer.invoke(IPC.agentModels),
   agentCommands: (folderId) => ipcRenderer.invoke(IPC.agentCommands, folderId),
   installedMcpServers: (folderId) =>
@@ -155,6 +125,8 @@ const api: DesktopApi = {
   stopWorktreeChat: (id) => ipcRenderer.invoke(IPC.stopWorktreeChat, id),
   onWorktreeChatEvent: (listener) =>
     subscribe<WorktreeChatEvent>(IPC.worktreeChatEvent, listener),
+  onRevealWorktreeChat: (listener) =>
+    subscribe<string>(IPC.revealWorktreeChat, listener),
   replyToReviewComment: (cwd, prompt, model, effort, profileId) =>
     ipcRenderer.invoke(
       IPC.replyToReviewComment,

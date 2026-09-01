@@ -85,6 +85,7 @@ import {
   bandOf,
   remainingOf,
   windowDetail,
+  windowHint,
   windowLabel,
   windowSlices,
   WINDOW_TONES,
@@ -1439,6 +1440,7 @@ function Marks({
 function WindowMeter({ of }: { of: ChatWindow }) {
   const band = bandOf(of)
   const slices = windowSlices(of)
+  const hint = windowHint(of)
 
   return (
     <DropdownMenu>
@@ -1448,7 +1450,7 @@ function WindowMeter({ of }: { of: ChatWindow }) {
             type="button"
             // The detail on the title as well as in the menu: the meter is a
             // glance, and hovering should answer the question without a click.
-            title={windowDetail(of)}
+            title={hint ? `${windowDetail(of)}\n${hint}` : windowDetail(of)}
             aria-label={`Context window: ${windowLabel(of)} before auto-compacting`}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[0.7rem]",
@@ -1511,6 +1513,14 @@ function WindowMeter({ of }: { of: ChatWindow }) {
           <div className="px-2 py-1 text-[0.7rem] text-muted-foreground">
             No breakdown was reported.
           </div>
+        )}
+        {hint && (
+          <>
+            <DropdownMenuSeparator />
+            <div className="max-w-64 px-2 py-1.5 text-[0.7rem] leading-relaxed text-muted-foreground">
+              {hint}
+            </div>
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

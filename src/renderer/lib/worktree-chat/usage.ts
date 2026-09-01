@@ -56,7 +56,18 @@ export function usageLine(usage: TurnUsage | ChatTotal): string {
     const cached = Math.round((usage.cacheRead / prompt) * 100)
     parts.push(`${compact(prompt)} prompt, ${cached}% cached`)
   }
-  if (usage.output > 0) parts.push(`${compact(usage.output)} out`)
+  if (usage.output > 0) {
+    // The thinking share beside the output rather than only in the breakdown:
+    // it is the one figure the effort picker moves, and output is billed the
+    // same whether it is read or reasoned — a turn whose output was mostly
+    // thinking is the fact somebody deciding to turn effort down needs on the
+    // row, not a hover away.
+    parts.push(
+      usage.thinking > 0
+        ? `${compact(usage.output)} out (${compact(usage.thinking)} thinking)`
+        : `${compact(usage.output)} out`
+    )
+  }
   // What it took on the clock, in the spinner's own words: the figure that was
   // on screen while the turn ran is the one worth keeping once it has stopped
   // moving, and a chat's total is the afternoon added up. Truthy rather than
@@ -111,8 +122,7 @@ export function chatLine(
  *
  * Where the percentage on the row is read, this is what it is checked against,
  * so it is the three prompt figures apart rather than added up. The thinking
- * share is only here: it explains an output that cost more than it reads like,
- * which is a second question and not the one the row is answering.
+ * share is here in full, beside the compact copy on the row itself.
  */
 export function usageDetail(usage: TurnUsage | ChatTotal): string {
   const lines = [

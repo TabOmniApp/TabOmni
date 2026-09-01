@@ -22,6 +22,7 @@ import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import {
   ArrowUpCircle,
+  Bell,
   ChevronDown,
   Columns2,
   ExternalLink,
@@ -50,13 +51,16 @@ import {
   isServerOff,
   isToolOff,
   orderedServers,
+  promptTokensLeftOn,
   serverCaption,
+  serverPromptTokens,
   signIn,
   stateLabel,
   withServerOff,
   withToolOff,
 } from "@/lib/worktree-chat/mcp-servers"
 import { useAgentModels } from "@/lib/worktree-chat/models"
+import { compact } from "@/lib/worktree-chat/usage"
 import { ClaudeLoginDialog } from "./claude-login-dialog"
 import { IconButton } from "./icon-button"
 import { serverMark } from "./worktree/chat-marks"
@@ -142,6 +146,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <AppearanceSection />
             ) : section === "tabs" ? (
               <TabsSection />
+            ) : section === "chats" ? (
+              <ChatsSection />
             ) : section === "claude" ? (
               <ClaudeSection />
             ) : section === "updates" ? (
@@ -156,7 +162,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-type SectionId = "appearance" | "tabs" | "claude" | "mcp" | "updates"
+type SectionId = "appearance" | "tabs" | "chats" | "claude" | "mcp" | "updates"
 
 /** The sections, in the order they are listed. Each one is a heading, a line
  * saying what it covers, and the rows below — kept together so adding a
@@ -178,6 +184,12 @@ const SECTIONS: {
     label: "Tabs",
     blurb: "Where the workbench's tab strip sits, and how much it gathers.",
     icon: Columns2,
+  },
+  {
+    id: "chats",
+    label: "Chats",
+    blurb: "What a chat does while you are looking at something else.",
+    icon: Bell,
   },
   {
     id: "claude",
@@ -246,6 +258,36 @@ function TabsSection() {
         description="One tab per folder in the strip, with that folder's own files, requests or notes in a second strip inside it. Off, every file and request is a tab of its own."
       >
         <Switch checked={groupTabs} onCheckedChange={setGroupTabs} />
+      </Row>
+    </Card>
+  )
+}
+
+/**
+ * What a chat does when nobody is watching it.
+ *
+ * Its own section rather than a row under `Appearance`, because this is not
+ * about how the studio looks: several chats answering at once is the thing this
+ * app is for, and what makes that workable is being called back to one. The
+ * section is where the rest of that belongs as it arrives.
+ */
+function ChatsSection() {
+  const on = useSettings((state) => state.chatNotifications)
+  const setOn = useSettings((state) => state.setChatNotifications)
+
+  return (
+    <Card>
+      {/*
+        On by default, which is the other way round from every other switch in
+        this dialog and is argued for on `CHAT_NOTIFICATIONS_KEY`: a user who
+        has to find this row first has already missed the turn they walked away
+        from.
+      */}
+      <Row
+        title="Notify me when a chat finishes"
+        description="A notification when a chat goes quiet, fails, or stops to ask you something — only while this window is not focused, and clicking it opens that chat. Off, the only sign is the row in the sidebar."
+      >
+        <Switch checked={on} onCheckedChange={setOn} />
       </Row>
     </Card>
   )
@@ -679,6 +721,11 @@ function McpSection() {
   }, [activeFolderId, asks])
 
   const servers = orderedServers(listing?.servers ?? [])
+  const disabled = useSettings((state) => state.mcpDisabledTools)
+  // The cheapest setting in the app, said with a number: every tool left on is
+  // a definition in every turn's prompt, in every chat. A floor — see
+  // `promptTokensLeftOn` — so it is worded as "at least".
+  const promptCost = promptTokensLeftOn(servers, disabled)
 
   const remove = (server: McpServerInfo) => {
     setRemoveError(null)
@@ -761,6 +808,18 @@ function McpSection() {
         </Card>
       ) : (
         <Card>
+          {promptCost > 0 && (
+            <p className="border-b p-4 text-xs leading-relaxed text-muted-foreground">
+              The tools left on here put at least ~
+              <span className="font-medium text-foreground">
+                {compact(promptCost)} tokens
+              </span>{" "}
+              of definitions into every turn&rsquo;s prompt, in every chat —
+              counted from names and descriptions alone, so the true figure is
+              higher. Switching off what chats here never call is the cheapest
+              setting in the app.
+            </p>
+          )}
           {servers.map((server) => (
             <ServerRow
               key={`${server.scope}/${server.name}`}
@@ -941,6 +1000,21 @@ function ServerRow({
               )}
             />
           </button>
+        )}
+        {/* What the server costs a turn when it is on, beside the count of what
+            it offers: the number that decides whether the switch above is worth
+            flipping. A floor — see `serverPromptTokens` — and muted out while
+            the server is off, since an off server costs nothing. */}
+        {serverPromptTokens(server) > 0 && (
+          <span
+            title="Estimated from tool names and descriptions at ~4 characters per token. Parameter schemas are not in the listing, so the real figure is higher."
+            className={cn(
+              "text-xs text-muted-foreground",
+              off && "line-through opacity-60"
+            )}
+          >
+            ≥ ~{compact(serverPromptTokens(server))} tokens/turn
+          </span>
         )}
         {/* Counted where the fold is, because the number is the reason to open
             it: "3 of 56 off" is the state somebody is checking for. */}

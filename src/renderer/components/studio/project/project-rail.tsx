@@ -1,7 +1,14 @@
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
 
+import { cn } from "@/lib/utils"
 import { useProjects } from "@/lib/projects"
 import { RAIL_WIDTH } from "@/lib/store"
+import { useWorktreeChats } from "@/lib/worktree-chat/store"
+import {
+  activityOf,
+  activityTitle,
+  isRunning,
+} from "@/lib/worktree-chat/running"
 import { IconButton } from "../icon-button"
 
 /**
@@ -27,6 +34,27 @@ export function ProjectRail() {
   const sidebar = useProjects((state) => state.sidebar)
   const toggleSidebar = useProjects((state) => state.toggleSidebar)
 
+  /*
+   * Whether anything is running behind the shut column.
+   *
+   * The column collapsed is the case the whole activity story is weakest in:
+   * the rows are gone, the counts on them are gone, and a focused window rings
+   * no notification. What is left is 36px, so what it can carry is a dot — the
+   * one thing this rail can say is "there is something in there", and the way
+   * to the rest is the button it sits on.
+   *
+   * Every chat rather than the active project's: a shut column is not showing
+   * which project is which, so a dot that counted only one of them would go
+   * dark while another project was answering.
+   */
+  const chats = useWorktreeChats((state) => state.chats)
+  const sending = useWorktreeChats((state) => state.sending)
+  const asks = useWorktreeChats((state) => state.asks)
+  const activity = activityOf(chats, sending, asks)
+  // Drawn only while the column is shut. Open, the rows themselves say it, and
+  // a dot beside a list that is already spinning is a second thing to read.
+  const running = !sidebar && isRunning(activity)
+
   return (
     <div
       style={{ width: RAIL_WIDTH }}
@@ -37,7 +65,13 @@ export function ProjectRail() {
       className="absolute top-0 right-0 flex h-9 items-center justify-center"
     >
       <IconButton
-        label={sidebar ? "Hide projects" : "Show projects"}
+        label={
+          sidebar
+            ? "Hide projects"
+            : running
+              ? `Show projects — ${activityTitle(activity)}`
+              : "Show projects"
+        }
         // Into the window rather than above: the crumb bar is directly over
         // this, and the default would put the tooltip on it.
         side="bottom"
@@ -50,6 +84,26 @@ export function ProjectRail() {
           <PanelLeftOpen className="size-3.5" />
         )}
       </IconButton>
+
+      {/*
+        Over the button's corner rather than beside it: there is no width here
+        for a second thing in flow, and the dot is a mark *on* the way back
+        rather than an item of its own. `pointer-events-none` so it never
+        swallows the click meant for the button under it.
+      */}
+      {running && (
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full ring-2 ring-background",
+            // The same split the rows make: waiting is somebody's to act on and
+            // takes the hue, working is furniture.
+            activity.waiting > 0
+              ? "animate-pulse bg-primary"
+              : "bg-muted-foreground"
+          )}
+        />
+      )}
     </div>
   )
 }

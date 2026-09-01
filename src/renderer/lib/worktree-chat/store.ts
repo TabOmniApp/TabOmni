@@ -642,7 +642,23 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
   },
 
   listen() {
-    return window.desktop.onWorktreeChatEvent((event) => {
+    /*
+     * Somebody clicked the notification a finished chat rang.
+     *
+     * `select` and nothing else, because `select` already is the whole gesture:
+     * it opens the tab, shows the pane and moves the crumb, the Explorer root
+     * and the dock's shell to that chat's project. A reveal that did less would
+     * be the one way into a chat that leaves the workbench pointed elsewhere.
+     *
+     * A chat deleted between the banner being shown and it being clicked
+     * selects an id no row carries, which the pane already draws as nothing —
+     * the same state a reload with a stale `selectedId` lands in.
+     */
+    const stopReveal = window.desktop.onRevealWorktreeChat((chatId) => {
+      get().select(chatId)
+    })
+
+    const stopEvents = window.desktop.onWorktreeChatEvent((event) => {
       const { chatId } = event
 
       // The turn has stopped on something. Nothing else arrives for this chat
@@ -840,6 +856,11 @@ export const useWorktreeChats = create<WorktreeChatState>((set, get) => ({
         },
       })
     })
+
+    return () => {
+      stopEvents()
+      stopReveal()
+    }
   },
 }))
 

@@ -31,11 +31,11 @@ const shared = {
   // the first `require`.
   format: "cjs",
   outExtension: { ".js": ".cjs" },
-  // All three stay real dependencies resolved from node_modules rather than
-  // being inlined: node-pty loads a prebuilt native binary, and pg/mysql2
-  // both carry optional native/dynamic requires (pg-native, pg-cloudflare)
-  // that esbuild cannot statically resolve.
-  external: ["electron", "@lydell/node-pty", "pg", "mysql2"],
+  // It stays a real dependency resolved from node_modules rather than being
+  // inlined: node-pty loads a prebuilt native binary. `pg` and `mysql2` were
+  // external beside it — they carried dynamic requires esbuild could not
+  // resolve — and went with the Database panel.
+  external: ["electron", "@lydell/node-pty"],
   // The Settings item's icon travels inside the bundle as a data URL rather
   // than as a file read at runtime: `resources/` is not packaged — `files` in
   // package.json is `dist-electron` and `dist-renderer` — so a path would

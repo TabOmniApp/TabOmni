@@ -10,7 +10,6 @@ import {
   serveApp,
   serveNoteFiles,
 } from "./protocol"
-import type { PanelWindowView } from "../shared/api"
 
 /** Set by scripts/dev.mjs; absent in a packaged app. */
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
@@ -78,12 +77,9 @@ function isHome(url: string): boolean {
 
 let mainWindow: BrowserWindow | null = null
 
-/** The panel windows that are open, by the view each was opened for. */
-const panelWindows = new Map<PanelWindowView, BrowserWindow>()
-
-/** Where the renderer is, with `search` appended — see `openPanelWindow`. */
-function rendererUrl(search = ""): string {
-  return `${DEV_SERVER_URL ?? `${APP_ORIGIN}/index.html`}${search}`
+/** Where the renderer is. */
+function rendererUrl(): string {
+  return DEV_SERVER_URL ?? `${APP_ORIGIN}/index.html`
 }
 
 /**
@@ -118,82 +114,18 @@ function keepInside(window: BrowserWindow): void {
   })
 }
 
-/** What each panel window is called and how big it opens. */
-const PANEL_WINDOWS: Record<
-  PanelWindowView,
-  { title: string; width: number; height: number }
-> = {
-  database: { title: "Database", width: 1200, height: 780 },
-  // Narrower: a request is a form and a response beside it, where a table is a
-  // grid that keeps getting wider.
-  api: { title: "API", width: 1080, height: 760 },
-}
-
-/**
- * A panel in a window of its own, or the one already open.
- *
- * The same renderer under `?view=<panel>`, which `App.tsx` reads: the list and
- * the workspace this app already has, drawn without the workbench around them.
- * One window per panel — a second copy would be two views of one store in two
- * renderer processes, each remembering over the other.
- *
- * Native frame, including on macOS: `hiddenInset` is worth its cost only where
- * a header stands in for the title bar, and these windows have no such header.
- */
-function openPanelWindow(view: PanelWindowView): void {
-  const open = panelWindows.get(view)
-  if (open && !open.isDestroyed()) {
-    if (open.isMinimized()) open.restore()
-    open.focus()
-    return
-  }
-
-  const { title, width, height } = PANEL_WINDOWS[view]
-  const window = new BrowserWindow({
-    width,
-    height,
-    minWidth: 720,
-    minHeight: 480,
-    title,
-    backgroundColor: "#111218",
-    show: false,
-    ...(DEV_SERVER_URL && process.platform !== "darwin"
-      ? { icon: DEV_ICON }
-      : {}),
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  })
-  panelWindows.set(view, window)
-
-  window.once("ready-to-show", () => window.show())
-  window.on("closed", () => {
-    // Only if it is still this one: a window closed after another was opened
-    // for the same view would otherwise drop the live one from the map.
-    if (panelWindows.get(view) === window) panelWindows.delete(view)
-  })
-  keepInside(window)
-
-  void window.loadURL(rendererUrl(`?view=${view}`))
-}
-
 // Privileges have to be declared before the app is ready, so this runs at
 // module scope rather than inside `whenReady`.
 registerAppScheme()
 
 const {
   processes,
-  sqlConnections,
-  docker,
   terminals,
   worktreeChats,
   tsServers,
   watchers,
   noteFilePath,
-} = registerIpc(() => mainWindow, openPanelWindow)
+} = registerIpc(() => mainWindow)
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -330,8 +262,6 @@ app.on("before-quit", (event) => {
       // with nobody to reattach them to.
       Promise.allSettled([
         terminals.killAll(),
-        docker.stopAll(),
-        sqlConnections.closeAll(),
         // A turn in flight is a `claude` this app spawned; it goes with the app
         // rather than being left talking to a window that has gone.
         worktreeChats.dispose(),

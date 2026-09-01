@@ -1,5 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto"
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -8,31 +7,23 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  Notification,
   shell,
   type BrowserWindow,
   type OpenDialogOptions,
 } from "electron"
 
 import {
+  CHAT_NOTIFICATIONS_KEY,
   IPC,
-  isPanelWindowView,
   MCP_DISABLED_TOOLS_KEY,
   type BoardCard,
   type BoardColumn,
   type ChatPlace,
   type ChatSeed,
   type ClaudeProfile,
-  type DatabaseConnectionInput,
   type FileDiff,
   type FileIndexEntry,
-  type UpdateDatabaseInput,
-  type HttpCookie,
-  type HttpEnvironment,
-  type HttpFolder,
-  type HttpRequestRecord,
-  type HttpSendInput,
-  type NewDatabaseInput,
-  type PanelWindowView,
   type ReviewThread,
   type WorktreeChatAnswer,
   type WorktreeChatOptions,
@@ -42,8 +33,6 @@ import { agentModels } from "./agent-models"
 import { claudeAccount } from "./claude-auth"
 import { claudeBinary } from "./claude-bin"
 import { WorktreeChats } from "./worktree-chat"
-import { SqlConnections } from "./database"
-import { DockerRuntime } from "./docker"
 import * as files from "./files"
 import { MAX_INDEXED_FILES } from "./files"
 import {
@@ -57,13 +46,13 @@ import {
   unstage,
   workingTree,
 } from "./git"
-import { sendHttp } from "./http"
+import { ChatNotices, noticeText, type ChatNotice } from "./notify"
 import { installedMcpServers, removeMcpServer } from "./mcp-servers"
 import { ProcessManager } from "./process"
 import { reviewChanges, reviewReply } from "./review-agent"
 import { expandHome, quote } from "./shell-env"
 import { systemUsage } from "./system-usage"
-import { DEFAULT_WORKSPACE_ID, Store } from "./store"
+import { Store } from "./store"
 import { TerminalManager } from "./terminal"
 import { TsServers } from "./tsserver"
 import { checkForUpdate, startInstaller } from "./updater"
@@ -151,34 +140,22 @@ async function clipboardImagePath(): Promise<string | null> {
  * Wires every renderer-callable method onto `ipcMain`.
  *
  * Handlers are registered once for the whole app rather than per window, and
- * process output is sent to the **studio** window — the one `getWindow`
- * answers with. A panel window (`openPanelWindow`) can call every handler here,
- * since a call and its answer go back to whoever made it, but no push event is
- * sent to it: nothing the Database or API panel draws arrives that way. A
- * window that needed one would need its own manager, which is why these
- * deliberately do not.
+ * every push event goes to the **studio** window — the one `getWindow` answers
+ * with, and now the only one there is. It was not always: the Database and API
+ * panels each had a window of their own, which was affordable precisely because
+ * neither was ever *pushed* anything. Both panels are gone; see
+ * `docs/design.md` § Database and API, removed.
  */
-export function registerIpc(
-  getWindow: () => BrowserWindow | null,
-  openPanelWindow: (view: PanelWindowView) => void
-): {
+export function registerIpc(getWindow: () => BrowserWindow | null): {
   processes: ProcessManager
   /** Exposed so a turn in flight can be killed on quit. */
   worktreeChats: WorktreeChats
-  sqlConnections: SqlConnections
-  docker: DockerRuntime
   terminals: TerminalManager
   tsServers: TsServers
   watchers: DirectoryWatchers
   noteFilePath: (fileName: string) => string
 } {
   const store = new Store()
-  const sqlConnections = new SqlConnections(async (databaseId) => {
-    const info = await store.connectionInfoOf(databaseId)
-    if (!info) throw new Error(`Database not found: ${databaseId}`)
-    return info
-  })
-  const docker = new DockerRuntime()
 
   const send = (channel: string, payload: unknown): void => {
     const window = getWindow()
@@ -272,8 +249,59 @@ export function registerIpc(
       writeChat: (id, messages) => store.writeWorktreeChat(id, messages),
       deleteChat: (id) => store.deleteWorktreeChat(id),
     },
-    (event) => send(IPC.worktreeChatEvent, event)
+    (event) => {
+      send(IPC.worktreeChatEvent, event)
+      void announce(notices.read(event))
+    }
   )
+
+  const notices = new ChatNotices()
+
+  /**
+   * Rings the OS notification a chat's event turned out to deserve.
+   *
+   * **Only while the studio window is unfocused**, which is the whole point of
+   * the feature rather than a courtesy: several chats answering at once is what
+   * this app is for, and the cost of that is walking away from a window with
+   * three turns running in it. Somebody looking at the window can see the row
+   * spinning, and a banner over the composer they are typing into is noise.
+   *
+   * The title is read out of the listing at the moment the notice is due rather
+   * than tracked alongside it: a chat is named by its first message and renamed
+   * by `retitle` partway through that same turn, so a name captured when the
+   * turn started is the wrong one exactly on the turn somebody is least likely
+   * to recognise by id.
+   */
+  const announce = async (notice: ChatNotice | null): Promise<void> => {
+    if (!notice) return
+    if (!Notification.isSupported()) return
+    // Off by default is the wrong default for the one feature that says "your
+    // agent finished"; an unset key reads as on.
+    if ((await store.getSetting(CHAT_NOTIFICATIONS_KEY)) === "off") return
+
+    const window = getWindow()
+    if (window && !window.isDestroyed() && window.isFocused()) return
+
+    const chats = await worktreeChats.list()
+    const chat = chats.find((entry) => entry.id === notice.chatId)
+    // A chat with no row is one the `+` opened and nobody has spoken into, so
+    // there is nothing to call it and nothing to call somebody back to.
+    if (!chat) return
+
+    const text = noticeText(notice, chat.title)
+    const banner = new Notification({ title: text.title, body: text.body })
+    // Clicking it is the way back to the chat it is about — a notification that
+    // only tells you something happened leaves you hunting for the row.
+    banner.on("click", () => {
+      const target = getWindow()
+      if (!target || target.isDestroyed()) return
+      if (target.isMinimized()) target.restore()
+      target.show()
+      target.focus()
+      target.webContents.send(IPC.revealWorktreeChat, notice.chatId)
+    })
+    banner.show()
+  }
 
   // Asked of the user's own `claude` and held for the run — see
   // `agent-models.ts`. Not a handler that touches any of the managers above,
@@ -410,9 +438,13 @@ export function registerIpc(
     worktreeChats.read(id)
   )
 
-  ipcMain.handle(IPC.deleteWorktreeChat, (_event, id: string) =>
-    worktreeChats.delete(id)
-  )
+  ipcMain.handle(IPC.deleteWorktreeChat, (_event, id: string) => {
+    // Before the delete rather than after: a chat killed mid-turn emits no
+    // `busy: false`, so the watcher would keep it as working for the rest of
+    // the run and swallow the first quiet of whatever reused the id.
+    notices.forget(id)
+    return worktreeChats.delete(id)
+  })
 
   ipcMain.handle(IPC.clearWorktreeChat, (_event, id: string) =>
     worktreeChats.clear(id)
@@ -473,28 +505,6 @@ export function registerIpc(
         disabledTools: await disabledTools(),
       })
   )
-
-  /** The account a Docker-managed database is created with. */
-  const DB_USER = "yasuo"
-
-  function randomDbPassword(): string {
-    return randomBytes(18).toString("base64url")
-  }
-
-  /**
-   * A safe database/schema name derived from what the user typed as the
-   * display name — Postgres and MySQL both reject spaces, punctuation, and a
-   * leading digit.
-   */
-  function slugifyDbName(name: string): string {
-    const slug = name
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_]+/g, "_")
-      .replace(/^[0-9_]+/, "")
-      .slice(0, 48)
-    return slug || "db"
-  }
 
   ipcMain.handle(IPC.getWorkspace, () => store.getWorkspace())
 
@@ -572,21 +582,6 @@ export function registerIpc(
   ipcMain.handle(IPC.removeFolder, (_event, id: string) =>
     store.removeFolder(id)
   )
-
-  // Checked rather than trusted, and returning nothing on purpose: the window
-  // is main's, a handle to it is no use to the renderer, and the string that
-  // arrives names a window this process is about to open.
-  ipcMain.handle(IPC.openPanelWindow, (_event, view: unknown) => {
-    if (!isPanelWindowView(view)) throw new Error(`Unknown panel: ${view}`)
-    openPanelWindow(view)
-  })
-
-  ipcMain.handle(IPC.dockerStatus, () => {
-    // Re-probe rather than trusting a cached "no": Docker may have been
-    // started since the app launched.
-    docker.resetCheck()
-    return docker.check()
-  })
 
   ipcMain.handle(IPC.gitBranch, async (_event, folderId: string) =>
     currentBranch(await store.resolveFolderDir(folderId))
@@ -891,135 +886,6 @@ export function registerIpc(
     store.setSetting(key, value)
   )
 
-  ipcMain.handle(IPC.listDatabases, () => store.listDatabases())
-
-  ipcMain.handle(
-    IPC.createDatabase,
-    async (_event, input: NewDatabaseInput) => {
-      if (input.origin === "external") {
-        return store.addDatabase({
-          id: randomUUID(),
-          name: input.name,
-          engine: input.engine,
-          origin: "external",
-          host: input.host,
-          port: input.port,
-          user: input.user,
-          password: input.password,
-          database: input.database,
-        })
-      }
-
-      const status = await docker.check()
-      if (!status.available) throw new Error(status.reason)
-
-      const id = randomUUID()
-      const credentials = {
-        user: DB_USER,
-        password: randomDbPassword(),
-        database: slugifyDbName(input.name),
-      }
-      const dataDir = store.databaseDataDir(id)
-      // Docker will bind-mount a missing host directory into place on most
-      // setups, but not reliably on every one — the workspace's own directory
-      // is created the same way before anything is written to it.
-      await mkdir(dataDir, { recursive: true })
-      const port = await docker.ensureDatabase(
-        DEFAULT_WORKSPACE_ID,
-        id,
-        input.engine,
-        dataDir,
-        credentials
-      )
-
-      return store.addDatabase({
-        id,
-        name: input.name,
-        engine: input.engine,
-        origin: "docker",
-        host: "127.0.0.1",
-        port,
-        user: credentials.user,
-        password: credentials.password,
-        database: credentials.database,
-      })
-    }
-  )
-
-  ipcMain.handle(
-    IPC.updateDatabase,
-    async (_event, id: string, input: UpdateDatabaseInput) => {
-      const record = await store.updateDatabase(id, input)
-      // The pool was opened against the old address and credentials; the next
-      // query should reach the new ones rather than a connection to something
-      // this record no longer describes.
-      await sqlConnections.close(id)
-      return record
-    }
-  )
-
-  ipcMain.handle(IPC.deleteDatabase, async (_event, id: string) => {
-    await sqlConnections.close(id)
-    const database = await store.databaseById(id)
-    if (database?.origin === "docker") {
-      await docker.removeDatabase(id)
-      await rm(store.databaseDataDir(id), { recursive: true, force: true })
-    }
-    await store.deleteDatabase(id)
-  })
-
-  ipcMain.handle(
-    IPC.testDatabaseConnection,
-    (_event, input: DatabaseConnectionInput) =>
-      sqlConnections.testConnection(input)
-  )
-
-  ipcMain.handle(
-    IPC.dbQuery,
-    (_event, databaseId: string, sql: string, params?: unknown[]) =>
-      sqlConnections.query(databaseId, sql, params)
-  )
-
-  ipcMain.handle(
-    IPC.dbExec,
-    (
-      _event,
-      databaseId: string,
-      sql: string,
-      params?: unknown[],
-      options?: { resolveSources?: boolean }
-    ) => sqlConnections.exec(databaseId, sql, params, options)
-  )
-
-  ipcMain.handle(IPC.dbReset, async (_event, databaseId: string) => {
-    const database = await store.databaseById(databaseId)
-    if (!database) throw new Error(`Database not found: ${databaseId}`)
-    if (database.origin !== "docker") {
-      throw new Error("Only a database created here can be reset.")
-    }
-
-    await sqlConnections.close(databaseId)
-    await docker.removeDatabase(databaseId)
-    const dataDir = store.databaseDataDir(databaseId)
-    await rm(dataDir, { recursive: true, force: true })
-    await mkdir(dataDir, { recursive: true })
-
-    const info = await store.connectionInfoOf(databaseId)
-    if (!info) throw new Error(`Database not found: ${databaseId}`)
-    const port = await docker.ensureDatabase(
-      DEFAULT_WORKSPACE_ID,
-      databaseId,
-      database.engine,
-      dataDir,
-      {
-        user: info.user,
-        password: info.password,
-        database: info.database,
-      }
-    )
-    await store.setDatabasePort(databaseId, port)
-  })
-
   ipcMain.handle(
     IPC.startProcess,
     async (_event, folderId: string, command: string, args: string[]) =>
@@ -1029,36 +895,6 @@ export function registerIpc(
   ipcMain.handle(IPC.stopProcess, (_event, processId: string) => {
     processes.stop(processId)
   })
-
-  ipcMain.handle(IPC.listRequests, () => store.listRequests())
-
-  ipcMain.handle(IPC.saveRequests, (_event, requests: HttpRequestRecord[]) =>
-    store.saveRequests(requests)
-  )
-
-  ipcMain.handle(IPC.listEnvironments, () => store.listEnvironments())
-
-  ipcMain.handle(
-    IPC.saveEnvironments,
-    (_event, environments: HttpEnvironment[]) =>
-      store.saveEnvironments(environments)
-  )
-
-  ipcMain.handle(IPC.listRequestFolders, () => store.listRequestFolders())
-
-  ipcMain.handle(IPC.saveRequestFolders, (_event, folders: HttpFolder[]) =>
-    store.saveRequestFolders(folders)
-  )
-
-  ipcMain.handle(IPC.listCookies, () => store.listCookies())
-
-  ipcMain.handle(IPC.saveCookies, (_event, cookies: HttpCookie[]) =>
-    store.saveCookies(cookies)
-  )
-
-  ipcMain.handle(IPC.httpSend, (_event, input: HttpSendInput) =>
-    sendHttp(input)
-  )
 
   /*
    * The whole diff, reviewed in one turn — the same `claude` a comment's reply
@@ -1181,8 +1017,6 @@ export function registerIpc(
   return {
     processes,
     worktreeChats,
-    sqlConnections,
-    docker,
     terminals,
     tsServers,
     watchers,

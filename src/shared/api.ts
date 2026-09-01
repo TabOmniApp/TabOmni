@@ -237,116 +237,6 @@ export type FileContent =
   | { kind: "binary" }
   | { kind: "too-large"; size: number }
 
-/** Which SQL engine a database speaks. */
-export type DbEngine = "postgres" | "mysql"
-
-/**
- * Where a database's server actually runs.
- *
- * `docker` means the studio created it and owns its container and data
- * directory; `external` means it is someone else's server, reached over
- * plain TCP with credentials the user supplied.
- */
-export type DbOrigin = "docker" | "external"
-
-/**
- * A database or connection in the workspace. Never carries a password — that
- * stays inside the main process (see `electron/store.ts`'s `connectionInfoOf`)
- * and is never sent over IPC.
- *
- * Not tied to any one folder: a project's database is generally the same
- * database its frontend and its API both talk to, and filing it under one of
- * the two would only mean picking which panel is allowed to see it.
- */
-export type DatabaseRecord = {
-  id: string
-  name: string
-  engine: DbEngine
-  origin: DbOrigin
-  host: string
-  port: number
-  user: string
-  database: string
-  createdAt: string
-  updatedAt: string
-}
-
-/**
- * One condition in the data browser's filter bar.
- *
- * Values travel as parameters, never as text spliced into the statement — a
- * filter is the one place in this panel where something the user typed becomes
- * part of a `where` clause.
- */
-export type Filter = {
-  column: string
-  operator: FilterOperator
-  /** Ignored by the operators that take no value (`is null`, `is not null`). */
-  value: string
-}
-
-export type FilterOperator =
-  | "="
-  | "!="
-  | ">"
-  | ">="
-  | "<"
-  | "<="
-  | "contains"
-  | "not contains"
-  | "starts with"
-  | "ends with"
-  | "is null"
-  | "is not null"
-
-/** How a filter bar's conditions are joined. Flat: no nested groups. */
-export type FilterJoin = "and" | "or"
-
-export type FilterSet = {
-  join: FilterJoin
-  conditions: Filter[]
-}
-
-/** What can be changed about an existing connection. */
-export type UpdateDatabaseInput = {
-  name: string
-  host: string
-  port: number
-  user: string
-  /** Left out to keep the stored one — the renderer is never told it. */
-  password?: string
-  database: string
-}
-
-export type NewDatabaseInput =
-  | { name: string; engine: DbEngine; origin: "docker" }
-  | {
-      name: string
-      engine: DbEngine
-      origin: "external"
-      host: string
-      port: number
-      user: string
-      password: string
-      database: string
-    }
-
-/** What "Test connection" sends before an external connection is saved. */
-export type DatabaseConnectionInput = {
-  engine: DbEngine
-  host: string
-  port: number
-  user: string
-  password: string
-  database: string
-}
-
-export type ConnectionTestResult =
-  { ok: true; version: string } | { ok: false; error: string }
-
-export type DockerStatus =
-  { available: true; version: string } | { available: false; reason: string }
-
 /** Which stream a line of process output came from. */
 export type ProcessStream = "stdout" | "stderr"
 
@@ -905,15 +795,6 @@ export type WorktreeChatAnswer =
   | { kind: "answers"; answers: Record<string, string[]> }
 
 /**
- * Which environment the API panel has selected.
- *
- * Spelled out here rather than in the renderer's own file because it is a
- * workspace setting under a name both sides can say — the panel writes it, and
- * anything in main that has to send a request the way the panel would reads it.
- */
-export const HTTP_ENVIRONMENT_KEY = "http.environment"
-
-/**
  * How far along one MCP server's connection is, as the CLI reports it.
  *
  * The CLI's own five, plus `unknown` for a sixth it grows later: the value
@@ -944,6 +825,19 @@ export type McpServerState =
  * has fifty of them, and the list is read whole on every turn anyway.
  */
 export const MCP_DISABLED_TOOLS_KEY = "mcp.disabledTools"
+
+/**
+ * Whether a chat that finishes, fails or stops to ask rings an OS notification
+ * while the window is unfocused. `"off"` switches it off; **anything else,
+ * including unset, is on**.
+ *
+ * That default is deliberate and is the one place in Settings where an unset
+ * key does not mean "no". Several chats answering at once is what this app is
+ * for, and the only thing that makes walking away from them workable is being
+ * called back — a user who has to find the switch first has already lost the
+ * turn they walked away from.
+ */
+export const CHAT_NOTIFICATIONS_KEY = "chats.notifications"
 
 /** One tool a server offers, as a row of the Settings listing draws it. */
 export type McpToolInfo = {
@@ -1008,174 +902,6 @@ export type TerminalExit = {
   exitCode: number
   /** Set when the shell was killed by a signal rather than exiting. */
   signal: number | null
-}
-
-export type SqlField = {
-  name: string
-  /** An engine-specific type code. Only used to label columns. */
-  dataTypeID: number
-  /**
-   * Where this value actually comes from, when it's a direct column
-   * reference rather than a computed expression — and, for Postgres, when
-   * `dbExec` was asked to resolve it (see `resolveSources` below). Lets the
-   * UI treat a query's own result like a browsed table's: editable once every
-   * field traces back to one table's own row. `schema` is always `""` for
-   * MySQL, which has no notion of one separate from the database itself.
-   */
-  source?: { schema: string; table: string; column: string }
-}
-
-/**
- * One result set. Rows are arrays rather than objects so that a query selecting
- * the same column name twice — or no column name at all — still round-trips.
- */
-export type SqlResult = {
-  fields: SqlField[]
-  rows: unknown[][]
-  /** Rows written by an INSERT/UPDATE/DELETE. Absent for a SELECT. */
-  affectedRows?: number
-}
-
-/**
- * One saved HTTP request.
- *
- * Kept in the studio's own directory rather than in any of the workspace's
- * folders, so trying an endpoint never writes a file into someone's working
- * tree.
- */
-export type HttpRequestRecord = {
-  id: string
-  name: string
-  method: string
-  /** As typed. `{{name}}` variables are resolved against the active
-   * environment when the request is sent. */
-  url: string
-  headers: HttpHeader[]
-  /**
-   * Query parameters the user unticked.
-   *
-   * A ticked parameter lives in `url` and nowhere else — that is what keeps
-   * the table and the URL from disagreeing. An unticked one has no place in a
-   * URL at all, so it waits here with the position it should return to.
-   */
-  disabledParams?: HttpParkedParam[]
-  body: string
-  /**
-   * Runs after this request's response arrives — reads it, can set an
-   * environment variable. Empty or unset does nothing. Executed in a sandbox
-   * outside this app's own window (see `runPostResponseScript`), never with
-   * access to `DesktopApi`.
-   */
-  postResponseScript?: string
-  /** The folder it sits in, or `null` at the top level. */
-  folderId: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export type HttpParkedParam = {
-  name: string
-  value: string
-  /** Its row in the table, counting the parked ones. */
-  index: number
-}
-
-export type HttpHeader = {
-  name: string
-  value: string
-  /** Unticked headers are kept but not sent. */
-  enabled: boolean
-}
-
-/**
- * A group of requests, nested arbitrarily deep, that shares default headers
- * and params.
- *
- * A request has no URL of its own to round-trip a param against here, unlike
- * `HttpRequestRecord.disabledParams` — so `params` is shaped like `headers`
- * instead: every row always applies unless unticked.
- */
-export type HttpFolder = {
-  id: string
-  name: string
-  /** The folder it sits in, or `null` at the top level. */
-  parentId: string | null
-  headers: HttpHeader[]
-  params: HttpHeader[]
-  createdAt: string
-  updatedAt: string
-}
-
-/**
- * A named set of variables, chosen one at a time.
- *
- * `{{name}}` is substituted anywhere in a request — URL, headers, body — so
- * the same collection can be pointed at local, staging or a colleague's
- * machine without editing every request.
- */
-export type HttpEnvironment = {
-  id: string
-  name: string
-  variables: HttpVariable[]
-}
-
-export type HttpVariable = {
-  name: string
-  value: string
-}
-
-/**
- * One cookie in the workspace's jar.
- *
- * Enough of RFC 6265 to be useful against a dev server, and no more: domain
- * and path matching, expiry, and `secure`. There is no browsing context here,
- * so `SameSite` has nothing to be same-site *with*, and `httpOnly` is kept
- * only to be shown — nothing in this app is a document that could read it.
- */
-export type HttpCookie = {
-  name: string
-  value: string
-  /** Never with a leading dot: `example.com`, matching `api.example.com`. */
-  domain: string
-  /** Set without a `Domain` attribute, so only its exact host may have it. */
-  hostOnly: boolean
-  path: string
-  /** ISO 8601, or null for a cookie that was given no lifetime. */
-  expiresAt: string | null
-  secure: boolean
-  httpOnly: boolean
-}
-
-export type HttpSendInput = {
-  method: string
-  /** Already resolved: the main process sends exactly this. */
-  url: string
-  headers: { name: string; value: string }[]
-  /** Omitted for methods that carry no body. */
-  body: string | null
-  timeoutMs: number
-}
-
-export type HttpResponseResult = {
-  status: number
-  statusText: string
-  headers: Record<string, string>
-  /** The payload as text, or a description of it when it is not text. */
-  body: string
-  /** Whether `body` is the payload itself rather than a stand-in for bytes. */
-  isText: boolean
-  /** Bytes received. */
-  size: number
-  /** Round trip, in milliseconds. */
-  timeMs: number
-  /**
-   * `Set-Cookie` lines, unparsed and unjoined.
-   *
-   * Separate from `headers` because a response may set several, and folding
-   * them into one comma-joined string — which is all a plain header map can
-   * hold — cannot be undone: an `Expires` date has a comma in it.
-   */
-  setCookies: string[]
 }
 
 /**
@@ -2271,22 +1997,6 @@ export type DesktopApi = {
   /** Subscribes to the File menu. Returns an unsubscribe function. */
   onMenuCommand: (listener: (command: MenuCommand) => void) => () => void
 
-  /**
-   * Opens a panel in a window of its own, or focuses the one already open.
-   *
-   * The windows this app has besides the studio. Each loads the same renderer
-   * with `?view=<panel>`, so what it draws is the panel this app already has
-   * rather than a second implementation of it — and neither holds a
-   * subscription, because everything these two panels ask for (`db:query`,
-   * `databases:list`, `docker:status`, `http:*`) is a call and an answer. Main
-   * still sends its push events to the studio window alone.
-   */
-  openPanelWindow: (view: PanelWindowView) => Promise<void>
-
-  /** Whether Docker is available, and why not when it is not — used when
-   * creating a Docker-managed database. */
-  dockerStatus: () => Promise<DockerStatus>
-
   /** The branch checked out in a folder, or null when it is not a git
    * repository. */
   gitBranch: (folderId: string) => Promise<string | null>
@@ -2345,65 +2055,6 @@ export type DesktopApi = {
 
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
-
-  /** Every database or connection in the workspace. */
-  listDatabases: () => Promise<DatabaseRecord[]>
-  /**
-   * Adds a database: either a new one in a Docker container, or a connection
-   * to one that already exists.
-   */
-  createDatabase: (input: NewDatabaseInput) => Promise<DatabaseRecord>
-  /**
-   * Removes a database. For a Docker-managed one, this also removes its
-   * container and data directory; for a connection, only the record goes — the
-   * server itself is untouched.
-   */
-  /**
-   * Changes a connection's details. Only for one the studio did not create:
-   * a Docker-managed database's address is Docker's to decide and its
-   * credentials were baked into the container, so nothing here could be
-   * edited into anything but a broken record.
-   */
-  updateDatabase: (
-    id: string,
-    input: UpdateDatabaseInput
-  ) => Promise<DatabaseRecord>
-  deleteDatabase: (id: string) => Promise<void>
-  /** Tries a connection without saving it, for the "Test connection" button. */
-  testDatabaseConnection: (
-    input: DatabaseConnectionInput
-  ) => Promise<ConnectionTestResult>
-
-  /**
-   * Runs one parameterised statement against a database and returns
-   * object-shaped rows.
-   */
-  dbQuery: <T>(
-    databaseId: string,
-    sql: string,
-    params?: unknown[]
-  ) => Promise<T[]>
-  /**
-   * Runs `sql` and returns one array-shaped result per statement. A statement
-   * with parameters must be sent on its own: binding needs the extended
-   * protocol, which handles a single statement.
-   */
-  dbExec: (
-    databaseId: string,
-    sql: string,
-    params?: unknown[],
-    /** `resolveSources: true` fills in each field's `source` (see
-     * `SqlField`) — an extra round trip for Postgres, so it's opt-in rather
-     * than paid by every call (schema introspection, the Data tab's paging,
-     * …) that has no use for it. */
-    options?: { resolveSources?: boolean }
-  ) => Promise<SqlResult[]>
-  /**
-   * Deletes a Docker-managed database's data and recreates it empty. Rejects
-   * for a connection to an external database — resetting someone else's
-   * database is not this app's call to make.
-   */
-  dbReset: (databaseId: string) => Promise<void>
 
   /**
    * The Explorer's reads and writes, over the workspace's own folders.
@@ -2507,24 +2158,6 @@ export type DesktopApi = {
   /** Subscribes to those directories changing. Returns an unsubscribe
    * function. */
   onDirectoryChanged: (listener: (event: DirectoryChange) => void) => () => void
-
-  /** The workspace's saved requests, oldest first. */
-  listRequests: () => Promise<HttpRequestRecord[]>
-  /** Replaces the whole collection: the renderer owns the list, and one write
-   * per change keeps the file and the panel from drifting apart. */
-  saveRequests: (requests: HttpRequestRecord[]) => Promise<void>
-  /** The workspace's environments. */
-  listEnvironments: () => Promise<HttpEnvironment[]>
-  saveEnvironments: (environments: HttpEnvironment[]) => Promise<void>
-
-  /** The groups those requests are filed under — not to be confused with the
-   * workspace's own folders, which are directories on disk. */
-  listRequestFolders: () => Promise<HttpFolder[]>
-  saveRequestFolders: (folders: HttpFolder[]) => Promise<void>
-
-  /** The workspace's cookie jar. */
-  listCookies: () => Promise<HttpCookie[]>
-  saveCookies: (cookies: HttpCookie[]) => Promise<void>
 
   /**
    * The models the user's own `claude` offers, for the composer's picker.
@@ -2712,6 +2345,15 @@ export type DesktopApi = {
   onWorktreeChatEvent: (
     listener: (event: WorktreeChatEvent) => void
   ) => () => void
+  /**
+   * A chat somebody asked to be taken to, by clicking its notification.
+   *
+   * The one push event on this channel that main sends on a *user's* gesture
+   * rather than off the CLI's stream, and it carries no state — the renderer
+   * already has the chat; what it does not have is the click, which happened in
+   * the OS rather than in the window. Returns an unsubscribe.
+   */
+  onRevealWorktreeChat: (listener: (chatId: string) => void) => () => void
 
   /**
    * One review comment, answered by a read-only turn in that checkout.
@@ -2829,13 +2471,6 @@ export type DesktopApi = {
    * are files rather than data URLs in the document.
    */
   writeNoteFile: (fileName: string, bytes: Uint8Array) => Promise<void>
-
-  /**
-   * Sends one request from the main process rather than the renderer, which
-   * puts it outside the page's origin: no CORS preflight, no cookie jar, and
-   * headers a browser would refuse to set are sent as typed.
-   */
-  httpSend: (input: HttpSendInput) => Promise<HttpResponseResult>
 
   /** Runs a command in one of the folders; resolves with its process id. */
   startProcess: (
@@ -2958,24 +2593,6 @@ export type MenuCommand =
   | "toggle-terminal"
   | "open-settings"
 
-/**
- * The panels that can be opened in a window of their own.
- *
- * The two lists the left column no longer draws (`SIDEBAR_SECTIONS` is
- * `projects` and nothing else), and the two panels that hold nothing arriving
- * over a push event — see `openPanelWindow`. It is a `view=` in the renderer's
- * own URL, so `isPanelWindowView` below is what main checks a value against
- * before building one: a string from the renderer names a window this app is
- * about to open.
- */
-export type PanelWindowView = "database" | "api"
-
-export const PANEL_WINDOW_VIEWS: PanelWindowView[] = ["database", "api"]
-
-export function isPanelWindowView(value: unknown): value is PanelWindowView {
-  return PANEL_WINDOW_VIEWS.includes(value as PanelWindowView)
-}
-
 /** IPC channel names, shared so main and preload cannot drift apart. */
 export const IPC = {
   getWorkspace: "workspace:get",
@@ -2988,13 +2605,6 @@ export const IPC = {
   readImageDataUrl: "files:read-image-data-url",
   clipboardImagePath: "files:clipboard-image-path",
   menuCommand: "menu:command",
-  openPanelWindow: "window:open-panel",
-  dockerStatus: "docker:status",
-  listDatabases: "databases:list",
-  createDatabase: "databases:create",
-  updateDatabase: "databases:update",
-  deleteDatabase: "databases:delete",
-  testDatabaseConnection: "databases:test-connection",
   gitBranch: "git:branch",
   gitStatus: "git:status",
   gitChanges: "git:changes",
@@ -3005,9 +2615,6 @@ export const IPC = {
   fileDiff: "git:file-diff",
   getSetting: "settings:get",
   setSetting: "settings:set",
-  dbQuery: "db:query",
-  dbExec: "db:exec",
-  dbReset: "db:reset",
   listDirectory: "files:list",
   readTextFile: "files:read-text",
   writeTextFile: "files:write-text",
@@ -3026,15 +2633,6 @@ export const IPC = {
   tsClose: "ts:close",
   tsHover: "ts:hover",
   tsDefinition: "ts:definition",
-  listRequests: "http:list",
-  saveRequests: "http:save",
-  listEnvironments: "http:list-environments",
-  saveEnvironments: "http:save-environments",
-  listRequestFolders: "http:list-folders",
-  saveRequestFolders: "http:save-folders",
-  listCookies: "http:list-cookies",
-  saveCookies: "http:save-cookies",
-  httpSend: "http:send",
   agentModels: "agent:models",
   agentCommands: "agent:commands",
   installedMcpServers: "mcp:installed",
@@ -3054,6 +2652,7 @@ export const IPC = {
   sendWorktreeChat: "worktree-chats:send",
   stopWorktreeChat: "worktree-chats:stop",
   worktreeChatEvent: "worktree-chats:event",
+  revealWorktreeChat: "worktree-chats:reveal",
   replyToReviewComment: "review:reply",
   reviewChanges: "review:changes",
   reviewProgress: "review:progress",

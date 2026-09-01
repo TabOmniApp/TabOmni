@@ -34,7 +34,7 @@ import { useWorktreeChats } from "@/lib/worktree-chat/store"
 type Entry = {
   value: string
   label: string
-  /** The right-hand line: which database, which URL, who sent it. */
+  /** The right-hand line: which project a file or a chat is in. */
   hint?: string
   /** Everything a search should match, the label and the hint included. */
   keywords: string[]
@@ -45,7 +45,7 @@ type Entry = {
    * Nothing here can fail any more: opening a file is a read, and a chat or a
    * board is a `select` on a store. It resolved to *why* it could not be
    * opened while a table was a row — that one dialled a server first — and the
-   * Database panel has its own window now.
+   * Database panel is gone.
    */
   open: () => Promise<void>
 }
@@ -82,9 +82,8 @@ type Notice = { text: string }
  * currently in, and none of them is where they would go back to afterwards.
  * This is the way in that does not move the columns: type a name, get the tab.
  *
- * Database and API are not in it, and that is not an oversight: both panels
- * open in a window of their own, and neither is a pane this window draws — see
- * `PANES` in `lib/store.ts`.
+ * It listed tables and saved requests too, until the Database and API panels
+ * were deleted; see `docs/design.md` § Database and API, removed.
  *
  * It opens things and nothing more. There is no "commands" half — a palette
  * that also ran actions would be the second place every action is spelled out,
@@ -245,7 +244,7 @@ function Palette({ onOpened }: { onOpened: () => void }) {
       <CommandList className="max-h-[min(60vh,24rem)]">
         <CommandEmpty className="text-muted-foreground">
           {tabs.length === 0
-            ? "Nothing to open yet. Connect a database or add a request."
+            ? "Nothing to open yet. Add a project and start a chat in it."
             : "No match."}
         </CommandEmpty>
 
@@ -435,13 +434,6 @@ function useEntries(query: string): Group[] {
         entries: fileEntries,
         available: files.length > 0,
       },
-      /*
-       * No `Database` or `API` group. Both panels open in a window of their own
-       * and neither is a pane the studio draws any more (`PANES` in
-       * `lib/store.ts` says why), so a row here would select a tab into a strip
-       * that never shows it — found, opened, and invisible. Each window has its
-       * own list down its left side, which is the way in that is still there.
-       */
       {
         kind: "chats",
         heading: "Chats",

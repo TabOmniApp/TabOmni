@@ -11,8 +11,12 @@ import {
 import { Input } from "@/components/ui/input"
 
 /**
- * Renames something that has a name and an `alter` behind it — a table, a
- * column — from wherever the rename was asked for.
+ * Renames something that has a name and a call behind it, from wherever the
+ * rename was asked for.
+ *
+ * It lived under `components/studio/db/` while a table and a column were its
+ * two callers; the Explorer's tree is the one left, and it moved up here rather
+ * than into `files/` because nothing about it is a file's.
  *
  * Mount it only while renaming (`{renaming && <RenameDialog …>}`): the current
  * name seeds the field once, on mount, rather than being kept in sync with a

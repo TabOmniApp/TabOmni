@@ -1,5 +1,5 @@
 import type { ComponentType } from "react"
-import { Database, FolderTree, Send } from "lucide-react"
+import { FolderTree } from "lucide-react"
 
 import { SECTION_IDS, type Section } from "@/lib/sections"
 
@@ -37,8 +37,6 @@ const SECTION_MARKS: Record<
   { label: string; Icon: ComponentType<{ className?: string }> }
 > = {
   files: { label: "Explorer", Icon: FolderTree },
-  database: { label: "Database", Icon: Database },
-  api: { label: "API", Icon: Send },
 }
 
 export const SECTIONS: {
@@ -58,6 +56,4 @@ export const SECTIONS: {
  */
 export const SECTION_ACCENT: Record<Section, string> = {
   files: "var(--section-files)",
-  database: "var(--section-database)",
-  api: "var(--section-api)",
 }

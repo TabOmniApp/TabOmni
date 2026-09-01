@@ -1,4 +1,4 @@
-import type { McpServerInfo, McpServerState } from "@shared/api"
+import type { McpServerInfo, McpServerState, McpToolInfo } from "@shared/api"
 
 /**
  * The listing in Settings › MCP, minus the drawing.
@@ -121,6 +121,52 @@ export function withServerOff(
     (name) => name !== prefix && !name.startsWith(`${prefix}__`)
   )
   return off ? [...others, prefix] : others
+}
+
+/**
+ * A floor on what one server's tools cost in every turn's prompt, in tokens.
+ *
+ * The real number is only measurable from inside a session — the window meter's
+ * `System tools` slice is it — but the switch is in Settings, where no session
+ * is running, so the listing's own material is counted instead: each tool's
+ * wire name and description at the usual ~4 characters per token. What the
+ * listing does not carry is the parameter schema, which often doubles a
+ * definition, so this is short of the truth and said as a floor. A floor still
+ * answers the question the switch is asking: a connector reading "at least 8k a
+ * turn" is worth switching off whether the truth is 8k or 16k.
+ */
+export function serverPromptTokens(server: McpServerInfo): number {
+  return Math.round(
+    server.tools.reduce((sum, tool) => sum + toolChars(server, tool) / 4, 0)
+  )
+}
+
+/**
+ * The same floor over everything still switched on, for the sentence above the
+ * listing: what the current setting hands every turn of every chat.
+ */
+export function promptTokensLeftOn(
+  servers: McpServerInfo[],
+  disabled: string[]
+): number {
+  return Math.round(
+    servers.reduce((sum, server) => {
+      if (isServerOff(disabled, server.name)) return sum
+      return server.tools.reduce(
+        (inner, tool) =>
+          isToolOff(disabled, server.name, tool.name)
+            ? inner
+            : inner + toolChars(server, tool) / 4,
+        sum
+      )
+    }, 0)
+  )
+}
+
+function toolChars(server: McpServerInfo, tool: McpToolInfo): number {
+  return (
+    wireName(server.name, tool.name).length + (tool.description?.length ?? 0)
+  )
 }
 
 /** Where an account's connectors are turned on and signed in. */

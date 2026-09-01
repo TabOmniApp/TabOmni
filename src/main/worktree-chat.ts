@@ -124,6 +124,10 @@ type Live = {
   /** The chat's toolbar as it stands, read by `permits` and by the `onAsk`
    * below at the moment of the call rather than when the session opened. */
   options: WorktreeChatOptions
+  /** The permission whose sentence last went at the head of a message in this
+   * session — see `headed`. Null until the first message, so a fresh session is
+   * always told its mode. */
+  saidMode: ChatPermission | null
   /** Whether the CLI is working on something — the same thing the renderer is
    * told. Held here because `reap` must not close a session mid-turn. */
   busy: boolean
@@ -302,10 +306,11 @@ const PERMISSIONS: Record<
     /** What this mode runs without being asked, checked in this process by
      * `permitting`. Undefined is "everything" — only `full`. */
     allowed?: string[]
-    /** Put at the head of the message rather than into the system prompt. The
-     * system prompt is part of the cached prefix, and a per-mode one cost a
-     * full re-write on every switch: 42,345 tokens written and none read,
-     * against 103 for a turn that changed nothing. */
+    /** Put at the head of the message rather than into the system prompt — and
+     * only on the message where the mode moved, see `headed`. The system
+     * prompt is part of the cached prefix, and a per-mode one cost a full
+     * re-write on every switch: 42,345 tokens written and none read, against
+     * 103 for a turn that changed nothing. */
     prompt?: string
     /** Whether a turn may stop and put an *arbitrary* unpermitted call on
      * screen rather than refusing it outright. `onAsk` is handed to
@@ -609,24 +614,40 @@ export class WorktreeChats {
     const options = chatOptions(chat.options)
 
     await this.append(id, { id: lineId(), role: "user", text: prompt })
+    await this.deliver(id, cwd, options, prompt)
+  }
 
-    /*
-     * The mode's own sentence at the head of the message, not in the system
-     * prompt.
-     *
-     * The reason it goes here is now doubled. It was the cached prefix: a
-     * per-mode system prompt cost a full re-write on every switch. It is also
-     * the only place it *can* go — one session serves every mode this chat is
-     * ever put in, and the prompt it was opened with cannot be rewritten for a
-     * message sent under a different one.
-     */
+  /**
+   * The mode's own sentence at the head of the message, not in the system
+   * prompt — and only when the mode has *moved*.
+   *
+   * The reason it is on the message is doubled. It was the cached prefix: a
+   * per-mode system prompt cost a full re-write on every switch. It is also
+   * the only place it *can* go — one session serves every mode this chat is
+   * ever put in, and the prompt it was opened with cannot be rewritten for a
+   * message sent under a different one.
+   *
+   * The reason it is not on *every* message is what the sentence costs once it
+   * has been read: the conversation already carries it, so repeating it on each
+   * of a long chat's messages is the same paragraph billed forty times for a
+   * model that read it on the first. `saidMode` is per session rather than per
+   * chat, so the one case where the context may not carry it — a fresh session
+   * under an id the profile switch could not carry (`isSessionMissing`) — says
+   * it again, at worst once per reopened session. A mode with no sentence
+   * (`edits`, `full`) still records itself, so switching away and back says the
+   * new mode's sentence rather than trusting a stale one.
+   */
+  private headed(
+    live: Live,
+    options: WorktreeChatOptions,
+    prompt: string
+  ): string {
+    const said = live.saidMode
+    live.saidMode = options.permission
+
     const permission = PERMISSIONS[options.permission] ?? PERMISSIONS.edits
-    await this.deliver(
-      id,
-      cwd,
-      options,
-      permission.prompt ? `${permission.prompt}\n\n${prompt}` : prompt
-    )
+    if (!permission.prompt || said === options.permission) return prompt
+    return `${permission.prompt}\n\n${prompt}`
   }
 
   /**
@@ -644,7 +665,7 @@ export class WorktreeChats {
     id: string,
     cwd: string,
     options: WorktreeChatOptions,
-    message: string
+    prompt: string
   ): Promise<void> {
     // Asked per message rather than held, because Settings can be changed
     // between two messages in the same chat — and unlike the model, this is an
@@ -680,7 +701,7 @@ export class WorktreeChats {
         this.retune(live, options)
         // The CLI queues it behind whatever it is doing, which is the whole
         // point: this is the path a message typed mid-answer takes.
-        open.send(message)
+        open.send(this.headed(live, options, prompt))
         return
       }
       // Either it died, or something it was started with has moved. Neither is
@@ -699,6 +720,7 @@ export class WorktreeChats {
       model: options.model,
       effort: options.effort,
       options,
+      saidMode: null,
       // Ahead of the CLI saying so: the message this is being opened for is
       // about to go in, and a session that read as idle for the second it takes
       // to come up is one `reap` could close under the message.
@@ -769,7 +791,9 @@ export class WorktreeChats {
       configDir,
       disabledTools,
       resume,
-      message
+      // Headed here rather than inside `open`, so the retry paths there resend
+      // the exact message that failed instead of deciding the head twice.
+      this.headed(entry, options, prompt)
     )
 
     await entry.opening

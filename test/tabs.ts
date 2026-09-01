@@ -20,12 +20,12 @@ import { check, finish, section } from "./harness"
  */
 
 /** Ids as the strip builds them, short enough to read in a failure. */
-const t1 = `${PREFIX.database}public.users`
-const t2 = `${PREFIX.database}public.orders`
-const t3 = `${PREFIX.database}public.items`
-const a1 = `${PREFIX.api}req-1`
-const a2 = `${PREFIX.api}req-2`
-const x1 = `${PREFIX.worktree}chat-1`
+const t1 = `${PREFIX.files}/w/src/users.ts`
+const t2 = `${PREFIX.files}/w/src/orders.ts`
+const t3 = `${PREFIX.files}/w/src/items.ts`
+const a1 = `${PREFIX.worktree}chat-1`
+const a2 = `${PREFIX.worktree}chat-2`
+const x1 = `${PREFIX.changes}root-1`
 
 const tab = (id: string) => ({ id })
 const ids = (items: { id: string }[]) => items.map((item) => item.id)
@@ -127,16 +127,16 @@ check("neither does one in an empty strip", neighbour([], t1) === null)
 
 section("ids carry their panel")
 
-check("a table id names the database panel", kindOf(t1) === "database")
-check("a request id names the api panel", kindOf(a1) === "api")
-check("a chat id names the worktree panel", kindOf(x1) === "worktree")
+check("a file id names the files panel", kindOf(t1) === "files")
+check("a chat id names the worktree panel", kindOf(a1) === "worktree")
+check("a changes id names the changes panel", kindOf(x1) === "changes")
 check("an unprefixed id names none", kindOf("public.users") === null)
 
 /**
  * Every pane, not the three that happened to be spelled out above.
  *
- * `kindOf` was a hand-written list of five against a `PREFIX` map of six, and
- * the missing one was `changes` — which made that tab unselectable and
+ * `kindOf` was a hand-written list against a longer `PREFIX` map, and the
+ * missing one was `changes` — which made that tab unselectable and
  * uncloseable, silently, because both callers give up on a null. The checks
  * above did not catch it because they name the panels one at a time. This one
  * cannot miss a panel: it is the map.
@@ -151,12 +151,12 @@ check(
   )
 )
 
-check("the prefix comes back off", bare(t1, "database") === "public.users")
+check("the prefix comes back off", bare(t1, "files") === "/w/src/users.ts")
 check(
-  // A schema-qualified name is the id here, and `bare` must take the prefix
-  // off and nothing else — a second colon belongs to the panel, not to us.
+  // An absolute path is the id here, and `bare` must take the prefix off and
+  // nothing else — a second colon belongs to the panel, not to us.
   "an id carrying a colon of its own survives the round trip",
-  bare(`${PREFIX.database}a:b`, "database") === "a:b"
+  bare(`${PREFIX.files}a:b`, "files") === "a:b"
 )
 
 /**

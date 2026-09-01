@@ -1,4 +1,4 @@
-import { Database, Plus, Search, Send, Settings } from "lucide-react"
+import { Plus, Search, Settings } from "lucide-react"
 
 import { usePalette } from "@/lib/palette"
 import {
@@ -6,8 +6,6 @@ import {
   useProjects,
   type SidebarSection,
 } from "@/lib/projects"
-import { RequestList } from "./api/request-list"
-import { DatabaseTree } from "./db/database-tree"
 import { IconButton } from "./icon-button"
 import { PanelHeader, type Fold } from "./panel-header"
 import { ProjectsSection } from "./project/projects-section"
@@ -16,13 +14,13 @@ import { SideRow } from "./side-row"
 /**
  * The window's left column: `Search`, then whatever `SIDEBAR_SECTIONS` lists.
  *
- * **Projects, and nothing under it right now.** The column stacked three —
- * `Projects` / `Database` / `API`, each folding — and `Database` and `API` are
- * hidden for the moment, so this is Conductor's left column: the projects and
- * their branches with the whole height to themselves. Hidden, not removed. Both
- * panels, their stores, their panes and their tabs are untouched, `⌘P` still
- * finds every table and request, the footer opens either in a window of its
- * own, and bringing one back into the column is a line in `SIDEBAR_SECTIONS`.
+ * **Projects, and nothing else.** The column stacked three — `Projects` /
+ * `Database` / `API`, each folding — and the other two were hidden behind
+ * `SIDEBAR_SECTIONS` for a while before both panels were deleted outright. So
+ * this is Conductor's left column: the projects and their chats with the whole
+ * height to themselves. `SIDEBAR_SECTIONS` is still the one line saying which
+ * sections are drawn, and still worth keeping as a list — the next section to
+ * arrive is an entry rather than a rewrite.
  *
  * The Explorer was never one of them, and that is the asymmetry worth stating:
  * a file tree is the contents of the thing being worked on rather than a list of
@@ -95,29 +93,10 @@ export function WorkspaceSidebar({
           badge and a help link: this app has no account, and `⌘,` was the only
           way to the dialog — a preference nobody can find is a preference
           nobody changes. */}
-      {/* The panels at the left end, Settings at the right: they are unrelated,
-          and all three sitting together would read as one group of controls
-          over the same thing. */}
-      <div className="flex h-8 shrink-0 items-center justify-between border-t px-3">
-        {/* The way to the two panels this column no longer draws: a window
-            each, which is also where they are least in the way of the
-            projects. */}
-        <div className="flex items-center gap-1">
-          <IconButton
-            label="Database window"
-            onClick={() => void window.desktop.openPanelWindow("database")}
-            className="size-5 shrink-0"
-          >
-            <Database className="size-3.5" />
-          </IconButton>
-          <IconButton
-            label="API window"
-            onClick={() => void window.desktop.openPanelWindow("api")}
-            className="size-5 shrink-0"
-          >
-            <Send className="size-3.5" />
-          </IconButton>
-        </div>
+      {/* Settings alone, at the right. Two buttons stood at the left end of
+          this bar — a window each for the Database and API panels — and went
+          with the panels. */}
+      <div className="flex h-8 shrink-0 items-center justify-end border-t px-3">
         <IconButton
           label="Settings"
           onClick={onOpenSettings}
@@ -133,8 +112,6 @@ export function WorkspaceSidebar({
 /** What each section is called, in the column and in its own header. */
 const TITLES: Record<SidebarSection, string> = {
   projects: "Projects",
-  database: "Database",
-  api: "API",
 }
 
 /**
@@ -195,11 +172,7 @@ function Section({
             <ProjectsSection />
           </div>
         </>
-      ) : id === "database" ? (
-        <DatabaseTree fold={fold} />
-      ) : (
-        <RequestList fold={fold} />
-      )}
+      ) : null}
     </div>
   )
 }

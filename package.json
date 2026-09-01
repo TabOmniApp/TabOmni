@@ -1,7 +1,7 @@
 {
   "name": "yasuo",
   "productName": "Yasuo",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -17,7 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
-  "//dependencies": "Only what the packaged app loads at runtime. Everything the renderer uses is bundled by Vite and everything the main process uses is bundled by esbuild, so it belongs below — these three are the esbuild externals, which stay real files in node_modules because node-pty loads a prebuilt binary and pg/mysql2 carry dynamic requires esbuild cannot resolve.",
+  "//dependencies": "Only what the packaged app loads at runtime. Everything the renderer uses is bundled by Vite and everything the main process uses is bundled by esbuild, so it belongs below — node-pty is the one esbuild external left, and it stays a real file in node_modules because it loads a prebuilt binary. `pg` and `mysql2` were here for the Database panel and went with it.",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.241",
     "@blocknote/core": "^0.53.0",
@@ -26,7 +26,6 @@
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-json": "^6.0.2",
-    "@codemirror/lang-sql": "^6.10.0",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
     "@codemirror/merge": "^6.12.2",
@@ -34,9 +33,7 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "6.43.8",
     "@lezer/highlight": "^1.2.3",
-    "@lydell/node-pty": "1.2.0-beta.14",
-    "mysql2": "^3.15.2",
-    "pg": "^8.16.3"
+    "@lydell/node-pty": "1.2.0-beta.14"
   },
   "devDependencies": {
     "@base-ui/react": "^1.6.0",
@@ -48,7 +45,6 @@
     "@tailwindcss/postcss": "^4",
     "@tanstack/react-virtual": "^3.14.9",
     "@types/node": "^20",
-    "@types/pg": "^8.15.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@typescript-eslint/eslint-plugin": "^8.60.0",

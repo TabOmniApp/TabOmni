@@ -15,56 +15,12 @@ import type {
   BoardColumn,
   ReviewThread,
   ClaudeProfile,
-  DatabaseRecord,
-  DbEngine,
-  DbOrigin,
-  HttpCookie,
-  HttpEnvironment,
-  HttpFolder,
-  HttpRequestRecord,
   WorktreeChat,
-  UpdateDatabaseInput,
   WorkspaceFolder,
   WorkspaceRecord,
 } from "../shared/api"
 import { withConfigDirs } from "./claude-profiles"
 import { dataDir } from "./data-dir"
-import { decrypt, encrypt } from "./encryption"
-
-/** A `DatabaseRecord`'s own credential, held only in the manifest file. */
-type StoredDatabaseRecord = DatabaseRecord & { encryptedPassword: string }
-
-/** Everything `SqlConnections` needs to open a live connection. */
-export type ConnectionInfo = {
-  engine: DbEngine
-  host: string
-  port: number
-  user: string
-  password: string
-  database: string
-}
-
-/**
- * Strips the encrypted credential before a record crosses into the renderer.
- *
- * Named field by field rather than a `{ encryptedPassword, ...rest }` spread,
- * so a field added to `StoredDatabaseRecord` later has to be added here too
- * before it can leak across the boundary this exists to guard.
- */
-function toPublicRecord(stored: StoredDatabaseRecord): DatabaseRecord {
-  return {
-    id: stored.id,
-    name: stored.name,
-    engine: stored.engine,
-    origin: stored.origin,
-    host: stored.host,
-    port: stored.port,
-    user: stored.user,
-    database: stored.database,
-    createdAt: stored.createdAt,
-    updatedAt: stored.updatedAt,
-  }
-}
 
 /**
  * The id of the workspace every install starts with.
@@ -80,27 +36,16 @@ export const DEFAULT_WORKSPACE_ID = "default"
  * any of the folders it points at.
  *
  * That separation is the whole rule: a folder is somebody's repository, and the
- * studio writes nothing into it that the user did not ask for. Requests,
- * cookies and notes are the studio's, so they live here.
+ * studio writes nothing into it that the user did not ask for. A chat's lines,
+ * a board's cards and a Claude profile's config directory are the studio's, so
+ * they live here.
+ *
+ * A workspace that ran an older build still has `requests.json`,
+ * `environments.json`, `folders.json`, `cookies.json` and a `db/` directory
+ * under here from the Database and API panels. Nothing reads them and nothing
+ * deletes them, for the reason `mail.json` outlived its own panel.
  */
 export const WORKSPACE_DIR = "workspace"
-
-/**
- * Where the workspace's Docker-managed databases keep their data — see
- * `databaseDataDir`, one subdirectory per database.
- */
-export const DB_DIR = "db"
-
-/** The workspace's saved HTTP requests. */
-export const REQUESTS_FILE = "requests.json"
-
-/** Cookies picked up from responses. */
-export const COOKIES_FILE = "cookies.json"
-
-/** The environments those requests are sent against. Its own file: an
- * environment holds hostnames and tokens, which is not the same kind of thing
- * as the requests themselves. */
-export const ENVIRONMENTS_FILE = "environments.json"
 
 /** The workspace's `CLAUDE_CONFIG_DIR` profiles — see `ClaudeProfile`. */
 export const CLAUDE_PROFILES_FILE = "claude-profiles.json"
@@ -115,9 +60,6 @@ export const CLAUDE_PROFILES_FILE = "claude-profiles.json"
  * `Personal` must not be one login.
  */
 export const CLAUDE_PROFILES_DIR = "claude-profiles"
-
-/** The groups those requests are filed under. */
-export const FOLDERS_FILE = "folders.json"
 
 /**
  * The chats held in the workspace's projects — their listing; each chat's lines
@@ -214,8 +156,20 @@ function ownId(id: string): string {
 
 type Manifest = {
   workspace: WorkspaceRecord
-  databases: StoredDatabaseRecord[]
   settings: Record<string, string>
+  /**
+   * The Database panel's records, carried through untouched.
+   *
+   * The panel is gone (`docs/design.md` § Database and API, removed) and
+   * nothing here reads this any more — but a manifest is **rewritten whole** on
+   * every settings change and every folder added, so dropping the key would
+   * delete somebody's saved connections, encrypted passwords and all, the first
+   * time they changed a preference. That is the difference between this and
+   * `mail.json` or `tasks.json`, which survive by being files nobody opens.
+   *
+   * `unknown` on purpose: this is data to preserve, not data to understand.
+   */
+  databases?: unknown
 }
 
 function emptyWorkspace(): WorkspaceRecord {
@@ -272,7 +226,7 @@ export class Store {
       raw = await readFile(this.manifestPath, "utf8")
     } catch (error) {
       if (isNotFound(error)) {
-        return { workspace: emptyWorkspace(), databases: [], settings: {} }
+        return { workspace: emptyWorkspace(), settings: {} }
       }
       throw error
     }
@@ -291,8 +245,12 @@ export class Store {
         name: workspace?.name ?? "Workspace",
         folders: workspace?.folders ?? [],
       },
-      databases: manifest.databases ?? [],
       settings: manifest.settings ?? {},
+      // Only when it is there, so a manifest written since keeps its shape
+      // rather than growing a `"databases": undefined` back.
+      ...(manifest.databases === undefined
+        ? {}
+        : { databases: manifest.databases }),
     }
   }
 
@@ -385,149 +343,6 @@ export class Store {
     })
   }
 
-  /** Every database or connection in the workspace. */
-  listDatabases(): Promise<DatabaseRecord[]> {
-    return this.enqueue(async () => {
-      const { databases } = await this.readManifest()
-      return databases.map(toPublicRecord)
-    })
-  }
-
-  /**
-   * Rewrites a connection's details. A password left out keeps the stored
-   * one: the renderer never received it, so it has nothing to send back.
-   */
-  updateDatabase(
-    id: string,
-    input: UpdateDatabaseInput
-  ): Promise<DatabaseRecord> {
-    return this.enqueue(async () => {
-      const manifest = await this.readManifest()
-      const record = manifest.databases.find((database) => database.id === id)
-      if (!record) throw new Error(`Database not found: ${id}`)
-      if (record.origin !== "external") {
-        throw new Error(
-          "Only a connection to an existing database can be edited."
-        )
-      }
-
-      record.name = input.name
-      record.host = input.host
-      record.port = input.port
-      record.user = input.user
-      record.database = input.database
-      if (input.password !== undefined) {
-        record.encryptedPassword = encrypt(input.password)
-      }
-      record.updatedAt = new Date().toISOString()
-
-      await this.writeManifest(manifest)
-      return toPublicRecord(record)
-    })
-  }
-
-  /** One database or connection, or null when it does not exist. */
-  databaseById(id: string): Promise<DatabaseRecord | null> {
-    return this.enqueue(async () => {
-      const { databases } = await this.readManifest()
-      const record = databases.find((database) => database.id === id)
-      return record ? toPublicRecord(record) : null
-    })
-  }
-
-  /**
-   * Adds a database record under the given id.
-   *
-   * The id comes from the caller (`ipc.ts`, always the trusted main
-   * process — never from the renderer, which sends no id at all) rather than
-   * being generated here: for a Docker-managed database, the container has
-   * to exist under that id *before* this is called, since only the running
-   * container can say what port it ended up on.
-   */
-  addDatabase(input: {
-    id: string
-    name: string
-    engine: DbEngine
-    origin: DbOrigin
-    host: string
-    port: number
-    user: string
-    password: string
-    database: string
-  }): Promise<DatabaseRecord> {
-    return this.enqueue(async () => {
-      const now = new Date().toISOString()
-      const record: StoredDatabaseRecord = {
-        id: input.id,
-        name: input.name,
-        engine: input.engine,
-        origin: input.origin,
-        host: input.host,
-        port: input.port,
-        user: input.user,
-        database: input.database,
-        createdAt: now,
-        updatedAt: now,
-        encryptedPassword: encrypt(input.password),
-      }
-
-      const manifest = await this.readManifest()
-      manifest.databases.push(record)
-      await this.writeManifest(manifest)
-      return toPublicRecord(record)
-    })
-  }
-
-  /** Removes a database's manifest entry. Its container and data directory are the caller's to remove first. */
-  deleteDatabase(id: string): Promise<void> {
-    return this.enqueue(async () => {
-      const manifest = await this.readManifest()
-      manifest.databases = manifest.databases.filter(
-        (database) => database.id !== id
-      )
-      await this.writeManifest(manifest)
-    })
-  }
-
-  /**
-   * Updates the host port a Docker-managed database's container was
-   * published on — recorded again each time `dbReset` recreates it, since a
-   * fresh container is not guaranteed the same port as the one it replaces.
-   */
-  setDatabasePort(id: string, port: number): Promise<void> {
-    return this.enqueue(async () => {
-      const manifest = await this.readManifest()
-      const record = manifest.databases.find((database) => database.id === id)
-      if (!record) throw new Error(`Database not found: ${id}`)
-
-      record.port = port
-      record.updatedAt = new Date().toISOString()
-      await this.writeManifest(manifest)
-    })
-  }
-
-  /**
-   * A database's connection details with its password decrypted — the one
-   * place that happens. Used only by `SqlConnections` inside the main
-   * process; never sent back over IPC.
-   */
-  connectionInfoOf(id: string): Promise<ConnectionInfo | null> {
-    return this.enqueue(async () => {
-      const { databases } = await this.readManifest()
-      const record = databases.find((database) => database.id === id)
-      if (!record) return null
-
-      return {
-        engine: record.engine,
-        host: record.host,
-        port: record.port,
-        user: record.user,
-        password: decrypt(record.encryptedPassword),
-        database: record.database,
-      }
-    })
-  }
-
   /** A studio-wide setting, or `null` when unset. */
   getSetting(key: string): Promise<string | null> {
     return this.enqueue(async () => {
@@ -575,22 +390,6 @@ export class Store {
     })
   }
 
-  listRequests(): Promise<HttpRequestRecord[]> {
-    return this.readList(REQUESTS_FILE)
-  }
-
-  saveRequests(requests: HttpRequestRecord[]): Promise<void> {
-    return this.writeList(REQUESTS_FILE, requests)
-  }
-
-  listEnvironments(): Promise<HttpEnvironment[]> {
-    return this.readList(ENVIRONMENTS_FILE)
-  }
-
-  saveEnvironments(environments: HttpEnvironment[]): Promise<void> {
-    return this.writeList(ENVIRONMENTS_FILE, environments)
-  }
-
   /**
    * The profiles, each with a directory of its own — see `withConfigDirs`.
    *
@@ -623,22 +422,6 @@ export class Store {
    * nobody signed in should leave nothing behind. */
   private get claudeProfilesDir(): string {
     return path.join(this.workspaceDir, CLAUDE_PROFILES_DIR)
-  }
-
-  listRequestFolders(): Promise<HttpFolder[]> {
-    return this.readList(FOLDERS_FILE)
-  }
-
-  saveRequestFolders(folders: HttpFolder[]): Promise<void> {
-    return this.writeList(FOLDERS_FILE, folders)
-  }
-
-  listCookies(): Promise<HttpCookie[]> {
-    return this.readList(COOKIES_FILE)
-  }
-
-  saveCookies(cookies: HttpCookie[]): Promise<void> {
-    return this.writeList(COOKIES_FILE, cookies)
   }
 
   listWorktreeChats(): Promise<WorktreeChat[]> {
@@ -802,11 +585,6 @@ export class Store {
   /** Where a folder's commands and sessions run. */
   resolveFolderDir(folderId: string): Promise<string> {
     return this.enqueue(async () => (await this.folderOf(folderId)).path)
-  }
-
-  /** Where one of the workspace's Docker-managed databases keeps its data. */
-  databaseDataDir(databaseId: string): string {
-    return path.join(this.workspaceDir, DB_DIR, databaseId)
   }
 }
 

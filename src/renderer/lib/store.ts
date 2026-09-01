@@ -30,19 +30,11 @@ export const RAIL_WIDTH = 36
  * Every pane the **studio** draws — the list `lib/panels.ts` walks to reach the
  * workbench's tabs without naming any panel.
  *
- * `database` and `api` are deliberately absent, and this is the one line that
- * says so. Both panels live in a window of their own now (`openPanelWindow`),
- * and both remember their open tabs in the workspace's settings — `db.tabs`,
- * `http.tabs` — which every window reads. So a table opened in the Database
- * window came back in the *studio's* strip on the next launch, beside the
- * chats, in a workbench whose left column has not listed either panel since
- * `SIDEBAR_SECTIONS` was cut to `Projects`. The memory is per workspace, not per
- * window; what makes a tab a window's own is which strip draws it, and this is
- * that list.
- *
- * They stay in `Pane` and in `PANELS`: the panes, the stores and the tab
- * plumbing all still work, so putting either back is adding its id here — the
- * same one-line bargain `SIDEBAR_SECTIONS` makes.
+ * It held `database` and `api` as well, then deliberately did not — those two
+ * panels moved into windows of their own — and now they are gone altogether;
+ * see `docs/design.md` § Database and API, removed. The list stays as a list:
+ * it is what makes a pane drawable at all, and a pane left out of it is one
+ * that can be selected and never shown.
  */
 export const PANES: Pane[] = ["files", "changes", "worktree", "board"]
 
@@ -245,10 +237,10 @@ export const useStudio = create<StudioState>((set, get) => {
     if (strip) {
       set({
         tabOrder: strip.tabOrder,
-        // `terminal` is what an older build may have been left on, and there is
-        // no such pane any more — Explorer is where its sidebar went. The same
-        // narrowing now catches `database` and `api`, which a build that drew
-        // them in the workbench could have been shut on.
+        // `terminal` is what an older build may have been left on, and there
+        // is no such pane any more — Explorer is where its sidebar went. The
+        // same narrowing catches `database` and `api`, which a build that still
+        // had those panels could have been shut on.
         pane: PANES.includes(strip.pane as Pane)
           ? (strip.pane as Pane)
           : "files",
@@ -296,7 +288,7 @@ export const useStudio = create<StudioState>((set, get) => {
     branches: {},
 
     // `files`, because a pane the studio does not draw cannot be the one it
-    // starts on — this was `database` while that panel was still in `PANES`.
+    // starts on — this was `database` while that panel still existed.
     pane: "files",
     sidebar: true,
     explorerTab: "files",

@@ -1,12 +1,9 @@
 import { chatRootId } from "@shared/api"
 
 import { useBoard } from "./board/store"
-import { useExplorer, type OpenTab } from "./db/explorer-store"
-import type { Relation } from "./db/engines/types"
 import { useChanges } from "./files/changes"
 import { useFiles } from "./files/store"
 import { fileRoots, rootOfPath, shownRootOf } from "./files/roots"
-import { SETTINGS_TAB_ID, useApi } from "./http/store"
 import { useProjects } from "./projects"
 import { useSettings } from "./settings"
 import { PANES, useStudio, type Pane } from "./store"
@@ -109,27 +106,9 @@ const NO_GROUP = ""
  * at the bottom want the same derivation as a selector, subscribed to. Written
  * once here, they cannot drift apart.
  */
-type ExplorerState = ReturnType<typeof useExplorer.getState>
 type FilesState = ReturnType<typeof useFiles.getState>
-type ApiState = ReturnType<typeof useApi.getState>
-
-/** No database open means no tabs: they belong to the connection, not to the
- * panel, and the ones on screen went with it. */
-const dbOpen = (state: ExplorerState): string[] =>
-  state.databaseId === null ? [] : state.openTabs.map(dbTabId)
-
-const dbActive = (state: ExplorerState): string | null =>
-  state.databaseId === null
-    ? null
-    : (state.activeQueryTabId ??
-      (state.selected ? relationId(state.selected) : null))
 
 const fileActive = (state: FilesState): string | null =>
-  state.selectedId && state.openIds.includes(state.selectedId)
-    ? state.selectedId
-    : null
-
-const apiActive = (state: ApiState): string | null =>
   state.selectedId && state.openIds.includes(state.selectedId)
     ? state.selectedId
     : null
@@ -145,47 +124,6 @@ const apiActive = (state: ApiState): string | null =>
  */
 const fileGroupOf = (filePath: string): string =>
   rootOfPath(fileRoots(), filePath)?.id ?? NO_GROUP
-
-const apiGroupOf = (id: string): string => {
-  // The panel's own settings tab is filed under nothing, because it is not a
-  // request — it belongs to the panel rather than to any collection in it.
-  if (id === SETTINGS_TAB_ID) return NO_GROUP
-
-  const { requests, folders } = useApi.getState()
-  const request = requests.find((candidate) => candidate.id === id)
-  if (request) return request.folderId ?? NO_GROUP
-
-  // A folder open as a tab of its own gathers with its siblings, under its
-  // parent: grouping it under itself would make one tab both a group and one
-  // of that group's members.
-  return folders.find((candidate) => candidate.id === id)?.parentId ?? NO_GROUP
-}
-
-/**
- * The schema a table, view or materialised view belongs to.
- *
- * The schema rather than the connection, which is the analogue of a project
- * everywhere else: only one database's tabs are open at a time — they are
- * remembered per database and swapped in when you switch — so grouping by
- * connection would have produced exactly one tab, every time.
- *
- * A query tab belongs to no schema, and `NO_GROUP` is that: it gathers the
- * console's tabs into one of their own, which is also what keeps a strip of
- * eight tables from being a strip of eight tables and three queries. Safe as
- * the sentinel because a schema always has a name — Postgres and MySQL both
- * answer with one, and there is no engine here that does not.
- */
-const dbGroupOf = (id: string): string => {
-  const { openTabs, selected } = useExplorer.getState()
-
-  const tab = openTabs.find((candidate) => dbTabId(candidate) === id)
-  if (tab) return tab.kind === "relation" ? tab.relation.schema : NO_GROUP
-
-  // The tree's selection, in the frame before its tab is in the list. Without
-  // this the strip marks nothing for it, since the group it named has no tab.
-  if (selected && relationId(selected) === id) return selected.schema
-  return NO_GROUP
-}
 
 /** The chat the strip has selected. */
 const worktreeChatActive = (
@@ -268,32 +206,6 @@ const PANELS: Record<Pane, PanelTabs> = {
     groupOf: fileGroupOf,
     rootOf: fileRootOf,
   },
-  database: {
-    open: () => dbOpen(useExplorer.getState()),
-    active: () => dbActive(useExplorer.getState()),
-    select: (id) => {
-      const { openTabs, select, selectQueryTab } = useExplorer.getState()
-      const tab = openTabs.find((item) => dbTabId(item) === id)
-      if (!tab) return
-      if (tab.kind === "relation") select(tab.relation)
-      else selectQueryTab(tab.query.id)
-    },
-    close: (id) => useExplorer.getState().closeTab(id),
-    closeOthers: (id) => useExplorer.getState().closeOtherTabs(id),
-    closeAll: () => useExplorer.getState().closeAllTabs(),
-    reorder: (ids) => useExplorer.getState().reorderTabs(ids),
-    groupOf: dbGroupOf,
-  },
-  api: {
-    open: () => useApi.getState().openIds,
-    active: () => apiActive(useApi.getState()),
-    select: (id) => useApi.getState().select(id),
-    close: (id) => useApi.getState().close(id),
-    closeOthers: (id) => useApi.getState().closeOthers(id),
-    closeAll: () => useApi.getState().closeAll(),
-    reorder: (ids) => useApi.getState().reorder(ids),
-    groupOf: apiGroupOf,
-  },
   /* A project's chats, grouped under it when grouping is switched on. */
   worktree: {
     open: () => useWorktreeChats.getState().openIds,
@@ -328,8 +240,6 @@ const PANELS: Record<Pane, PanelTabs> = {
 const STORES = {
   files: useFiles,
   changes: useChanges,
-  database: useExplorer,
-  api: useApi,
   worktree: useWorktreeChats,
   board: useBoard,
 } as const
@@ -790,8 +700,6 @@ function usePanelActive(pane: Pane): string | null {
   return {
     files: useFiles(fileActive),
     changes: useChanges(changesActive),
-    database: useExplorer(dbActive),
-    api: useApi(apiActive),
     worktree: useWorktreeChats(worktreeChatActive),
     board: useBoard(boardActive),
   }[pane]
@@ -834,9 +742,6 @@ function useGrouping() {
   useSettings((state) => state.groupTabs)
   useStudio((state) => state.folders)
   useFiles((state) => state.openIds)
-  useApi((state) => state.openIds)
-  useApi((state) => state.requests)
-  useApi((state) => state.folders)
   useWorktreeChats((state) => state.chats)
   useWorktreeChats((state) => state.openIds)
 }
@@ -898,9 +803,6 @@ export function useShownGroup(pane: Pane) {
 export function useHasOpenTabs(): boolean {
   useScope()
   useFiles((state) => state.openIds)
-  useExplorer((state) => state.openTabs)
-  useExplorer((state) => state.databaseId)
-  useApi((state) => state.openIds)
   useWorktreeChats((state) => state.openIds)
   useWorktreeChats((state) => state.chats)
 
@@ -945,14 +847,4 @@ export function reconcileScope() {
   // then — and nothing at all is a legitimate answer, which `NothingOpen` says.
   const next = tabIds()[0]
   if (next !== undefined) selectTab(next)
-}
-
-/** A relation tab is addressed by the relation it shows; a query tab by its
- * own id, which is what the panel gave it. */
-export function dbTabId(tab: OpenTab): string {
-  return tab.kind === "relation" ? relationId(tab.relation) : tab.query.id
-}
-
-export function relationId(relation: Relation): string {
-  return `${relation.schema}.${relation.name}`
 }

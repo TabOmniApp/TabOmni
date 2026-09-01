@@ -398,11 +398,19 @@ section("the line somebody reads")
     usageDetail(cold)
   )
   check(
-    "thinking is only in the breakdown",
-    !usageLine(usage({ output: 100, thinking: 40 })).includes("thinking") &&
+    "thinking is on the line where there was any",
+    usageLine(usage({ output: 100, thinking: 40 })).includes(
+      "100 out (40 thinking)"
+    ) &&
       usageDetail(usage({ output: 100, thinking: 40 })).includes(
         "40 of it thinking"
-      )
+      ),
+    usageLine(usage({ output: 100, thinking: 40 }))
+  )
+  check(
+    "and off it where there was none",
+    !usageLine(usage({ output: 100, thinking: 0 })).includes("thinking"),
+    usageLine(usage({ output: 100, thinking: 0 }))
   )
 }
 

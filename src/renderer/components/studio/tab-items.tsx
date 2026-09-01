@@ -1,21 +1,16 @@
-import { cn } from "@/lib/utils"
 import {
   Columns3,
   File,
   FileText,
-  Folder,
   GitCompare,
   Image,
   Loader2,
   MessageSquare,
-  Settings2,
   ShieldQuestion,
-  Terminal,
 } from "lucide-react"
 
 import { unfinishedCount } from "@/lib/board/cards"
 import { useBoard } from "@/lib/board/store"
-import { useExplorer, type OpenTab } from "@/lib/db/explorer-store"
 import { useChanges } from "@/lib/files/changes"
 import { isDeleted, isDirty, useFiles } from "@/lib/files/store"
 import { gitStateOf, GIT_TONES, useGitStatus } from "@/lib/files/git-status"
@@ -23,13 +18,10 @@ import { iconFor } from "@/lib/files/icons"
 import { nameOf } from "@/lib/files/paths"
 import { isImage, isNote } from "@/lib/files/viewers"
 import { groupRootId } from "@/lib/panels"
-import { SETTINGS_TAB_ID, useApi } from "@/lib/http/store"
-import { relationId, useTabGroups } from "@/lib/panels"
+import { useTabGroups } from "@/lib/panels"
 import { useStudio, type Pane } from "@/lib/store"
 import { groupTabId, PREFIX } from "@/lib/tabs"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
-import { KIND_ICONS, KIND_LABELS } from "./db/database-tree"
-import { METHOD_TONES } from "./api/request-list"
 import type { TabStripItem } from "./tab-strip"
 
 /**
@@ -46,13 +38,6 @@ import type { TabStripItem } from "./tab-strip"
  * for what a folder's tab says that its members do not.
  */
 export function useTabItems(): Map<string, TabStripItem> {
-  const requests = useApi((state) => state.requests)
-  const apiFolders = useApi((state) => state.folders)
-  const apiOpenIds = useApi((state) => state.openIds)
-
-  const databaseId = useExplorer((state) => state.databaseId)
-  const dbTabs = useExplorer((state) => state.openTabs)
-
   const chats = useWorktreeChats((state) => state.chats)
   const chatOpenIds = useWorktreeChats((state) => state.openIds)
   const chatSending = useWorktreeChats((state) => state.sending)
@@ -119,50 +104,6 @@ export function useTabItems(): Map<string, TabStripItem> {
       tone: deleted ? GIT_TONES.deleted : git ? GIT_TONES[git] : undefined,
       note: deleted ? "deleted" : undefined,
     })
-  }
-
-  if (databaseId) for (const tab of dbTabs) add(dbItem(tab))
-
-  for (const id of apiOpenIds) {
-    if (id === SETTINGS_TAB_ID) {
-      add({
-        id: PREFIX.api + id,
-        label: "API settings",
-        icon: <Settings2 className="size-3.5 shrink-0 text-muted-foreground" />,
-      })
-      continue
-    }
-
-    const request = requests.find((candidate) => candidate.id === id)
-    if (request) {
-      add({
-        id: PREFIX.api + id,
-        label: request.name,
-        title: `${request.method} ${request.url}`,
-        copyText: request.url,
-        copyLabel: "Copy URL",
-        icon: (
-          <span
-            className={cn(
-              "shrink-0 font-mono text-[0.6rem] font-semibold",
-              METHOD_TONES[request.method] ?? "text-muted-foreground"
-            )}
-          >
-            {request.method}
-          </span>
-        ),
-      })
-      continue
-    }
-
-    const folder = apiFolders.find((candidate) => candidate.id === id)
-    if (folder) {
-      add({
-        id: PREFIX.api + id,
-        label: folder.name,
-        icon: <Folder className="size-3 shrink-0 text-muted-foreground" />,
-      })
-    }
   }
 
   /*
@@ -264,7 +205,7 @@ export function useTabItems(): Map<string, TabStripItem> {
     const front = items.get(PREFIX[pane] + shown) ?? memberItems[0]
     if (!front) continue
 
-    const name = groupName(pane, group, { workspaceFolders, apiFolders })
+    const name = groupName(pane, group, { workspaceFolders })
 
     add({
       id: groupTabId(pane, group),
@@ -293,13 +234,8 @@ function groupName(
   group: string,
   lists: {
     workspaceFolders: { id: string; name: string }[]
-    apiFolders: { id: string; name: string }[]
   }
 ): string {
-  // A schema is its own name rather than a record to look up — the Database
-  // panel groups by the schema a table belongs to, and there is no id in it.
-  if (pane === "database") return group || "Queries"
-
   // A chat's group is where it runs, and its id is a root's — the project.
   const rootId = groupRootId(group)
   if (rootId) {
@@ -312,8 +248,6 @@ function groupName(
 
   const found = {
     files: lists.workspaceFolders,
-    api: lists.apiFolders,
-    database: [],
     // `Changes` has no `groupOf` either, for the reason a chat's group is
     // never reached: there is one of these per project already.
     changes: [],
@@ -332,11 +266,8 @@ function groupName(
   // here between a folder going and its tabs closing.
   return {
     files: "Files",
-    api: "Requests",
-    note: "Notes",
     worktree: "Chats",
     changes: "",
-    database: "",
     board: "",
   }[pane]
 }
@@ -353,25 +284,4 @@ function iconOf(filePath: string) {
   // says so.
   if (isNote(filePath)) return <FileText className="size-3.5 shrink-0" />
   return <File className="size-3.5 shrink-0" />
-}
-
-function dbItem(tab: OpenTab): TabStripItem {
-  if (tab.kind === "query") {
-    return {
-      id: PREFIX.database + tab.query.id,
-      label: tab.query.title,
-      icon: <Terminal className="size-3.5 shrink-0" />,
-      title: tab.query.title,
-    }
-  }
-
-  const Icon = KIND_ICONS[tab.relation.kind]
-  const id = relationId(tab.relation)
-  return {
-    id: PREFIX.database + id,
-    label: tab.relation.name,
-    icon: <Icon className="size-3.5 shrink-0" />,
-    title: `${id} — ${KIND_LABELS[tab.relation.kind]}`,
-    copyText: id,
-  }
 }

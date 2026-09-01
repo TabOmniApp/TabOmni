@@ -5,6 +5,7 @@ import {
   fractionOf,
   remainingOf,
   windowDetail,
+  windowHint,
   windowLabel,
   windowSlices,
   WINDOW_TONES,
@@ -75,6 +76,21 @@ check(
   "no threshold falls back to the window",
   bandOf(window({ tokens: 930_000, autoCompactAt: null })) === "near" &&
     bandOf(window({ tokens: 930_000 })) === "full"
+)
+
+section("the nudge arrives with the warning, and only where compaction will")
+
+check("quiet while calm", windowHint(window({ tokens: 20_000 })) === null)
+check(
+  "speaks once the band does",
+  windowHint(window({ tokens: 780_000 })) !== null &&
+    windowHint(window({ tokens: 930_000 })) !== null
+)
+// A window filling with auto-compaction off is not counting down to the event
+// the sentence describes, however full it is.
+check(
+  "quiet with auto-compaction off",
+  windowHint(window({ tokens: 930_000, autoCompactAt: null })) === null
 )
 
 section("the meter counts down, not up")

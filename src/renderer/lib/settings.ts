@@ -1,6 +1,10 @@
 import { create } from "zustand"
 
-import { MCP_DISABLED_TOOLS_KEY, type ChatEffort } from "@shared/api"
+import {
+  CHAT_NOTIFICATIONS_KEY,
+  MCP_DISABLED_TOOLS_KEY,
+  type ChatEffort,
+} from "@shared/api"
 import { recall, remember } from "./tab-memory"
 import { getSetting, setSetting } from "./workspace"
 
@@ -89,7 +93,20 @@ type SettingsState = Stored & {
    */
   mcpDisabledTools: string[]
 
+  /**
+   * Whether a chat that finishes, fails or stops to ask rings an OS
+   * notification while the window is unfocused.
+   *
+   * Outside `Stored` for the reason `mcpDisabledTools` is: the main process
+   * reads it — it is what rings the bell — and a bag only the renderer parses
+   * is not a thing both sides can name. **On by default**, which is the one
+   * default in this file that goes the other way from the switches around it;
+   * `CHAT_NOTIFICATIONS_KEY` says why.
+   */
+  chatNotifications: boolean
+
   setGroupTabs: (group: boolean) => void
+  setChatNotifications: (on: boolean) => void
   setDiffSideBySide: (sideBySide: boolean) => void
   setDiffWhitespace: (show: boolean) => void
   /** Sets the model and its effort together, the way a chat's `ModelMenu`
@@ -172,11 +189,20 @@ export const useSettings = create<SettingsState>((set, get) => {
     reviewEffort: null,
     reviewProfileId: null,
     mcpDisabledTools: [],
+    chatNotifications: true,
     loaded: false,
 
     setGroupTabs(groupTabs) {
       set({ groupTabs })
       save()
+    },
+
+    setChatNotifications(chatNotifications) {
+      set({ chatNotifications })
+      // Its own key rather than `save()`'s bag, because main reads it. Written
+      // as the two words main matches on, and only `"off"` means anything —
+      // see `CHAT_NOTIFICATIONS_KEY`.
+      void setSetting(CHAT_NOTIFICATIONS_KEY, chatNotifications ? "on" : "off")
     },
 
     setDiffSideBySide(diffSideBySide) {
@@ -209,15 +235,20 @@ export const useSettings = create<SettingsState>((set, get) => {
 
     restore() {
       restorePromise ??= (async () => {
-        const [stored, disabled] = await Promise.all([
+        const [stored, disabled, notifications] = await Promise.all([
           recall(SETTINGS_KEY, isStored),
           getSetting(MCP_DISABLED_TOOLS_KEY).catch(() => null),
+          getSetting(CHAT_NOTIFICATIONS_KEY).catch(() => null),
         ])
         set({
           // Nothing stored is the default, not a failure: the spread of a null
           // leaves the initial state as it stands.
           ...stored,
           mcpDisabledTools: storedTools(disabled),
+          // Only `"off"` switches it off, so an unreadable or absent key is on
+          // — the same reading main does, and the two must agree or the switch
+          // would show one thing while the bell did another.
+          chatNotifications: notifications !== "off",
           loaded: true,
         })
       })()

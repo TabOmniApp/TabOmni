@@ -29,13 +29,11 @@ import { ProjectCrumbs } from "./project/project-crumbs"
 import { ProjectRail } from "./project/project-rail"
 import { WorkspaceSidebar } from "./workspace-sidebar"
 import { WorktreeChatPane } from "./worktree/chat-pane"
-import { ApiWorkspace } from "./api/api-workspace"
 import { FileTree } from "./files/file-tree"
 import { ExplorerRail } from "./files/explorer-rail"
 import { ChangesPane } from "./files/changes-pane"
 import { BoardPane } from "./board/board-pane"
 import { FileWorkspace } from "./files/file-workspace"
-import { DatabaseWorkspace } from "./db/database-workspace"
 import { AddFolderDialog } from "./add-folder-dialog"
 import { CommandPalette } from "./command-palette"
 import { NothingOpen } from "./nothing-open"
@@ -59,10 +57,6 @@ function paneView(pane: Pane) {
       return <FileWorkspace />
     case "changes":
       return <ChangesPane />
-    case "database":
-      return <DatabaseWorkspace />
-    case "api":
-      return <ApiWorkspace />
     case "worktree":
       return <WorktreeChatPane />
     case "board":

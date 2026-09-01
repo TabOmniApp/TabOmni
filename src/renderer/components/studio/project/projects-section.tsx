@@ -43,6 +43,13 @@ import {
 } from "@/lib/worktree-chat/store"
 import type { WorkspaceFolder, WorktreeChat } from "@shared/api"
 import { since } from "@/lib/worktree-chat/since"
+import {
+  activityLabel,
+  activityOf,
+  activityTitle,
+  isRunning,
+  type ChatActivity,
+} from "@/lib/worktree-chat/running"
 
 /**
  * The chats this column lists: the ones that are on disk.
@@ -95,8 +102,13 @@ export function ProjectsSection() {
   const folders = useStudio((state) => state.folders)
   const chats = useWorktreeChats((state) => state.chats)
   const unsaved = useWorktreeChats((state) => state.unsaved)
+  // Read here as well as in `ProjectChats` so a shut project can say what is
+  // happening inside it — see the `activity` prop on `ProjectRow`.
+  const sending = useWorktreeChats((state) => state.sending)
+  const asks = useWorktreeChats((state) => state.asks)
 
-  const orphans = ungroupedChats(saved(chats, unsaved))
+  const listed = saved(chats, unsaved)
+  const orphans = ungroupedChats(listed)
   const ungroupedShut = collapsed.includes(UNGROUPED_ID)
 
   /**
@@ -125,6 +137,15 @@ export function ProjectsSection() {
               <ProjectRow
                 name={folder.name}
                 shut={shut}
+                // Only while it is shut: open, the chat rows underneath say
+                // this one at a time and in more detail, and a count repeating
+                // what is directly below it is a number somebody has to check
+                // against the rows to trust.
+                activity={
+                  shut
+                    ? activityOf(chatsOf(listed, folder.id), sending, asks)
+                    : null
+                }
                 onNewChat={() =>
                   void useWorktreeChats
                     .getState()
@@ -159,6 +180,9 @@ export function ProjectsSection() {
             <ProjectRow
               name="Ungrouped"
               shut={ungroupedShut}
+              // A chat here has nowhere to run its next turn, so it is never
+              // one of the ones answering.
+              activity={null}
               // No `+` and no board: both need a project, and this row names
               // the absence of one.
               onNewChat={null}
@@ -258,6 +282,7 @@ const PILL_ACTIVE = "shadow-none"
 function ProjectRow({
   name,
   shut,
+  activity,
   onToggle,
   onNewChat,
   onOpenBoard,
@@ -265,6 +290,18 @@ function ProjectRow({
 }: {
   name: string
   shut: boolean
+  /**
+   * What is happening in this project's chats, or null when the row is not the
+   * one saying so.
+   *
+   * The whole of the argument for it is that a project is normally shut: this
+   * app is for running several chats at once, and the way somebody does that is
+   * by starting one here, folding it away, and starting another somewhere else.
+   * Without this the column goes completely still while three turns are
+   * running, and the only thing that ever said otherwise was a notification —
+   * which by design does not fire while the window is focused.
+   */
+  activity: ChatActivity | null
   onToggle: () => void
   onNewChat: (() => void) | null
   /** Opens this project's board. Nullable for the same row `onNewChat` is. */
@@ -281,11 +318,13 @@ function ProjectRow({
   // drawn, and its two states are two glyphs rather than two angles.
   const Mark = shut ? Folder : FolderOpen
 
+  const running = activity !== null && isRunning(activity)
+
   const row = (
     <div className="group/project relative flex items-center">
       <SideRow
         onClick={onToggle}
-        title={name}
+        title={running ? `${name} — ${activityTitle(activity)}` : name}
         className={cn(PILL, "font-medium text-foreground")}
       >
         <Mark
@@ -298,6 +337,41 @@ function ProjectRow({
           )}
         />
         <span className="min-w-0 flex-1 truncate text-left">{name}</span>
+
+        {/*
+          The count, at the end the chat rows put their age at, so a shut
+          project and its chats line up on the same right edge.
+
+          `invisible` on hover rather than gone, and for the same reason the
+          Changes list hides its counts that way: the `+` and the board button
+          are positioned over this exact spot, and a count that unmounted would
+          let the project name reflow as the pointer arrived.
+        */}
+        {running && (
+          <span
+            aria-hidden
+            className={cn(
+              "shrink-0 text-[0.6875rem] tabular-nums transition-opacity group-hover/project:invisible",
+              // Waiting takes the hue, because waiting is the half that is
+              // somebody's to act on. Working is furniture — it will finish
+              // whether or not anybody is looking at it.
+              activity.waiting > 0
+                ? "font-medium text-primary"
+                : "text-muted-foreground"
+            )}
+          >
+            {activityLabel(activity)}
+          </span>
+        )}
+        {/* The spinner is what makes it read as *now* rather than as a badge
+            counting something. Only for the working half: a chat stopped on a
+            question is the opposite of moving. */}
+        {running && activity.waiting === 0 && (
+          <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground group-hover/project:invisible" />
+        )}
+        {running && activity.waiting > 0 && (
+          <ShieldQuestion className="size-3 shrink-0 animate-pulse text-primary group-hover/project:invisible" />
+        )}
       </SideRow>
 
       {/*

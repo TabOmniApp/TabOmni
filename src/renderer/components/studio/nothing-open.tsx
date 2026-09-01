@@ -18,18 +18,14 @@ import type { Pane } from "@/lib/store"
  * the **left**, so a hint saying "the sidebar" would be pointing at whichever of
  * the two the reader was not looking at.
  *
- * `database` and `api` are unreachable here — this window draws neither pane
- * (`PANES` in `lib/store.ts`) — and their lines are kept because `Pane` still
- * holds both. They name the window each panel opens in, which is the only way
- * in there is; a hint pointing at `⌘P` would be wrong, since the palette
- * stopped listing tables and requests for the same reason.
+ * There were two more, for the Database and API panels, naming the window each
+ * opened in. Both panels are gone; see `docs/design.md` § Database and API,
+ * removed.
  */
 const HINTS: Record<Pane, string> = {
   files: "Pick a file from the Explorer on the right.",
   changes:
     "Pick a file under Changes in the Explorer to read what this project has changed.",
-  database: "Open the Database window from the footer of the left column.",
-  api: "Open the API window from the footer of the left column.",
   worktree:
     "Pick a chat under a project on the left, or start one from its row.",
   board: "Open a project's board from its row on the left.",

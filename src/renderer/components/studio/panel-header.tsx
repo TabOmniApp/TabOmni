@@ -10,13 +10,14 @@ import type { Section } from "@/lib/sections"
  * Every panel's header already carries the label the rail uses for it, so the
  * hue follows from the title rather than from a prop each caller has to
  * remember to pass — and a header that is not a rail section simply gets none.
+ *
+ * Empty right now, and kept rather than removed with its two entries: the
+ * Database and API headers were the only titles in it, and the mechanism is
+ * what a third panel's header would use. Explorer was never in it — that
+ * panel's header is two tabs (`All files | Changes`), and a title with a hue
+ * beside it is what they replaced.
  */
-const ACCENT_BY_TITLE: Record<string, Section> = {
-  // No `Explorer`: that panel's header is two tabs now (`All files | Changes`),
-  // and a title with a hue beside it is what they replaced.
-  Database: "database",
-  API: "api",
-}
+const ACCENT_BY_TITLE: Record<string, Section> = {}
 
 /**
  * A section's fold, handed to a panel by the column that stacks it.

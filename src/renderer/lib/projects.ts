@@ -6,33 +6,23 @@ import { isStringArray, recall, remember } from "./tab-memory"
 const COLUMN_KEY = "projects.column"
 
 /**
- * The three things the left column can stack.
+ * What the left column can stack.
  *
- * `projects` is this column's own; the other two are the panels' lists, which
- * were the right-hand panel's tabs before and are sections here — see
- * `WorkspaceSidebar`. Not `Section` from `lib/rail.ts`: that is the ways into
- * the *workbench* and its `files` is the Explorer, which stayed on the
- * right.
- *
- * Which of them are actually drawn is `SIDEBAR_SECTIONS` below, and it is not
- * all of them right now.
+ * It could stack three: `projects`, and the Database and API panels' own lists.
+ * Those two were hidden out of `SIDEBAR_SECTIONS` first and deleted with their
+ * panels afterwards, so this is a union of one — kept as a union, and kept
+ * beside `SIDEBAR_SECTIONS`, because the two answer different questions: what
+ * a section may be, and which are drawn.
  */
-export type SidebarSection = "projects" | "database" | "api"
+export type SidebarSection = "projects"
 
 /**
  * Which of them the column actually draws.
  *
- * **Projects only, for now** — Conductor's left column, which is the shape this
- * is being held against: the projects and their branches, and nothing else
- * competing for the height. `Database` and `API` are *hidden* rather than
- * removed: the panels, their stores, their panes and their tabs are all still
- * here and still work, they have a window each (`openPanelWindow`), and `⌘P`
- * indexes every table and request, so nothing has become unreachable. Putting
- * one back is adding its id to this list.
- *
- * The type above keeps all three on purpose. It is what `TITLES` and `Section`
- * are keyed by, so a hidden section stays spelled out rather than becoming a
- * string nothing checks.
+ * Conductor's left column, which is the shape this was held against: the
+ * projects and their chats, and nothing else competing for the height. It is
+ * the one line saying which sections are drawn, so the next one to arrive is an
+ * id added here.
  */
 export const SIDEBAR_SECTIONS: SidebarSection[] = ["projects"]
 
