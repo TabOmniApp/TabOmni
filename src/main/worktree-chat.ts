@@ -745,9 +745,16 @@ export class WorktreeChats {
     // starting a new one: the conversation moves with it. `carryTranscript`
     // fails quietly, and a chat that could not be carried opens a new session
     // rather than refusing the message.
+    //
+    // Asked even when this chat has run here before, which `startedHere` alone
+    // would have short-circuited: a directory it has already been in holds the
+    // conversation as it stood when it *left*, and A → B → A resumed that rather
+    // than what B went on to say. `carryTranscript` is what compares them.
+    const carried =
+      elsewhere.length > 0 && (await carryTranscript(id, elsewhere, dir))
     const resume =
       startedHere ||
-      (elsewhere.length > 0 && (await carryTranscript(id, elsewhere, dir))) ||
+      carried ||
       // Nothing to carry and nothing recorded, but the CLI does have the id —
       // resume the way this always did and let `isSessionMissing` catch it.
       legacy
@@ -964,6 +971,26 @@ export class WorktreeChats {
      * already replaced — see `onExit`. */
     let opened: AgentSession | null = null
 
+    /**
+     * The entry this open is for, and whether it is still the chat's.
+     *
+     * Everything below that describes a *live process* — busy, the subagents,
+     * the context meter — has to be dropped once the chat has moved on to
+     * another session, and `close()` is exactly when that matters: the abort it
+     * raises reaches the stream a tick later, and the `exit` that follows calls
+     * `onBusy(false)` and `onAgents([])` unconditionally. Switching profile
+     * mid-chat closes one session and opens another for the same message, so
+     * that late `false` landed on the *new* session's turn and the chat went
+     * quiet on screen while it was still answering — and armed `reap` against a
+     * session that was working.
+     *
+     * By the entry rather than by `entry.session`, which is what `onExit` can
+     * afford to use: the first `onBusy(true)` arrives from inside
+     * `startAgentSession`, before there is a session object to compare.
+     */
+    const owner = this.live.get(id)
+    const current = () => this.live.get(id) === owner
+
     const session = await startAgentSession(
       {
         cwd,
@@ -1012,15 +1039,20 @@ export class WorktreeChats {
         // Forwarded and not kept, like `busy`: the same number is on the usage
         // line this turn ends with, and this is only it arriving early enough
         // to watch. A window that reloads mid-turn reads the last line instead.
-        onContext: (tokens) =>
-          this.emit({ chatId: id, type: "context", tokens }),
+        onContext: (tokens) => {
+          if (current()) this.emit({ chatId: id, type: "context", tokens })
+        },
         // Forwarded and not kept, for the same reason as `busy` rather than as
         // `context`: this is the state of a live process. A chat read back off
         // disk has no session to have asked, so a stored copy would be a meter
         // describing a window that no longer exists.
-        onWindow: (window) => this.emit({ chatId: id, type: "window", window }),
-        onCompacting: (compacting, error) =>
-          this.emit({ chatId: id, type: "compacting", compacting, error }),
+        onWindow: (window) => {
+          if (current()) this.emit({ chatId: id, type: "window", window })
+        },
+        onCompacting: (compacting, error) => {
+          if (current())
+            this.emit({ chatId: id, type: "compacting", compacting, error })
+        },
         // A line, unlike the two above: a compaction happened *at a point in
         // the conversation*, and everything above it is something the model now
         // knows only as a summary. That is worth reading back next week.
@@ -1035,12 +1067,18 @@ export class WorktreeChats {
         // whether a chat is working is true of a process rather than of a
         // conversation, and a reload finds out by there being no session rather
         // than by reading a stale flag.
-        onBusy: (busy) => this.setBusy(id, busy),
+        onBusy: (busy) => {
+          if (current()) this.setBusy(id, busy)
+        },
         // Forwarded and not kept, like `busy` and for the same reason: which
         // subagents are running is true of a live CLI, and a chat read back off
         // disk has none. What they *did* is the tool rows they wrote.
-        onAgents: (agents) => this.emit({ chatId: id, type: "agents", agents }),
-        onTurn: (error) => this.endTurn(id, error),
+        onAgents: (agents) => {
+          if (current()) this.emit({ chatId: id, type: "agents", agents })
+        },
+        onTurn: (error) => {
+          if (current()) this.endTurn(id, error)
+        },
         onExit: (error) => {
           exited = true
           exitError = error
@@ -1173,8 +1211,13 @@ export class WorktreeChats {
       )
     }
 
-    this.live.delete(id)
-    this.endTurn(id, exitError)
+    // Only this open's own entry: a chat that has already been given another
+    // session — the profile picker closes one and opens the next — must not have
+    // it taken back out from under it by a failure that belongs to the old one.
+    if (current()) {
+      this.live.delete(id)
+      this.endTurn(id, exitError)
+    }
     return null
   }
 
@@ -1839,39 +1882,62 @@ async function transcriptIn(
  * context — the prompt cache belongs to the account too, so this is a copy, not
  * a move of something warm.
  *
- * Never overwrites: a directory that already has the session has the *later*
- * copy of it, since it is the one the CLI has been appending to.
+ * **The newest copy wins, not the first one found and not the one already
+ * here.** A chat that has been on two profiles has a transcript under each, and
+ * every one but the last is a snapshot of the conversation as it stood when it
+ * left that account. Taking either the head of the list or whatever is already
+ * under `to` rewinds the chat to that snapshot: A → B → C read A's file and
+ * answered as though B's turns had never happened, and A → B → A found A's own
+ * stale copy and did the same. `mtime` is what tells them apart — a carried copy
+ * is written at the moment of the carry and appended to by the CLI from then on,
+ * so the directory the conversation actually continued in is the latest.
  */
 async function carryTranscript(
   sessionId: string,
   from: string[],
   to: string
 ): Promise<boolean> {
-  if (await transcriptIn(to, sessionId)) return true
-
-  for (const source of from) {
-    const path = await transcriptIn(source, sessionId)
+  const copies: { dir: string; path: string; written: number }[] = []
+  for (const dir of [to, ...from]) {
+    const path = await transcriptIn(dir, sessionId)
     if (!path) continue
-
-    const folder = join(
-      to || join(homedir(), ".claude"),
-      "projects",
-      basename(dirname(path))
-    )
     try {
-      await mkdir(folder, { recursive: true })
-      await copyFile(path, join(folder, `${sessionId}.jsonl`))
-      return true
-    } catch (error) {
-      // Worth a line and not worth failing the message over: what it costs is
-      // the conversation, and the turn still runs — as a new session, which is
-      // what this app did before it could carry one at all.
-      console.error("Could not carry the chat to the new profile", error)
-      return false
+      copies.push({ dir, path, written: (await stat(path)).mtimeMs })
+    } catch {
+      // Gone between the look and the stat. Nothing to carry from here.
+      continue
     }
   }
 
-  return false
+  const latest = copies.sort((a, b) => b.written - a.written)[0]
+  if (!latest) return false
+  if (latest.dir === to) return true
+
+  // Over the copy already under `to` where there is one, rather than to a folder
+  // derived from the source's name: the two agree for the same project, and
+  // writing the derived one anyway would leave `transcriptIn` two files to pick
+  // between by readdir order.
+  const stale = copies.find((copy) => copy.dir === to)
+  const destination =
+    stale?.path ??
+    join(
+      to || join(homedir(), ".claude"),
+      "projects",
+      basename(dirname(latest.path)),
+      `${sessionId}.jsonl`
+    )
+
+  try {
+    await mkdir(dirname(destination), { recursive: true })
+    await copyFile(latest.path, destination)
+    return true
+  } catch (error) {
+    // Worth a line and not worth failing the message over: what it costs is
+    // the conversation, and the turn still runs — as a new session, which is
+    // what this app did before it could carry one at all.
+    console.error("Could not carry the chat to the new profile", error)
+    return false
+  }
 }
 
 /**
