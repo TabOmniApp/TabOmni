@@ -12,7 +12,6 @@ import {
   type MenuCommand,
   type ProcessExit,
   type ProcessOutput,
-  type ReviewProgressEvent,
   type WorktreeChatEvent,
   type TerminalExit,
   type TerminalOutput,
@@ -138,26 +137,6 @@ const api: DesktopApi = {
     subscribe<WorktreeChatEvent>(IPC.worktreeChatEvent, listener),
   onRevealWorktreeChat: (listener) =>
     subscribe<string>(IPC.revealWorktreeChat, listener),
-  replyToReviewComment: (cwd, prompt, model, effort, profileId) =>
-    ipcRenderer.invoke(
-      IPC.replyToReviewComment,
-      cwd,
-      prompt,
-      model,
-      effort,
-      profileId
-    ),
-  reviewChanges: (cwd, model, effort, profileId, paths) =>
-    ipcRenderer.invoke(
-      IPC.reviewChanges,
-      cwd,
-      model,
-      effort,
-      profileId,
-      paths ?? null
-    ),
-  onReviewProgress: (listener) =>
-    subscribe<ReviewProgressEvent>(IPC.reviewProgress, listener),
   distillLearnings: (chatId, folderId, model, effort, profileId) =>
     ipcRenderer.invoke(
       IPC.distillLearnings,

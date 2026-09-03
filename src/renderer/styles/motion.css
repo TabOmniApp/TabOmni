@@ -1,25 +1,26 @@
 /*
- * The studio's own motion: the launch screen's, and the chat's loading
- * indicator.
+ * The studio's own motion, which is now the launch screen's and nothing else.
+ * The chat's loading indicator used to be the other half of this file — an SVG
+ * choreographed in five keyframe blocks, then a spritesheet stepped through with
+ * `steps()`. It is an animated GIF now and animates itself, so it has no CSS at
+ * all; `components/studio/yasuo-loader.tsx` is the whole of it.
  *
  * The rest of the studio animates through what shadcn's components bring with
  * them and nothing else. It is a file of its own rather than a block in
  * `globals.css` because a keyframe is not a token, and because the next thing to
  * animate should extend this list instead of writing a second one somewhere else.
  *
- * Two shapes live here, and the second one arrived by the route this file's
- * header used to forbid. Everything above `yasuo` is a `--animate-*` token, read
- * as a Tailwind `animate-*` utility. The `yasuo` block at the bottom is **plain
- * classes**, because those rules need a `transform-origin` and a resting
- * `transform` on the same declaration as their animation, and a token cannot
- * carry either.
+ * Everything here is a `--animate-*` token, read as a Tailwind `animate-*`
+ * utility. There was a block of plain classes below them for as long as the
+ * loader lived here; with it gone the file is back to one shape, which is the
+ * shape this header originally described.
  *
  * Three rules it is written to. A movement says where the thing came from, so
  * nothing travels in a direction the layout does not already imply. Nothing a
  * click waits on runs longer than 250ms — the launch sequence is slower only
- * because nothing else is waiting on it. And every keyframe below moves
- * opacity and transform alone, which are the two the compositor can run
- * without laying the page out again.
+ * because nothing else is waiting on it. And every keyframe below moves opacity
+ * and transform alone, which are the two the compositor can run without laying
+ * the page out again.
  *
  * The distances are small on purpose: a third of a line, half a character. At
  * that size the movement is not read as movement, only as the thing having
@@ -102,205 +103,6 @@
 }
 
 /*
- * The chat's loading indicator: a swordsman flicking a katana, and the gust it
- * throws crossing the frame. The drawing is
- * `components/studio/yasuo-tornado-loader.tsx`; this is every moving part of it.
- *
- * `--yasuo-cycle` is one flick and one crossing. Every percentage below is a
- * fraction of it, so the flick, the lunge and the gust cannot drift apart — they
- * are one piece of choreography expressed as three animations because they are
- * on three elements, not because they are three events.
- *
- * COUPLED TO THE COMPONENT, in two places, both of which are silent when broken:
- *
- *  - each `yasuo-wind-N` ends at exactly minus the matching ring's perimeter in
- *    that file's `RINGS`. The ring's `stroke-dasharray` is a fraction of the same
- *    number, computed there. Change an `rx` and the perimeter changes, and a
- *    dash pattern that no longer divides into the offset leaves a visible seam
- *    travelling around the ring.
- *  - `yasuo-gust`'s opening `translateX` puts the funnel's tip under the
- *    *midpoint of the flicked blade*, which is a function of the grip position
- *    and the 14deg in `yasuo-slash`. Change either and it starts beside the
- *    sword instead of on it.
- */
-@theme {
-  /*
-   * 1.7s, down from 2.6s over two rounds of "make the gust faster".
-   *
-   * This is the **only** lever left for the gust's speed, and that is worth
-   * knowing before reaching for a keyframe. The gust cannot start before the
-   * blade snaps at 30% without breaking the causality the sequence is built on,
-   * and it already runs to the last frame, so it holds all 70% of the cycle that
-   * is available to it. Giving it a larger share is impossible; giving it a
-   * *smaller* one would speed it up only by taking it off screen sooner, which is
-   * the gap beside the figure coming back. So distance is fixed, share is fixed,
-   * and speed is one over the cycle.
-   *
-   * The floor here is the flick, not the gust: at 1.7s the wind-up is 170ms and
-   * the snap 340ms, which is about as fast as a swing can be read as a swing.
-   */
-  --yasuo-cycle: 1.7s;
-
-  /*
-   * Each ring's spin, as a fraction of the cycle rather than a duration, so
-   * "faster" stays one number. They were absolute and did not move when the
-   * cycle first shortened, which left the funnel turning at its old speed while
-   * travelling at a new one.
-   *
-   * The four differ on purpose: one speed for all of them reads as a solid cone
-   * rotating rather than air moving around one, and the narrow end being quickest
-   * is what sells it as the same air going faster the tighter its circle.
-   */
-  --yasuo-spin-0: 0.68;
-  --yasuo-spin-1: 0.57;
-  --yasuo-spin-2: 0.45;
-  --yasuo-spin-3: 0.36;
-}
-
-/* Snappy per segment, so the wind-up and the flick both land hard rather than
-   easing through the whole arc at one speed. */
-@keyframes yasuo-slash {
-  0%,
-  100% {
-    transform: rotate(-26deg);
-  }
-  10% {
-    transform: rotate(-41deg);
-  }
-  30% {
-    transform: rotate(14deg);
-  }
-  42% {
-    transform: rotate(6deg);
-  }
-  76% {
-    transform: rotate(6deg);
-  }
-}
-
-/* The same clock at a tenth of the amplitude. A body held perfectly still under
-   a swinging arm reads as a cut-out with a hinge; this is deliberately too small
-   to notice on its own. */
-@keyframes yasuo-lunge {
-  0%,
-  100% {
-    transform: rotate(0deg);
-  }
-  10% {
-    transform: rotate(-3deg);
-  }
-  30% {
-    transform: rotate(4deg);
-  }
-  76% {
-    transform: rotate(3deg);
-  }
-}
-
-/*
- * Born standing on the ground under the blade and travelling dead straight: `y`
- * never changes. It used to arc down from the blade's middle, which is what a
- * funnel born in mid-air has to do, and an arc is what "travels in a straight
- * line" rules out.
- *
- * The x rate is exactly 2.25 units per percent at every frame, and `linear` is
- * what keeps it so. A gust that accelerates reads as a thing falling; one
- * launched at speed reads as a thing thrown, and thrown is what the sword just
- * did. Over a 1.7s cycle that is about 132 units a second, so the 157 units from
- * the blade to the far side of the frame take roughly 1.2s.
- *
- * It fades out on the last frame rather than at 84%, so the road beside the
- * figure has something on it for 64% of the cycle instead of 54%. The 30% it is
- * still invisible for is not slack: the blade has not snapped yet.
- */
-@keyframes yasuo-gust {
-  0%,
-  30% {
-    opacity: 0;
-    transform: translateX(12.5px) scale(0.82);
-  }
-  36% {
-    opacity: 1;
-    transform: translateX(26px) scale(1);
-  }
-  92% {
-    opacity: 1;
-    transform: translateX(152px) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: translateX(170px) scale(1);
-  }
-}
-
-@keyframes yasuo-wind-0 {
-  to {
-    stroke-dashoffset: -191.4;
-  }
-}
-@keyframes yasuo-wind-1 {
-  to {
-    stroke-dashoffset: -145.8;
-  }
-}
-@keyframes yasuo-wind-2 {
-  to {
-    stroke-dashoffset: -100.2;
-  }
-}
-@keyframes yasuo-wind-3 {
-  to {
-    stroke-dashoffset: -59.2;
-  }
-}
-
-/* The hands. Pivoting at the shoulder instead means the arms have to swing with
-   the blade, and two limbs tracking an 80-unit lever is a rig, not a keyframe. */
-.yasuo-slash {
-  transform-origin: 65px 92px;
-  animation: yasuo-slash var(--yasuo-cycle) cubic-bezier(0.2, 0.8, 0.3, 1)
-    infinite;
-}
-
-/* The feet. */
-.yasuo-lunge {
-  transform-origin: 58px 126px;
-  animation: yasuo-lunge var(--yasuo-cycle) cubic-bezier(0.2, 0.8, 0.3, 1)
-    infinite;
-}
-
-.yasuo-gust {
-  /* The funnel's own narrow tip, which keeps it standing on the ground at every
-     scale: its foot cannot lift, because its foot is the origin. Scaled about
-     its middle it would sink through the ground and float above it on either
-     side of full size. */
-  transform-origin: 60px 118px;
-  /* The resting pose, for when the animation is switched off below — the running
-     animation overrides it, so this is only ever seen at rest. Without it a
-     reduced-motion viewer gets the funnel untranslated, on top of the figure,
-     with the whole right half of the frame empty. */
-  transform: translateX(40px);
-  animation: yasuo-gust var(--yasuo-cycle) linear infinite;
-}
-
-.yasuo-wind-0 {
-  animation: yasuo-wind-0 calc(var(--yasuo-cycle) * var(--yasuo-spin-0)) linear
-    infinite;
-}
-.yasuo-wind-1 {
-  animation: yasuo-wind-1 calc(var(--yasuo-cycle) * var(--yasuo-spin-1)) linear
-    infinite;
-}
-.yasuo-wind-2 {
-  animation: yasuo-wind-2 calc(var(--yasuo-cycle) * var(--yasuo-spin-2)) linear
-    infinite;
-}
-.yasuo-wind-3 {
-  animation: yasuo-wind-3 calc(var(--yasuo-cycle) * var(--yasuo-spin-3)) linear
-    infinite;
-}
-
-/*
  * The entrances are decoration — they say a thing arrived, never what the
  * thing is — so all of them go, and the launch screen assembles in one frame.
  *
@@ -325,26 +127,12 @@
   }
 
   /*
-   * The chat indicator keeps its wind and loses its choreography. A sword
-   * swinging, a body lunging and a funnel flying across the frame are the three
-   * things this setting is asking us not to do; four rings turning slowly in
-   * place is the one thing still saying the turn has not stalled.
-   *
-   * What is left is a composed still, which is why the gust's resting
-   * `transform` above is a CSS declaration and not an SVG attribute — an
-   * attribute would win over nothing here, but it also cannot be overridden by
-   * the running animation the rest of the time.
+   * The chat's loading indicator is **not** here, and cannot be: it is an
+   * animated GIF now, whose clock belongs to the image decoder rather than to
+   * the compositor, so there is no declaration that reaches it. It was an SVG
+   * that dropped its choreography and kept its wind under this setting, then a
+   * spritesheet that could at least be slowed to a third. Switching it off would
+   * mean shipping a still frame as a second asset — see
+   * `components/studio/yasuo-loader.tsx`.
    */
-  .yasuo-slash,
-  .yasuo-lunge,
-  .yasuo-gust {
-    animation: none;
-  }
-
-  .yasuo-wind-0,
-  .yasuo-wind-1,
-  .yasuo-wind-2,
-  .yasuo-wind-3 {
-    animation-duration: 6s;
-  }
 }

@@ -3,50 +3,27 @@ import {
   useEffect,
   useRef,
   useState,
-  type ComponentType,
   type KeyboardEvent,
-  type SVGProps,
 } from "react"
 import { createPortal } from "react-dom"
-import {
-  Check,
-  CheckCircle2,
-  Loader2,
-  MessageSquare,
-  User,
-  X,
-} from "lucide-react"
+import { Check, CheckCircle2, MessageSquare, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Claude } from "@/components/ui/svgs/claude"
 import { Textarea } from "@/components/ui/textarea"
 import { MarkdownView } from "../markdown-view"
 import { relativeTo } from "@/lib/files/paths"
 import { dropThreadHost, threadHost } from "@/lib/files/review-hosts"
 import {
-  AGENT_MENTION,
   anchorLabel,
   isDeletedOnly,
-  markMention,
   snippetOf,
   threadsOf,
   useReview,
   type PendingRange,
-  type ReviewAuthor,
-  type ReviewSeverity,
   type ReviewSpot,
   type ReviewThread,
 } from "@/lib/files/review"
 import { useFiles } from "@/lib/files/store"
-/* The `@`-in-a-textarea half of the chat composer's own mention menu, which is
- * pure text work with no chat in it and is checked in `test/chat-mentions.ts`.
- * Reused rather than written again: two answers to "is the caret in a mention?"
- * is two behaviours to keep agreeing. */
-import {
-  insertMention,
-  mentionQuery,
-  type MentionQuery,
-} from "@/lib/worktree-chat/mention-text"
 
 /** Which threads have had a node made for them, so the ones that go can have it
  * taken back — see the effect in `ReviewPanel`. */
@@ -57,13 +34,14 @@ const drawn = new Set<string>()
 const MAX_FIND_FRAMES = 120
 
 /**
- * What the thread the walk is standing on wears.
+ * What the thread that was landed on wears.
  *
  * A ring rather than a tint, because the box already has a background and a
  * border doing work; a ring is the one layer nothing else in a thread uses. It
- * stays until the walk moves on rather than fading after a second: `⌥↓` is a
- * *place*, and a highlight that disappeared would leave somebody who looked away
- * mid-file with no way back to it but pressing the key again and overshooting.
+ * stays until another thread is landed on rather than fading after a second: it
+ * marks a *place*, and a highlight that disappeared would leave somebody who
+ * looked away mid-file with no way back to it but going through the `Comments`
+ * tab again.
  */
 const FOCUS_RING = (focused: boolean) =>
   focused ? "ring-2 ring-ring/70 ring-offset-1 ring-offset-background" : ""
@@ -152,12 +130,12 @@ export function ReviewPanel({
   const label = (path: string) => relativeTo(rootPath, path) || path
 
   /*
-   * The thread `⌥↓` landed on, brought into view.
+   * The thread that was landed on, brought into view.
    *
    * **Retried across frames rather than done once**, which is the whole of the
-   * difficulty: `step` may have opened another file, and the widget the thread is
-   * drawn in does not exist until that file's diff has been read, parsed and laid
-   * out. So the node is asked for every frame until it is in the document —
+   * difficulty: `reveal` may have opened another file, and the widget the thread
+   * is drawn in does not exist until that file's diff has been read, parsed and
+   * laid out. So the node is asked for every frame until it is in the document —
    * `threadHost` hands back the same node whether or not the editor has attached
    * it yet, so there is nothing to subscribe to, only something to wait for.
    *
@@ -197,7 +175,6 @@ export function ReviewPanel({
           {createPortal(
             <Thread
               thread={thread}
-              rootPath={rootPath}
               label={label(thread.path)}
               replying={replyTo === thread.id}
               focused={focused === thread.id}
@@ -208,12 +185,7 @@ export function ReviewPanel({
       ))}
 
       {mine && spot && (
-        <FloatingComposer
-          place={mine}
-          spot={spot}
-          rootPath={rootPath}
-          label={label(mine.path)}
-        />
+        <FloatingComposer place={mine} spot={spot} label={label(mine.path)} />
       )}
 
       {/*
@@ -228,7 +200,7 @@ export function ReviewPanel({
       {stranded && (
         <div className="shrink-0 border-t bg-muted/20 px-3 py-2">
           <RangeLine label={label(stranded.path)} place={stranded} />
-          <Composer place={stranded} rootPath={rootPath} />
+          <Composer place={stranded} />
         </div>
       )}
     </>
@@ -275,23 +247,14 @@ function RangeLine({ label, place }: { label: string; place: PendingRange }) {
  * strip for a range that is on screen nowhere — because what it does when it is
  * submitted is the fiddly half and must not exist twice.
  */
-function Composer({
-  place,
-  rootPath,
-}: {
-  place: PendingRange
-  /** The checkout, for a first comment that already says `@claude-review` — see
-   * `add`. Asking on the way in is the point: the question and the summons are
-   * one sentence. */
-  rootPath: string
-}) {
+function Composer({ place }: { place: PendingRange }) {
   /* What the diff on screen is comparing against, for a comment on a deleted
    * line: those lines are in the commit and nowhere else. */
   const committed = useReview((state) => state.committed)
 
   return (
     <Box
-      placeholder="What should change here?  @ to ask Claude"
+      placeholder="What should change here?"
       onCancel={() => useReview.getState().cancel()}
       onSubmit={(body) => {
         // The quoted lines come from the buffer the diff is showing, which is
@@ -305,18 +268,12 @@ function Composer({
         const commit = committed?.path === place.path ? committed.text : ""
         const { old: before, new: after } = place.anchor
 
-        useReview.getState().add(
-          body,
-          {
-            old: before
-              ? snippetOf(commit, before.fromLine, before.toLine)
-              : null,
-            new: after
-              ? snippetOf(working, after.fromLine, after.toLine)
-              : null,
-          },
-          rootPath
-        )
+        useReview.getState().add(body, {
+          old: before
+            ? snippetOf(commit, before.fromLine, before.toLine)
+            : null,
+          new: after ? snippetOf(working, after.fromLine, after.toLine) : null,
+        })
       }}
     />
   )
@@ -352,12 +309,10 @@ const COMPOSER_MARGIN = 8
 function FloatingComposer({
   place,
   spot,
-  rootPath,
   label,
 }: {
   place: PendingRange
   spot: ReviewSpot
-  rootPath: string
   label: string
 }) {
   const cardRef = useRef<HTMLDivElement>(null)
@@ -408,7 +363,7 @@ function FloatingComposer({
       onMouseDown={(event) => event.stopPropagation()}
     >
       <RangeLine label={label} place={place} />
-      <Composer place={place} rootPath={rootPath} />
+      <Composer place={place} />
     </div>
   )
 }
@@ -432,74 +387,6 @@ function StaleMark() {
       title="These lines have changed since this comment was written — the code it quotes is no longer in the file"
     >
       outdated
-    </span>
-  )
-}
-
-/**
- * Who said it, as a glyph.
- *
- * Claude's own mark rather than a generic robot — the app already ships svgl's
- * (`components/ui/svgs/claude.tsx`, the same one the chat composer uses), and a
- * thread where one voice is the product is a thread that should say which
- * product. It carries its own colour, which is also what tells the two apart at
- * this size without reading the name beside it.
- */
-const AUTHOR_MARK: Record<
-  ReviewAuthor,
-  ComponentType<SVGProps<SVGSVGElement>>
-> = {
-  you: User,
-  agent: Claude,
-}
-
-const AUTHOR_TITLE: Record<ReviewAuthor, string> = {
-  you: "You",
-  agent: "Claude",
-}
-
-/**
- * How bad a finding says it is, as a chip.
- *
- * The classes live here and the id lives in the record, the same split
- * `BOARD_TONES` has from `BoardTone` — a review on disk says `critical`, and
- * what that is worth in pixels is this file's business.
- *
- * The hues are the ones a forge trained everybody on: red for the one that
- * stops a release, amber for a real bug, and then **nothing** — `medium` and
- * `low` are drawn in the muted grey the rest of the thread's furniture uses.
- * That is the decision worth defending: a four-colour scale makes every comment
- * shout, and a reviewer scanning a file needs the two that matter to be the two
- * that are coloured. `low` is quieter still, and deliberately readable only when
- * looked at.
- */
-const SEVERITY_CHIP: Record<ReviewSeverity, string> = {
-  critical: "bg-red-500/12 text-red-700 dark:bg-red-400/15 dark:text-red-300",
-  high: "bg-amber-500/15 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300",
-  medium: "bg-muted text-muted-foreground",
-  low: "bg-muted/60 text-muted-foreground/80",
-}
-
-/** What each reads as. Capitalised rather than shouted: this sits beside a name
- * and a line number, and an upper-case word at that size is a klaxon. */
-const SEVERITY_TITLE: Record<ReviewSeverity, string> = {
-  critical: "Critical",
-  high: "High",
-  medium: "Medium",
-  low: "Low",
-}
-
-/** The chip itself. Absent severity draws nothing at all — see
- * `ReviewThread.severity`: a remark somebody typed has none, and a placeholder
- * saying so would be a form field on a sentence. */
-function SeverityMark({ severity }: { severity: ReviewSeverity | undefined }) {
-  if (!severity) return null
-  return (
-    <span
-      className={`shrink-0 rounded-sm px-1 py-px font-sans text-[0.6rem] font-medium ${SEVERITY_CHIP[severity]}`}
-      title={`Claude rated this ${SEVERITY_TITLE[severity].toLowerCase()}`}
-    >
-      {SEVERITY_TITLE[severity]}
     </span>
   )
 }
@@ -530,14 +417,11 @@ function SeverityMark({ severity }: { severity: ReviewSeverity | undefined }) {
  */
 function Thread({
   thread,
-  rootPath,
   label,
   replying,
   focused,
 }: {
   thread: ReviewThread
-  /** The checkout, for the turn `Ask Claude` runs — see `askAgent`. */
-  rootPath: string
   label: string
   replying: boolean
   /** Whether the walk is standing on this one — see `step`. Drawn as a ring:
@@ -545,8 +429,6 @@ function Thread({
    * one the eye still has to find. */
   focused: boolean
 }) {
-  const asking = useReview((state) => state.asking).includes(thread.id)
-  const failed = useReview((state) => state.askErrors)[thread.id]
   /* Whether a *resolved* thread has been opened again to be read. Local, and
      deliberately not on the store: it says nothing about the review, it is not
      worth writing down, and a resolved thread the reader unfolded should fold
@@ -573,19 +455,10 @@ function Thread({
     >
       <ul>
         {thread.notes.map((note, at) => {
-          const Mark = AUTHOR_MARK[note.author]
           const first = at === 0
           return (
             <li key={note.id} className="border-t px-3 py-2 first:border-t-0">
               <div className="flex items-center gap-1.5">
-                <Mark className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="text-xs font-medium">
-                  {AUTHOR_TITLE[note.author]}
-                </span>
-                {/* Beside the name on the first note, because it belongs to the
-                    finding rather than to the thread's later argument — see
-                    `ReviewThread.severity`. */}
-                {first && <SeverityMark severity={thread.severity} />}
                 {first && (
                   <span className="ml-auto min-w-0 truncate font-mono text-[0.7rem] text-muted-foreground">
                     {label}:{anchorLabel(thread.anchor)}
@@ -620,50 +493,21 @@ function Thread({
                 own size: it is the content of this box.
               */}
               <MarkdownView
-                source={markMention(note.body)}
+                source={note.body}
                 className="mt-1 pl-[1.25rem] text-[0.8125rem] leading-snug"
               />
             </li>
           )
         })}
-
-        {/*
-          The turn, while it is running, drawn as the note it is about to become.
-          It was a spinner on a button; the button is gone, and a thread that has
-          summoned Claude has to say so somewhere — this is where the answer will
-          appear, so it is where the waiting belongs.
-        */}
-        {asking && (
-          <li className="border-t px-3 py-2">
-            <div className="flex items-center gap-1.5">
-              <Claude className="size-3.5 shrink-0" />
-              <span className="text-xs font-medium">{AUTHOR_TITLE.agent}</span>
-            </div>
-            <p className="mt-1 flex items-center gap-1.5 pl-[1.25rem] text-[0.8125rem] text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" />
-              Reading the code…
-            </p>
-          </li>
-        )}
       </ul>
-
-      {/* Drawn, not written in as a note: a reply that did not happen is not
-          something anybody said. Cleared by the next attempt. */}
-      {failed && (
-        <p className="border-t px-3 py-1.5 text-[0.7rem] text-destructive">
-          Claude could not answer: {failed}
-        </p>
-      )}
 
       <div className="space-y-1.5 border-t bg-muted/40 px-3 py-2">
         {replying ? (
           <Box
-            placeholder="Reply…  @ to ask Claude"
+            placeholder="Reply…"
             submitLabel="Reply"
             onCancel={() => useReview.getState().openReply(null)}
-            onSubmit={(body) =>
-              useReview.getState().reply(thread.id, body, { rootPath })
-            }
+            onSubmit={(body) => useReview.getState().reply(thread.id, body)}
           />
         ) : (
           /*
@@ -671,18 +515,13 @@ function Thread({
             most common thing to do with a thread, which is what a forge spends
             on it — and `openReply` is what it already meant, so the store did not
             grow a state for this.
-
-            The whole width now: the `Ask Claude` button that sat beside it is
-            gone, and what replaced it is a word you write *into* this field. A
-            button and a mention doing the same job would be two ways to ask, one
-            of which cannot say what it is asking about.
           */
           <button
             type="button"
             className="w-full truncate rounded-md border bg-background px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent"
             onClick={() => useReview.getState().openReply(thread.id)}
           >
-            Reply… <span className="opacity-70">@ to ask Claude</span>
+            Reply…
           </button>
         )}
 
@@ -758,10 +597,6 @@ function ResolvedMark({
     >
       <CheckCircle2 className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="text-xs font-medium">Resolved</span>
-      {/* Kept on the folded row: what was settled is worth knowing without
-          unfolding it, and a `Critical` that has been dealt with is the most
-          interesting line in a worked-through diff. */}
-      <SeverityMark severity={thread.severity} />
       <span className="text-[0.7rem] text-muted-foreground">
         {notes === 1 ? "1 comment" : `${notes} comments`}
       </span>
@@ -805,64 +640,10 @@ function Box({
   onCancel: () => void
 }) {
   const [draft, setDraft] = useState("")
-  /**
-   * The `@…` the caret is inside, when what has been typed could still become
-   * the mention. Null is "no menu".
-   *
-   * There is exactly **one** name to offer, so this is a boolean with a position
-   * attached rather than a list and a selection: no arrow keys, no highlight, no
-   * ranking. The day there is a second mentionable thing this grows a selected
-   * index and the chat composer's menu is the thing to copy — it already has all
-   * of that, and this deliberately does not.
-   */
-  const [query, setQuery] = useState<MentionQuery | null>(null)
   const fieldRef = useRef<HTMLTextAreaElement>(null)
-  /** Where the caret goes once picking a mention has re-rendered the value —
-   * the same bargain the chat composer's field makes with React. */
-  const picked = useRef<number | null>(null)
-  /** Set by Escape and cleared once the caret leaves the query, so a dismissed
-   * menu stays dismissed for this word rather than for ever. */
-  const dismissed = useRef(false)
-
   useEffect(() => {
     fieldRef.current?.focus()
   }, [])
-
-  useEffect(() => {
-    const caret = picked.current
-    if (caret === null) return
-    picked.current = null
-    fieldRef.current?.focus()
-    fieldRef.current?.setSelectionRange(caret, caret)
-  })
-
-  /** Whether the menu should be up for what has been typed after the `@`. A
-   * prefix of the name, which an empty filter is — a bare `@` offers it. */
-  function refresh(text: string, caret: number) {
-    const found = mentionQuery(text, caret)
-    if (!found) {
-      dismissed.current = false
-      setQuery(null)
-      return
-    }
-    const offers = AGENT_MENTION.slice(1).startsWith(found.filter.toLowerCase())
-    setQuery(!dismissed.current && offers ? found : null)
-  }
-
-  function pick() {
-    const field = fieldRef.current
-    if (!query || !field) return
-
-    const next = insertMention(
-      draft,
-      query,
-      field.selectionStart,
-      AGENT_MENTION
-    )
-    setDraft(next.text)
-    picked.current = next.caret
-    setQuery(null)
-  }
 
   function submit() {
     if (!draft.trim()) return
@@ -873,33 +654,6 @@ function Box({
     // An IME's Enter belongs to the candidate window — the same guard the chat
     // composer keeps, and for the same keyboards.
     if (event.nativeEvent.isComposing) return
-
-    /*
-     * The menu gets the keys first, and takes only three.
-     *
-     * `⌘⏎` is deliberately not one of them: a comment that is finished while the
-     * menu happens to be up should send, not complete a word nobody was
-     * choosing. Escape closes the menu rather than the box, which is what a
-     * reader means by it while a list is open — and what stops a dismissed menu
-     * throwing away a half-written remark.
-     */
-    if (query) {
-      if (
-        event.key === "Tab" ||
-        (event.key === "Enter" && !event.metaKey && !event.ctrlKey)
-      ) {
-        // prettier-ignore
-        event.preventDefault()
-        pick()
-        return
-      }
-      if (event.key === "Escape") {
-        event.preventDefault()
-        dismissed.current = true
-        setQuery(null)
-        return
-      }
-    }
 
     if (event.key === "Escape") {
       event.preventDefault()
@@ -920,42 +674,12 @@ function Box({
           value={draft}
           rows={3}
           placeholder={placeholder}
-          onChange={(event) => {
-            setDraft(event.target.value)
-            refresh(event.target.value, event.target.selectionStart)
-          }}
-          /* Caret moves that are not edits — an arrow key, a click into the
-             middle of the draft — are what close a menu the caret has left. */
-          onSelect={(event) =>
-            refresh(draft, event.currentTarget.selectionStart)
-          }
+          onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
           className="min-h-16 resize-none text-xs md:text-xs"
         />
-        {query && (
-          <ul className="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-md border bg-popover shadow-lg">
-            <li>
-              {/* `onMouseDown` with the default prevented rather than `onClick`:
-                  a click takes the focus off the field first, and a mention
-                  inserted into a box nobody is in is a caret nobody can see. */}
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-accent"
-                onMouseDown={(event) => {
-                  event.preventDefault()
-                  pick()
-                }}
-              >
-                <Claude className="size-3.5 shrink-0" />
-                <span className="font-medium">{AGENT_MENTION}</span>
-                <span className="ml-auto truncate text-muted-foreground">
-                  answers in this thread
-                </span>
-              </button>
-            </li>
-          </ul>
-        )}
       </div>
+      <div className="mt-1.5 flex items-center justify-end gap-1.5"> </div>
       <div className="mt-1.5 flex items-center justify-end gap-1.5">
         <Button
           variant="ghost"

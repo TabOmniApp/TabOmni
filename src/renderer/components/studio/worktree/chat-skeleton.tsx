@@ -3,7 +3,7 @@ import { useEffect, useState } from "react"
 
 import type { ChatAgent } from "@shared/api"
 import { cn } from "@/lib/utils"
-import { YasuoTornadoLoader } from "@/components/studio/yasuo-tornado-loader"
+import { YasuoLoader } from "@/components/studio/yasuo-loader"
 import { elapsed } from "@/lib/worktree-chat/since"
 
 /**
@@ -15,8 +15,8 @@ import { elapsed } from "@/lib/worktree-chat/since"
  * This was a 12px `Spinner` on the same line as the label. It is the one of the
  * app's four busy indicators with room for a drawing: the other three
  * (`tab-items.tsx`, `board-card.tsx`, `projects-section.tsx`) are 12–14px icon
- * slots in a row of text, and at that size the figure is a smudge and the wind
- * rings are sub-pixel. They keep their `Loader2`.
+ * slots in a row of text, and a 433x230 drawing scaled into one of those is a
+ * smudge. They keep their `Loader2`.
  *
  * The loader is 28px, so the label and the agent rows are a **column beside it**
  * rather than lines indented past it. The old layout hung the agent rows off a
@@ -41,10 +41,7 @@ export function ChatSkeleton({
     <div className="flex items-start gap-2 px-1 text-xs text-muted-foreground">
       {/* `label` stays plain English: it is the accessible name, and a screen
           reader announcing a pun is a screen reader announcing nothing. */}
-      <YasuoTornadoLoader
-        className={cn(LOADER_H, "shrink-0")}
-        label="Working"
-      />
+      <YasuoLoader className={cn(LOADER_H, "shrink-0")} label="Working" />
 
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className={cn(LOADER_H, "flex items-center gap-2")}>

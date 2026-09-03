@@ -52,8 +52,8 @@ export function DistillDialog({
   useEffect(() => {
     let stale = false
     const settings = useSettings.getState()
-    // The review's own model and profile, because it is the review's own CLI —
-    // one read-only `claude` with one place to be configured.
+    // Settings › `Helper turns`, because this is the one read-only `claude`
+    // with one place to be configured.
     void window.desktop
       .distillLearnings(
         chatId,

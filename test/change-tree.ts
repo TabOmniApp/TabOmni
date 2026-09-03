@@ -2,7 +2,6 @@ import type { GitChange } from "../src/shared/api"
 import {
   changeTree,
   changesUnder,
-  countsUnder,
   type ChangeTreeNode,
 } from "../src/renderer/lib/files/change-tree"
 import { check, finish, section } from "./harness"
@@ -178,21 +177,6 @@ section("what a directory row acts on")
     "every change under a row, however deep",
     changesUnder(src).length === 3,
     changesUnder(src).map((entry) => entry.path)
-  )
-  check(
-    "counts are the descendants' added up",
-    JSON.stringify(countsUnder(src)) ===
-      JSON.stringify({ added: 110, removed: 8 }),
-    countsUnder(src)
-  )
-
-  const binaries = changeTree(
-    [change("assets/logo.png", { added: null, removed: null })],
-    ROOT
-  )
-  check(
-    "a folder with no honest number at all has none",
-    countsUnder(dir(binaries, "assets")) === null
   )
 }
 

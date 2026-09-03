@@ -11,8 +11,7 @@ import {
 import { useChanges } from "@/lib/files/changes"
 import { fileRootsOf } from "@/lib/files/roots"
 import { useFiles } from "@/lib/files/store"
-import { useReview } from "@/lib/files/review"
-import { isReviewStepShortcut, isStudioShortcut } from "@/lib/shortcuts"
+import { isStudioShortcut } from "@/lib/shortcuts"
 import { useStudio } from "@/lib/store"
 import { SECTION_ACCENT } from "../section-marks"
 import { FilePane } from "./file-workspace"
@@ -78,22 +77,6 @@ export function ChangesPane() {
    */
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      /*
-       * `⌥↓` / `⌥↑` walk the review, across files — see `step`.
-       *
-       * Here beside ⌘S because this is the component that knows which checkout
-       * is on screen, and for the same reason that key is here rather than in
-       * the editor: the diff holds no focus to bind a key on. Guarded by
-       * `shown`, so the other pane's arrows are its own.
-       */
-      const delta =
-        rootId !== null && shown ? isReviewStepShortcut(event) : null
-      if (delta && rootId !== null) {
-        event.preventDefault()
-        useReview.getState().step(rootId, delta)
-        return
-      }
-
       if (!isStudioShortcut(event, "s")) return
       if (!path || !shown) return
 
@@ -105,7 +88,7 @@ export function ChangesPane() {
     return () => {
       window.removeEventListener("keydown", onKeyDown, { capture: true })
     }
-  }, [path, rootId, shown])
+  }, [path, shown])
 
   if (!root) {
     return (

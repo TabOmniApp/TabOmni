@@ -124,6 +124,29 @@ function captionFor(permission: ChatPermission): string | null {
   }
 }
 
+/**
+ * Where each chat was left reading, by chat id.
+ *
+ * The pane is one instance reused across the strip's chats, so without this a
+ * switch away and back landed at the newest turn — right the first time a chat
+ * is opened and wrong every time after, which is how scrolling up to read a
+ * plan and glancing at another tab lost the place.
+ *
+ * Module level rather than a ref because the pane unmounts when the chat it is
+ * showing is deleted, and the other chats' places are not that chat's to lose.
+ */
+const places = new Map<string, { top: number; pinned: boolean }>()
+
+/**
+ * How long a restored position keeps being re-applied as the transcript settles.
+ * The lines are in the store already, but a switch re-renders every message and
+ * its markdown, code and images arrive over the next few frames — so the height
+ * at the moment of the switch is short of the real one and a single write lands
+ * clamped at the bottom. Bounded in time rather than waiting to reach the
+ * target, because a chat that has been compacted meanwhile never will.
+ */
+const RESTORE_MS = 400
+
 function Conversation({
   chatId,
   place,
@@ -225,6 +248,19 @@ function Conversation({
   const pinned = useRef(true)
   const lastTop = useRef(0)
 
+  // A position being put back, and whether that is still in force — see
+  // `RESTORE_MS`. While it is, the view's own scroll events say nothing about
+  // what the user wants: they are this restore's, and reading them would pin the
+  // chat to the bottom it was momentarily clamped at.
+  const restore = useRef<{ top: number; until: number } | null>(null)
+  const restoring = () => {
+    const pending = restore.current
+    if (!pending) return false
+    if (Date.now() < pending.until) return true
+    restore.current = null
+    return false
+  }
+
   // Follows the newest turn, but only while it is pinned: yanking the view down
   // while somebody reads further up is what makes a transcript unusable.
   // `ask` is in here too: a question arriving is the one thing that must not be
@@ -234,15 +270,22 @@ function Conversation({
     if (element && pinned.current) element.scrollTop = element.scrollHeight
   }, [messages, sending, ask])
 
-  // Opening a chat lands at its newest turn. The pane is one instance reused
-  // across the strip's chats rather than one per chat, so without this a switch
-  // inherits the previous conversation's scroll position — and its pin, which
-  // is what kept the effect above from following the new chat at all.
+  // Opening a chat lands at its newest turn; coming back to one lands where it
+  // was left (`places`). Either way the pin is set from the chat being shown
+  // rather than inherited: the pane is one instance reused across the strip's
+  // chats, and the previous conversation's scroll position and pin are what a
+  // switch used to arrive with.
   useEffect(() => {
     const element = box.current
-    pinned.current = true
-    lastTop.current = 0
-    if (element) element.scrollTop = element.scrollHeight
+    const seen = places.get(chatId)
+    pinned.current = seen ? seen.pinned : true
+    lastTop.current = seen?.top ?? 0
+    restore.current =
+      seen && !seen.pinned
+        ? { top: seen.top, until: Date.now() + RESTORE_MS }
+        : null
+    if (!element) return
+    element.scrollTop = pinned.current ? element.scrollHeight : (seen?.top ?? 0)
   }, [chatId])
 
   // The transcript settles over several frames — lines arrive from disk after
@@ -255,8 +298,17 @@ function Conversation({
     const inner = content.current
     if (!element || !inner) return
     const observer = new ResizeObserver(() => {
-      if (!pinned.current) return
-      element.scrollTop = element.scrollHeight
+      if (pinned.current) {
+        element.scrollTop = element.scrollHeight
+        lastTop.current = element.scrollTop
+        return
+      }
+      // The other half of the same problem: a position put back before the
+      // transcript had its full height was clamped, so it is written again
+      // every time that height changes.
+      const pending = restoring() ? restore.current : null
+      if (!pending) return
+      element.scrollTop = pending.top
       lastTop.current = element.scrollTop
     })
     observer.observe(inner)
@@ -316,6 +368,10 @@ function Conversation({
         ref={box}
         onScroll={(event) => {
           const { scrollTop, scrollHeight, clientHeight } = event.currentTarget
+          if (restoring()) {
+            lastTop.current = scrollTop
+            return
+          }
           // Reaching the bottom pins; only scrolling *up* unpins. Content
           // growing under a still view fires a scroll event too, and treating
           // that as leaving the bottom is what stopped the pane following a
@@ -323,6 +379,7 @@ function Conversation({
           if (scrollHeight - scrollTop - clientHeight < 8) pinned.current = true
           else if (scrollTop < lastTop.current - 1) pinned.current = false
           lastTop.current = scrollTop
+          places.set(chatId, { top: scrollTop, pinned: pinned.current })
         }}
         className={cn(
           "min-h-0 flex-1 overflow-y-auto",

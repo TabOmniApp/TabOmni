@@ -1498,20 +1498,15 @@ export type WorktreeChat = {
 export type WorktreeChatEvent = AssistantEvent & { chatId: string }
 
 /**
- * What a review comment's `Ask Claude` came back with — see
- * `replyToReviewComment`.
+ * What one read-only turn came back with — see `draftCommitMessage` and
+ * `main/one-turn-agent.ts`.
  *
  * A union rather than a nullable string, because the failure has to be shown:
- * the button is pressed on a thread and something has to appear under it, and
- * "nothing happened" is the one answer a reviewer cannot act on. The error is
- * whatever the CLI said, drawn in the thread and not written into it as a note.
+ * the button is pressed and something has to appear, and "nothing happened" is
+ * the one answer nobody can act on. The error is whatever the CLI said, drawn
+ * where the answer would have gone rather than written anywhere.
  */
-export type ReviewReplyAnswer = { text: string } | { error: string }
-
-/** What `reviewChanges` came back with. An empty list is a real answer — the
- * change is sound — and is said as one. */
-export type ReviewChangesAnswer =
-  { findings: ReviewFinding[] } | { error: string }
+export type AgentTurnAnswer = { text: string } | { error: string }
 
 /** What `distillLearnings` came back with. An empty list is a real answer —
  * the chat taught nothing worth keeping — and the dialog says it as one. The
@@ -1524,33 +1519,6 @@ export type DistillAnswer =
  * project, for the dialog to show — or the refusal, which is an answer too
  * (`A skill named … already exists.`). */
 export type SaveLearningAnswer = { path: string } | { error: string }
-
-/**
- * One line of a whole-diff review's activity, while it is running — a tool
- * call read off one of the turns `review-agent.ts` runs `reviewChanges` on
- * (`Read src/main/ipc.ts`, `Grep TODO`), so a reviewer watching the bar can
- * tell *which* files it is reading rather than staring at a spinner until it
- * answers. There is a turn per changed file and several run at once, so a line
- * is prefixed with the file whose turn made the call, and a `3/58` line lands
- * as each of them finishes.
- *
- * Pushed rather than polled, the way a chat's own lines are
- * (`WorktreeChatEvent`) — the turn is main's, and nothing here is worth a
- * round trip per line. No id and no ordering guarantee beyond arrival order:
- * this is a transcript nobody keeps, cleared the moment the next review
- * starts (`reviewAll` in `lib/files/review.ts`).
- */
-export type ReviewProgressEvent = { text: string }
-
-/**
- * Who wrote one note on a review thread.
- *
- * Two: the person reading the diff, and Claude, which is called into a thread by
- * name — see `AGENT_MENTION` in `lib/files/review.ts`. A thread whose author is
- * not said is a thread that reads as the reviewer's own once there are two of
- * them in a pane.
- */
-export type ReviewAuthor = "you" | "agent"
 
 /**
  * Which file a thread's line numbers are in.
@@ -1600,40 +1568,8 @@ export type ReviewSnippet = {
 /** One thing said in a thread. */
 export type ReviewNote = {
   id: string
-  author: ReviewAuthor
   body: string
 }
-
-/**
- * How bad a finding is, in the model's own judgement.
- *
- * Four levels rather than three, because this is the scale a reviewer coming
- * from a forge already reads — CodeQL, Copilot Autofix and every security alert
- * GitHub raises use exactly these words, in this order. That is the whole
- * argument for it: the levels are not defined here, they are *recognised*, and a
- * scale somebody has to learn is one they end up ignoring.
- *
- * Deliberately **not** `BoardPriority`, which is the app's other three-level
- * scale. They read alike and mean different things: a priority is what somebody
- * decided to do next, and this is what a model thinks a defect costs. Sharing
- * the type would make the board's `high` and a review's `high` the same word by
- * accident, and the first time one of them grew a level the other would too.
- *
- * **Absent is a real state** and not a fourth-and-a-half level: a remark a
- * person typed has no severity at all, and neither has one from a turn that
- * answered without a usable one — see `asFinding` in `main/review-agent.ts`,
- * which drops what it cannot read rather than guessing a middle.
- */
-export type ReviewSeverity = "critical" | "high" | "medium" | "low"
-
-/** Them worst-first, which is the order they are worth reading in and the order
- * anything sorting by them wants. */
-export const REVIEW_SEVERITY_IDS: ReviewSeverity[] = [
-  "critical",
-  "high",
-  "medium",
-  "low",
-]
 
 /**
  * A range of a diff's lines, and the conversation about it.
@@ -1691,42 +1627,6 @@ export type ReviewThread = {
    * still asking for something, so a diff worked through reads as done.
    */
   resolved?: boolean
-  /**
-   * How bad the finding that opened this thread is — see `ReviewSeverity`.
-   *
-   * On the **thread** rather than on the note, because it is a property of the
-   * finding and a thread is one finding: the replies argue about it, and one
-   * that talked the severity down would be a badge that changed as the
-   * conversation went on. Absent on every thread a person opened, which is the
-   * honest answer — a reviewer typing a remark is not filling in a form.
-   */
-  severity?: ReviewSeverity
-}
-
-/**
- * One thing a whole-diff review found, before it is a thread.
- *
- * Deliberately smaller than `ReviewThread`: a model returns a place and a
- * sentence, and everything else a thread carries — its id, the lines it quotes,
- * who said it — is added on this side, where those are already known. What comes
- * back over the wire is the part that had to be *decided*.
- *
- * Only the **working file's** lines. A thread can be about the commit's, but
- * nothing turning a patch into a position has the commit's text to hand, and a
- * remark about a deletion belongs on the lines that replaced it anyway.
- */
-export type ReviewFinding = {
-  /** Relative to the checkout, as the diff names it. */
-  path: string
-  /** Inclusive, counting from 1, in the file as it is now. */
-  fromLine: number
-  toLine: number
-  /** The remark, as markdown. */
-  body: string
-  /** How bad the turn thinks it is, when it said so in a word this could read.
-   * See `ReviewSeverity`, and `asFinding` for why an unreadable one is dropped
-   * rather than rounded to the middle. */
-  severity?: ReviewSeverity
 }
 
 /**
@@ -2075,8 +1975,8 @@ export type DesktopApi = {
   /**
    * Commits what is staged, and answers with the commit that was written.
    *
-   * **Rejects** rather than answering with an error, unlike the two review
-   * calls: git's own message is what a refusal has to say — nothing staged, no
+   * **Rejects** rather than answering with an error, unlike the drafted
+   * message: git's own message is what a refusal has to say — nothing staged, no
    * identity configured, a `pre-commit` hook that said no — and the pane draws
    * it as it came.
    */
@@ -2087,17 +1987,17 @@ export type DesktopApi = {
   /**
    * A commit message for what is staged, drafted by the read-only `claude`.
    *
-   * The same shape as `replyToReviewComment` and for the same reasons — the
-   * same three settings, and an answer either way rather than a rejection: a
-   * draft that did not arrive leaves the box as it was. What comes back goes
-   * into an editable field, never straight into a commit.
+   * The same shape as `distillLearnings` and for the same reasons — the same
+   * three settings, and an answer either way rather than a rejection: a draft
+   * that did not arrive leaves the box as it was. What comes back goes into an
+   * editable field, never straight into a commit.
    */
   draftCommitMessage: (
     folderId: string,
     model: string | null,
     effort: ChatEffort | null,
     profileId: string | null
-  ) => Promise<ReviewReplyAnswer>
+  ) => Promise<AgentTurnAnswer>
 
   /**
    * The committed side of a diff and git's own patch for it — see `FileDiff`.
@@ -2410,33 +2310,6 @@ export type DesktopApi = {
   onRevealWorktreeChat: (listener: (chatId: string) => void) => () => void
 
   /**
-   * One review comment, answered by a read-only turn in that checkout.
-   *
-   * **Not a chat**, and the difference is the whole of why it is its own call:
-   * there is no id, no transcript and nothing to send a second message to. The
-   * session is opened for the question and closed on the answer, which lands in
-   * the thread as a note by `agent` — see `src/main/review-agent.ts` for what
-   * that turn may do, and why it is allowed to exist beside the "the only
-   * `claude` this app spawns" rule in `ipc.ts`.
-   *
-   * Resolves either way rather than rejecting: a reply that failed is a sentence
-   * to draw in the thread, and the renderer has one path for it.
-   *
-   * `model`, `effort` and `profileId` are the same three a chat's toolbar picks
-   * from — see `WorktreeChatOptions` — because a review turn is billed to an
-   * account and thinks at a level exactly the way a chat's does. `profileId` is
-   * resolved to a `CLAUDE_CONFIG_DIR` on the main side, the same as a chat's.
-   */
-  replyToReviewComment: (
-    /** The checkout's own directory — the cwd the turn reads in. */
-    cwd: string,
-    prompt: string,
-    model: string | null,
-    effort: ChatEffort | null,
-    profileId: string | null
-  ) => Promise<ReviewReplyAnswer>
-
-  /**
    * Every board card in every project.
    *
    * One call for the whole workspace rather than per project, the way the chat
@@ -2449,42 +2322,13 @@ export type DesktopApi = {
    * order, the same way it owns the requests'. */
   saveBoardCards: (cards: BoardCard[]) => Promise<void>
   /**
-   * A checkout's changed files, reviewed by one read-only turn each.
-   *
-   * The findings come back rather than the threads: this side turns each one
-   * into a thread, because that is where the file's own text is to hand to quote
-   * from — see `reviewAll` in `lib/files/review.ts`.
-   *
-   * `paths` narrows it to some of them — a file read again after being fixed,
-   * which is the whole of why one row has a button. Relative to `cwd`, filtered
-   * against the diff rather than trusted, and it narrows only which files get a
-   * *turn*: each one is still told what else the change touches.
-   *
-   * Resolves either way rather than rejecting, the same as
-   * `replyToReviewComment`. `model`, `effort` and `profileId` are the same
-   * three that call takes, for the same reason.
-   */
-  reviewChanges: (
-    cwd: string,
-    model: string | null,
-    effort: ChatEffort | null,
-    profileId: string | null,
-    paths?: string[]
-  ) => Promise<ReviewChangesAnswer>
-  /** A whole-diff review's activity while it runs — see `ReviewProgressEvent`.
-   * Returns an unsubscribe. */
-  onReviewProgress: (
-    listener: (event: ReviewProgressEvent) => void
-  ) => () => void
-
-  /**
    * What one chat taught about its project, proposed by the read-only
    * `claude` — never written. Asked for from the chat's own row, and each
    * proposal in the answer is saved or discarded by hand (`saveLearning`).
    *
    * The chat id says which transcript, the folder id says which project the
    * turn reads in — resolved on the main side, the same as a chat's own cwd.
-   * `model`, `effort` and `profileId` are the review's three, for the review's
+   * `model`, `effort` and `profileId` are the draft's three, for the draft's
    * reason: it is the same second CLI.
    */
   distillLearnings: (
@@ -2772,13 +2616,10 @@ export const IPC = {
   stopWorktreeChat: "worktree-chats:stop",
   worktreeChatEvent: "worktree-chats:event",
   revealWorktreeChat: "worktree-chats:reveal",
-  replyToReviewComment: "review:reply",
-  reviewChanges: "review:changes",
-  reviewProgress: "review:progress",
-  distillLearnings: "review:distill",
-  saveLearning: "review:save-learning",
-  listReviewThreads: "review:list",
-  saveReviewThreads: "review:save",
+  distillLearnings: "agent:distill",
+  saveLearning: "agent:save-learning",
+  listReviewThreads: "comments:list",
+  saveReviewThreads: "comments:save",
   listBoardCards: "board:list",
   saveBoardCards: "board:save",
   listBoardColumns: "board:list-columns",

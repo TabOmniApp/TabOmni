@@ -125,7 +125,7 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   **`commit` is the one write past that line**, and the reversal is recorded in
   `docs/design.md` § Committing: the sentence a commit needs can now be drafted
   off the staged diff by the read-only `claude` (`draftCommitMessage` in
-  `review-agent.ts`, fed by `stagedDiff` / `recentSubjects` here), so the gesture
+  `one-turn-agent.ts`, fed by `stagedDiff` / `recentSubjects` here), so the gesture
   is ending a reading of the diff rather than writing a paragraph in a panel with
   no room for one. Amend, log, branch and push stay out — that is the git client
   the dock's shell already is. `discard`
@@ -149,29 +149,24 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   see `docs/design.md`. What it does still say about MCP is which _tools_ a chat
   may call, from `MCP_DISABLED_TOOLS_KEY`, handed over as `disallowedTools`.
 
-- **`review-agent.ts`** — the **second** `claude`, and the only one that is not a
-  conversation: one read-only turn, opened for a question and closed on the
+- **`one-turn-agent.ts`** — the **second** `claude`, and the only one that is not
+  a conversation: one read-only turn, opened for a question and closed on the
   answer, with no transcript, no resume and nothing to send a second message to.
-  Four of them — `reviewReply`, for a comment that says `@claude-review`;
-  `reviewChanges`, which is **a turn per changed file**, `REVIEW_CONCURRENCY` of
-  them at a time, and turns what comes back into threads (its `paths` narrows it
-  to one file, which is the row's own `Review this file`);
-  `draftCommitMessage`, which reads the staged diff and the last ten subjects and
-  answers with a message for the box above the piles — never with a commit; and
-  `distillLearnings`, which reads one chat's transcript and answers with
-  **proposals** — a skill for `.claude/skills/`, a memory bullet for the
-  project's `CLAUDE.md` — each written only when its Save is pressed
-  (`main/learnings.ts`, shapes in `shared/learnings.ts`). One turn over the whole
-  diff was the first shape and its `PATCH_LIMIT` was a budget for the lot, so a
-  large change was reviewed as far as the alphabet went and no further; each turn
-  is now given its own file's patch, the list of the others as context, and may
-  comment only on its own. The rule below still holds — a feature calling the CLI as a helper is
-  refused — and none of the four is one: each is asked for out loud by a button,
-  a menu item or a mention, and each answers in the pane it was asked from, as
-  comments, proposals somebody saves one by one, or text in a box somebody still
-  has to press Commit on. `docs/design.md` § Changes, § Committing and
-  § Distilling learnings have the argument; `findingsIn` is checked in
-  `test/review.ts`, `proposalsIn` in `test/learnings.ts`.
+  Two of them — `draftCommitMessage`, which reads the staged diff and the last
+  ten subjects and answers with a message for the box above the piles, never
+  with a commit; and `distillLearnings`, which reads one chat's transcript and
+  answers with **proposals** — a skill for `.claude/skills/`, a memory bullet
+  for the project's `CLAUDE.md` — each written only when its Save is pressed
+  (`main/learnings.ts`, shapes in `shared/learnings.ts`). It was
+  `review-agent.ts` and had two more, `reviewReply` and `reviewChanges`: **the
+  agent half of the review is deleted** and what stayed is the comments somebody
+  writes by hand — `docs/design.md` § Comments has what went and why. The rule
+  below still holds — a feature calling the CLI as a helper is refused — and
+  neither of the two is one: each is asked for out loud by a button or a menu
+  item, and each answers in the place it was asked from, as proposals somebody
+  saves one by one or text in a box somebody still has to press Commit on.
+  `docs/design.md` § Committing and § Distilling learnings have the argument;
+  `proposalsIn` is checked in `test/learnings.ts`.
 
 ### `worktree-chat.ts` + `claude-agent.ts` — the `claude` a conversation runs on
 
@@ -335,6 +330,14 @@ height and the panel's `collapsedSize` are one exported `DOCK_STRIP_HEIGHT`
 rather than an `h-9` beside a `36`. `⌃\`` toggles the Terminal tab
 (`isTerminalShortcut`), and it is the one shortcut deliberately _not_ refused
 inside a pty. A project's rows are its **chats**.
+The Explorer's tab row is **three**: `All files`, `Changes`and`Comments`
+(`ExplorerTab`in`lib/store.ts`is the one list saying so). The third is the
+listing of the remarks left on a diff — they live *in* the diff, under the lines
+they are about, so "where are they all" had no answer short of opening every
+changed file.`comments-list.tsx` groups them by file and a row is a way *to*
+one (`reveal`) — which is the only way to reach one from outside the diff: the
+two arrows that walked them and the Discard-the-lot button are gone from the
+header, and with them `step`, `stepThrough`, `orderedThreads`, `clear`and`isReviewStepShortcut`.
 
 A project also has a **board** — one tab per project whose id is the project's,
 so `rootOf` is the identity the way it is for `changes`. Its columns are the
@@ -434,7 +437,7 @@ there is no assignee, no comments and no attachments.
 
 Logic worth testing is split out from the drawing: `lib/worktree-chat/activity.ts`
 (`test/chat-activity.ts`), `lib/worktree-chat/usage.ts` (`test/chat-usage.ts`),
-`lib/files/review.ts` (`test/review.ts`), `lib/tab-groups.ts`
+`lib/files/review.ts` (`test/comments.ts`), `lib/tab-groups.ts`
 (`test/tab-groups.ts`), `lib/files/roots.ts` (`test/file-roots.ts`),
 `lib/board/cards.ts` (`test/board-cards.ts`),
 `lib/worktree-chat/running.ts` (`test/chat-running.ts`) with `main/notify.ts`'s
@@ -463,4 +466,6 @@ naming of a profile's directory (`test/claude-account.ts`),
   its types — rather than hiding it, and recording the argument in
   `docs/design.md`. What is already on a user's disk is left alone: nothing
   reads `workspace/mail.json` or `workspace/tasks.json` any more, and nothing
-  deletes them either.
+  deletes them either. A **setting key** already written is the same bargain,
+  which is why `reviewModel` / `reviewEffort` / `reviewProfileId` still carry
+  the deleted agent review's name.

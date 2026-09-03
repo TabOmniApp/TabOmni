@@ -471,7 +471,7 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
    * sidebar in the studio renames — see `RenameRow`. */
   const [renamingId, setRenamingId] = useState<string | null>(null)
   /** Which chat is being distilled — the dialog under the list. One at a
-   * time, because each is a turn of the review's own CLI. */
+   * time, because each is a turn of the second, read-only CLI. */
   const [distilling, setDistilling] = useState<WorktreeChat | null>(null)
   const menuFocus = useMenuFocusHandoff()
 

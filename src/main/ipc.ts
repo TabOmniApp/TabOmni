@@ -53,12 +53,7 @@ import { installedMcpServers, removeMcpServer } from "./mcp-servers"
 import { ProcessManager } from "./process"
 import { transcriptOf, type LearningProposal } from "../shared/learnings"
 import { saveLearning } from "./learnings"
-import {
-  distillLearnings,
-  draftCommitMessage,
-  reviewChanges,
-  reviewReply,
-} from "./review-agent"
+import { distillLearnings, draftCommitMessage } from "./one-turn-agent"
 import { expandHome, quote } from "./shell-env"
 import { systemUsage } from "./system-usage"
 import { Store } from "./store"
@@ -196,9 +191,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    * reason to refuse every MCP tool the user has — nor to refuse none silently,
    * which is why it is logged.
    *
-   * Hoisted out of the source object below because a review reply needs the same
-   * list (`review-agent.ts`): a tool the workspace turned off has no business
-   * being in that model's list either.
+   * Hoisted out of the source object below because the one-turn agent needs the
+   * same list (`one-turn-agent.ts`): a tool the workspace turned off has no
+   * business being in that model's list either.
    */
   const disabledTools = async (): Promise<string[]> => {
     const raw = await store.getSetting(MCP_DISABLED_TOOLS_KEY)
@@ -215,10 +210,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   }
 
   /**
-   * A picked `profileId` as a `CLAUDE_CONFIG_DIR`, for a review turn.
+   * A picked `profileId` as a `CLAUDE_CONFIG_DIR`, for a one-turn agent.
    *
    * The same resolve `worktree-chat.ts` does at send time (`profileConfigDir`
-   * there), asked here instead because a review reply and a whole-diff review
+   * there), asked here instead because a drafted message and a distilled chat
    * have no chat and no `WorktreeChats` record to resolve it on. Looked up by id
    * rather than trusted from the renderer, same reason: a profile can be
    * renamed or deleted between the picker being drawn and the button being
@@ -240,10 +235,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    * The larger of the two `claude`s this app spawns, and the only one that is a
    * conversation. What the old "no second one" rule was about is still refused —
    * a feature calling the CLI as a helper, an AI filter or an import button —
-   * because a helper turn is a turn nobody asked for. `replyToReviewComment`
-   * below is the one turn beside these, and it is not one of those either: it is
-   * a button on a comment, pressed by the person who wrote it. See the top of
-   * `review-agent.ts`.
+   * because a helper turn is a turn nobody asked for. `draftCommitMessage` and
+   * `distillLearnings` below are the turns beside these, and neither is one of
+   * those: each is a button pressed by the person who reads its answer. See the
+   * top of `one-turn-agent.ts`.
    */
   const worktreeChats = new WorktreeChats(
     {
@@ -553,37 +548,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     worktreeChats.stop(id)
   })
 
-  /*
-   * One review comment answered, in the checkout it is about.
-   *
-   * Not `worktreeChats`', and not a chat — see the top of `review-agent.ts` for
-   * why a second `claude` is allowed to exist here at all, and why it is not a
-   * method on that class.
-   *
-   * `model`, `effort` and `profileId` are picked from a toolbar of their own in
-   * the review pane, mirroring a chat's — see `WorktreeChatOptions` and
-   * `configDirOf` above for the profile's resolve.
-   */
-  ipcMain.handle(
-    IPC.replyToReviewComment,
-    async (
-      _event,
-      cwd: string,
-      prompt: string,
-      model: string | null,
-      effort: string | null,
-      profileId: string | null
-    ) =>
-      reviewReply({
-        cwd,
-        prompt,
-        model,
-        effort,
-        configDir: await configDirOf(profileId),
-        disabledTools: await disabledTools(),
-      })
-  )
-
   ipcMain.handle(IPC.getWorkspace, () => store.getWorkspace())
 
   ipcMain.handle(IPC.pickDirectory, async () => {
@@ -739,9 +703,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   /*
    * A commit message drafted from the staged diff by the read-only `claude`.
    *
-   * The same three settings a review turn takes, resolved the same way — it is
-   * the same second CLI, billed to the same profile. Answers rather than
-   * throws, like the other two calls into `review-agent.ts`: a draft that did
+   * The same three settings the distilling turn takes, resolved the same way —
+   * it is the same second CLI, billed to the same profile. Answers rather than
+   * throws, like the other call into `one-turn-agent.ts`: a draft that did
    * not arrive leaves the box exactly as it was, which is a message somebody
    * types themselves.
    */
@@ -1021,42 +985,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     processes.stop(processId)
   })
 
-  /*
-   * The whole diff, reviewed in one turn — the same `claude` a comment's reply
-   * runs on, told to look at everything rather than at one remark. See
-   * `review-agent.ts`; the argument for a second CLI covers both. `model`,
-   * `effort` and `profileId` are the same three `replyToReviewComment` takes.
-   */
-  ipcMain.handle(
-    IPC.reviewChanges,
-    async (
-      _event,
-      cwd: string,
-      model: string | null,
-      effort: string | null,
-      profileId: string | null,
-      // Absent is every changed file; a list is the one file a row's button
-      // asked to be read again. Filtered against the diff on the other side —
-      // see `paths` on `ReviewChangesRequest`.
-      paths: string[] | null
-    ) =>
-      reviewChanges({
-        cwd,
-        model,
-        effort,
-        paths: paths ?? undefined,
-        configDir: await configDirOf(profileId),
-        disabledTools: await disabledTools(),
-        onProgress: (text) => send(IPC.reviewProgress, { text }),
-      })
-  )
-
   /**
-   * What one chat taught, distilled by the same read-only `claude` a review
-   * runs on. The transcript is read here and handed over as text: a chat's
+   * What one chat taught, distilled by the same read-only `claude` the drafted
+   * commit message runs on. The transcript is read here and handed over as text: a chat's
    * file lives under `~/.yasuo`, which the turn — running in the project's own
    * directory — has no business reaching into. `model`, `effort` and
-   * `profileId` are the review's three, resolved the same way.
+   * `profileId` are the draft's three, resolved the same way.
    */
   ipcMain.handle(
     IPC.distillLearnings,

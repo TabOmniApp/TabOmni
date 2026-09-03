@@ -57,12 +57,12 @@ import { expandHome } from "./shell-env"
  * import button, because a helper turn is a turn nobody asked for. This is a
  * conversation somebody is having.
  *
- * `review-agent.ts` is the one other place a session is opened, and it is
- * deliberately not this class: a review reply is one read-only turn, opened for
- * a question and closed on the answer, with no transcript, no resume and nothing
- * to send a second message to. It is not a helper turn either — it is a button
- * on a comment, pressed by the person who wrote it — and the argument for it is
- * at the top of that file.
+ * `one-turn-agent.ts` is the one other place a session is opened, and it is
+ * deliberately not this class: each of its turns is read-only, opened for a
+ * question and closed on the answer, with no transcript, no resume and nothing
+ * to send a second message to. Neither is a helper turn either — each is a
+ * button pressed by the person who reads its answer — and the argument for them
+ * is at the top of that file.
  *
  * **What it may do, and why.** A chat runs in the user's own working tree,
  * which is the case the isolation argument does *not* cover: there was a

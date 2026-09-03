@@ -67,8 +67,8 @@ export function CommitBox({ root }: { root: FileRoot }) {
     setDrafting(true)
     setError(null)
     const settings = useSettings.getState()
-    // The review's own model and profile, because it is the review's own CLI —
-    // one read-only `claude` with one place to be configured.
+    // Settings › `Helper turns`, because this is the one read-only `claude`
+    // with one place to be configured.
     const answer = await window.desktop
       .draftCommitMessage(
         root.folderId,

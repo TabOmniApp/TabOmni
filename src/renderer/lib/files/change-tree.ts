@@ -164,39 +164,13 @@ export function changesUnder(node: ChangeTreeNode): GitChange[] {
 }
 
 /**
- * A directory row's `+112 −8`: its descendants' counts added up.
- *
- * A file with no honest number contributes nothing rather than making the
- * whole folder unanswerable — a binary asset beside twelve edited sources must
- * not blank the counts for all of them. A folder whose files are *all* like
- * that has no number at all, which is the same rule a single row follows.
- */
-export function countsUnder(
-  node: ChangeTreeNode
-): { added: number; removed: number } | null {
-  let added = 0
-  let removed = 0
-  let counted = false
-
-  for (const change of changesUnder(node)) {
-    if (change.added === null || change.removed === null) continue
-    added += change.added
-    removed += change.removed
-    counted = true
-  }
-
-  return counted ? { added, removed } : null
-}
-
-/**
- * How many review comments sit under a node — a file's own, or its
- * descendants' summed, the same shape `countsUnder` sums `+`/`−` in.
+ * How many comment threads sit under a node — a file's own, or its
+ * descendants' summed.
  *
  * Takes the count *per path* rather than the threads themselves, so this file
- * stays free of `lib/files/review.ts` the way it is free of the review's
- * whole shape elsewhere — the caller has already reduced a root's threads to
- * one number per changed file (`ChangesList` does, from `useReview`), and
- * this only walks the tree summing what it is handed.
+ * stays free of `lib/files/review.ts`: the caller has already reduced a root's
+ * threads to one number per changed file (`ChangesList` does, from
+ * `useReview`), and this only walks the tree summing what it is handed.
  */
 export function commentCountsUnder(
   node: ChangeTreeNode,
@@ -204,26 +178,6 @@ export function commentCountsUnder(
 ): number {
   return changesUnder(node).reduce(
     (sum, change) => sum + (counts.get(change.path) ?? 0),
-    0
-  )
-}
-
-/**
- * The **worst** of something under a node, where the count above takes a sum.
- *
- * The one this exists for is a review's severity, and it is a bare `number` for
- * the same reason the counts are: a rank is comparable and this file does not
- * have to learn what `critical` means to take a maximum of ranks. `0` is
- * nothing — an unrated comment, or no comment at all — and it is the identity
- * for a max, which is why it is the level that means "none" rather than one of
- * the four (`severityRank` in `lib/files/review.ts`).
- */
-export function worstUnder(
-  node: ChangeTreeNode,
-  ranks: Map<string, number>
-): number {
-  return changesUnder(node).reduce(
-    (worst, change) => Math.max(worst, ranks.get(change.path) ?? 0),
     0
   )
 }

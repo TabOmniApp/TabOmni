@@ -43,8 +43,6 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
-  ChevronUp,
-  MessageSquareX,
   NotebookPen,
   Pencil,
   RotateCw,
@@ -74,13 +72,12 @@ import { useProjects } from "@/lib/projects"
 import { useReview } from "@/lib/files/review"
 import { shownRootOf } from "@/lib/files/roots"
 import { useStudio, type ExplorerTab } from "@/lib/store"
-import { Claude } from "@/components/ui/svgs/claude"
 import { RenameDialog } from "../rename-dialog"
 import { IconButton } from "../icon-button"
 import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
 import { ChangesList } from "./changes-list"
-import { ReviewProgressDialog } from "./review-progress-dialog"
+import { CommentsList } from "./comments-list"
 
 /** What the right-click menu is about: a row in the tree, or the workspace
  * folder heading above one. */
@@ -205,35 +202,20 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
   const changed = changes === undefined ? undefined : changeCount(changes)
   useWatchChanges(shown)
 
-  /* Whether a review is already running, anywhere: one at a time across the
-   * app (`reviewAll`), so a second project's button is disabled by the first
-   * project's turn rather than pretending it can start one. */
-  const reviewing = useReview((state) => state.reviewing) !== null
-
-  /* How many threads this checkout is carrying — what decides whether there is
-   * a review to discard. Every thread, resolved or not: a review of nothing but
-   * settled conversations is still a review to throw away. Read as a length
-   * rather than as a filtered array, so the selector returns a number and this
-   * header does not re-render on every keystroke in a reply box. */
-  const reviewCount = useReview(
+  /* How many comments this checkout is carrying — the `Comments` tab's count.
+   * Every thread, resolved or not: the tab is a listing, and a settled remark is
+   * still one it lists. Read as a length rather than as a filtered array, so the
+   * selector returns a number and this header does not re-render on every
+   * keystroke in a reply box. */
+  const commentCount = useReview(
     (state) =>
       state.threads.filter((thread) => thread.rootId === shown?.id).length
-  )
-
-  /* And how many are still asking for something, which is what the walk moves
-   * between — a review of nothing but settled conversations has nowhere to
-   * walk to, so the two buttons go with the last unresolved one. */
-  const walkCount = useReview(
-    (state) =>
-      state.threads.filter(
-        (thread) => thread.rootId === shown?.id && !thread.resolved
-      ).length
   )
 
   return (
     <ContextMenu>
       <div className="flex h-full flex-col">
-        {/* Two tabs where the panel's title used to be.
+        {/* Three tabs where the panel's title used to be.
             `Explorer` named the panel to somebody already looking at it, and
             the space is worth more as the way in to the other list this panel
             has: what the project has changed, which after an agent's turn is
@@ -244,8 +226,8 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
             is out of flow, so the room for it has to be left here. */}
         <div className="flex h-9 shrink-0 items-center gap-2 border-b pr-11 pl-1.5">
           {/* `overflow-hidden` is the safety valve: with one button beside
-              them the two tabs fit the panel's minimum with room to spare, and
-              a sidebar dragged narrower than that clips them rather than
+              them the three tabs fit the panel's minimum with room to spare,
+              and a sidebar dragged narrower than that clips them rather than
               pushing Refresh off the end. */}
           <div
             role="tablist"
@@ -253,105 +235,31 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           >
             <ExplorerTabButton id="files" label="All files" />
             <ExplorerTabButton id="changes" label="Changes" count={changed} />
+            {/* The third, and the one that answers "where are they all": a
+                comment lives in the diff, under its lines, so before this the
+                only way to find one was to open the file it was in. `0` is not
+                drawn — a count on a tab is a reason to click it. */}
+            <ExplorerTabButton
+              id="comments"
+              label="Comments"
+              count={commentCount || undefined}
+            />
           </div>
 
           <div className="flex shrink-0 items-center gap-0.5">
-            {/*
-              The way through the review, and the reason it is drawn at all.
-
-              `⌥↓` / `⌥↑` do this and are the better way to do it — a walk is a
-              key you hold, not a button you aim at twelve times. But a shortcut
-              with nothing on screen is a shortcut nobody finds, and this pair is
-              what says the walk exists: the tooltip names the key, so the button
-              teaches its own replacement. Beside the review's other two rather
-              than in the diff, because the walk *starts* before a file has been
-              picked — that is most of what it is for.
-
-              Never disabled and never a "no more": the walk wraps, so with one
-              comment left both arrows land on it. See `step`.
-            */}
-            {tab === "changes" && shown && walkCount > 0 && (
-              <>
-                <IconButton
-                  label="Previous review comment (⌥↑)"
-                  onClick={() => useReview.getState().step(shown.id, -1)}
-                >
-                  <ChevronUp />
-                </IconButton>
-                <IconButton
-                  label="Next review comment (⌥↓)"
-                  onClick={() => useReview.getState().step(shown.id, 1)}
-                >
-                  <ChevronDown />
-                </IconButton>
-              </>
-            )}
-            {/*
-              Throwing the review away, beside the button that starts one.
-
-              It was in the diff pane's own bar, and came here when that bar
-              went: it is the only way to clear a review, so it cannot live
-              under a file that has been picked — the comments it discards are
-              across every file, most of which are not open. Drawn only while
-              there is a review to discard, which is what keeps this header from
-              becoming the row of icons the note below refuses.
-
-              No confirmation, unlike the git `Discard` two rows down: that one
-              throws away work and this one throws away remarks about it.
-            */}
-            {tab === "changes" && shown && reviewCount > 0 && (
-              <IconButton
-                label={`Discard ${reviewCount} review comment${reviewCount === 1 ? "" : "s"} in this checkout`}
-                onClick={() => useReview.getState().clear(shown.id)}
-              >
-                <MessageSquareX />
-              </IconButton>
-            )}
-            {/*
-              Review, on the tab the changed files are listed in.
-
-              The one place it is now: it used to be here *and* in a bar under
-              the diff, which is one button asked for twice. A review is the
-              thing somebody wants *before* picking a file, over the whole pile,
-              so this is the end that survives. Drawn only when there is
-              something to review, so the header of `All files` is left as it
-              was.
-            */}
-            {tab === "changes" &&
-              shown &&
-              changed !== undefined &&
-              changed > 0 && (
-                <IconButton
-                  label={
-                    reviewing
-                      ? "Claude is reviewing this checkout"
-                      : "Review every changed file with Claude"
-                  }
-                  disabled={reviewing}
-                  onClick={() => {
-                    void useReview.getState().reviewAll(shown.id, shown.path)
-                  }}
-                >
-                  {reviewing ? (
-                    <RotateCw className="animate-spin" />
-                  ) : (
-                    <Claude />
-                  )}
-                </IconButton>
-              )}
-            {/* **Refresh is the only one always here**, and the rule it stands
-                for still holds: a row of icons beside two tabs is a row of icons
+            {/* **Refresh is the only one left**, and the rule it stands for
+                still holds: a row of icons beside three tabs is a row of icons
                 nobody reads, so every action about a *thing* is on a menu over
                 that thing — `New file` and `Collapse all` on the root bar's menu
                 (or a directory row's, which creates in *that* directory),
                 `Add folder` on the empty space under the tree and in the File
-                menu. What the four above have in common is that they are about
-                the **review**, which has no row to right-click and is not on
-                screen until it exists: each of them is drawn only while it has
-                something to act on, so the ordinary state of this header is
-                still two tabs and one button. Refresh is the one that is about
-                the panel itself, and the filesystems `fs.watch` is quiet on are
-                why it exists at all. */}
+                menu. It is now the **only** one: this header carried three more
+                for a while — the two arrows that walked the comments and a
+                Discard for the whole pile — and they are gone with the walk,
+                since the `Comments` tab is the way to a remark and each has a
+                delete of its own. Refresh is the one that is about the panel
+                itself, and the filesystems `fs.watch` is quiet on are why it
+                exists at all. */}
             <IconButton
               label="Refresh"
               disabled={folders.length === 0}
@@ -369,15 +277,20 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
           </div>
         </div>
 
-        {/* The changed files, when that is the tab. Its own scroller and
-            **outside** the tree's context menu: the rows there open a diff, and
-            a right-click offering `Add folder…` over them would be the
-            workspace's menu on a list that is not about the workspace. The list
-            carries its own menu — Stage, Unstage, Discard — inside this
-            scroller. */}
-        {tab === "changes" ? (
+        {/* The changed files and the comments, when one of those is the tab.
+            Their own scroller and **outside** the tree's context menu: the rows
+            there open a diff, and a right-click offering `Add folder…` over
+            them would be the workspace's menu on a list that is not about the
+            workspace. The changed-file list carries its own menu — Stage,
+            Unstage, Discard — inside this scroller. */}
+        {tab !== "files" ? (
           <div className="min-h-0 flex-1 overflow-auto pb-3">
-            {shown && <ChangesList root={shown} />}
+            {shown &&
+              (tab === "changes" ? (
+                <ChangesList root={shown} />
+              ) : (
+                <CommentsList root={shown} />
+              ))}
           </div>
         ) : (
           /* One trigger over the whole tree, rather than one per row: the rows
@@ -493,11 +406,6 @@ export function FileTree({ onAddFolder }: { onAddFolder: () => void }) {
             onClose={() => setRenamingFolder(null)}
           />
         )}
-
-        {/* What the button above opened. Mounted beside it rather than in the
-            diff pane, so a review started from here is watchable without a
-            file having been picked — see `ReviewProgressDialog`. */}
-        <ReviewProgressDialog />
       </div>
 
       {/* The empty space under the tree is **the root's** menu.

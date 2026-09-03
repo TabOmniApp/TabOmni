@@ -26,18 +26,21 @@ type Stored = {
   diffSideBySide: boolean
   diffWhitespace: boolean
   /**
-   * `--model`, `--effort` and the `CLAUDE_CONFIG_DIR` profile the review's own
-   * turns run on — `reviewChanges` and `replyToReviewComment` in
-   * `lib/files/review.ts`.
+   * `--model`, `--effort` and the `CLAUDE_CONFIG_DIR` profile the read-only
+   * one-turn agent runs on — `draftCommitMessage` and `distillLearnings` in
+   * `main/one-turn-agent.ts`.
    *
-   * A setting rather than a picker on the review pane's own toolbar: unlike a
-   * chat, a review turn is not something anybody sits in front of for the
-   * length of a conversation — it is a button pressed once in a while, or a
-   * mention typed in passing — so a picker beside it is a control mostly seen
-   * once and then in the way. Chosen here instead, the way an account is
-   * chosen for the workspace's databases, and left alone until it is changed
-   * again. Null on both is the same "leave it alone" a chat's `Inherit` row
-   * means.
+   * A setting rather than a picker beside each button: unlike a chat, one of
+   * these turns is not something anybody sits in front of for the length of a
+   * conversation — it is a button pressed once in a while — so a picker beside
+   * it is a control mostly seen once and then in the way. Chosen here instead
+   * and left alone until it is changed again. Null on both is the same "leave
+   * it alone" a chat's `Inherit` row means.
+   *
+   * Named `review*` because the agent review these were introduced for is what
+   * first needed them, and the names are what is **already on disk** under
+   * `workbench.settings`: renaming them would silently reset the choice for
+   * everybody who had made one. See `docs/design.md` § Comments.
    */
   reviewModel: string | null
   reviewEffort: ChatEffort | null

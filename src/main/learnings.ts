@@ -14,7 +14,7 @@ import {
  * One approved proposal, written where the CLI will find it.
  *
  * This is the write half of distilling (`distillLearnings` in
- * `review-agent.ts` is the read half), and it only ever runs because somebody
+ * `one-turn-agent.ts` is the read half), and it only ever runs because somebody
  * pressed Save on one proposal in the dialog. Two shapes:
  *
  * - a **skill** becomes `.claude/skills/<name>/SKILL.md`, and an existing one

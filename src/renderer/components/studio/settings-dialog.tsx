@@ -484,14 +484,15 @@ function ClaudeSection() {
   return (
     <div className="space-y-4">
       <Card>
-        {/* The one turn in the app with no toolbar of its own — a whole-diff
-            `Review` and a `@claude-review` reply both run on whatever is
-            picked here rather than on something asked per turn, since neither
-            is a conversation somebody sits in front of. See
-            `lib/files/review.ts`. */}
+        {/* The turns in the app with no toolbar of their own — a drafted commit
+            message and a distilled chat both run on whatever is picked here
+            rather than on something asked per turn, since neither is a
+            conversation somebody sits in front of. See
+            `main/one-turn-agent.ts`; the `review*` field names are what is
+            already on disk. */}
         <Row
-          title="Review turns"
-          description="Which model, effort and account the review pane's `Review` button and `@claude-review` replies run on."
+          title="Helper turns"
+          description="Which model, effort and account the drafted commit message and Distill learnings run on."
         >
           <div className="flex items-center gap-1.5">
             <ModelMenu

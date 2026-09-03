@@ -38,7 +38,7 @@ export type LearningProposal = {
 /**
  * The proposals out of an answer, or null when there are none to be had.
  *
- * The same bargain `findingsIn` strikes in `review-agent.ts`, for the same
+ * The bargain every parse of a model's fenced answer strikes, for the same
  * reason: a model told to answer with one fenced block usually does and
  * sometimes puts a sentence in front of it, so the fence is looked for first
  * and the outermost brackets second. No repair — an entry missing a field is
@@ -190,7 +190,7 @@ export function appendLearning(existing: string | null, line: string): string {
  *
  * What is kept is what happened: what was asked, what was answered, and which
  * tools ran with what result — the trail the learnings are in. `thinking` is
- * dropped for the reason the review reply drops it: it is what the model
+ * dropped for the reason a one-turn agent drops it: it is what the model
  * considered on the way, not what the conversation established. Roles this
  * module has never heard of are skipped rather than guessed at, because a
  * chat's file outlives any one version of this list.

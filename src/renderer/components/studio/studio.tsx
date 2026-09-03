@@ -96,9 +96,9 @@ export function Studio() {
     // Before any board is opened: a project's tab carries how many cards it has
     // waiting, and the chat pane's chip asks which card a chat is the work of.
     void useBoard.getState().refresh()
-    // Before any diff is opened, for the same reason: the `Changes` bar counts a
-    // review across files nobody has looked at yet. Each thread is put back on
-    // its lines the first time its own file is shown — see `showing`.
+    // Before any diff is opened, for the same reason: the `Comments` tab counts
+    // threads in files nobody has looked at yet. Each is put back on its lines
+    // the first time its own file is shown — see `showing`.
     void useReview.getState().load()
   }, [])
 
@@ -109,10 +109,6 @@ export function Studio() {
   // A chat's turn runs in the main process and outlives the
   // pane being switched away from, so its lines are subscribed to here.
   useEffect(() => useWorktreeChats.getState().listen(), [])
-
-  // A whole-diff review's own turn, the same way — its progress lines arrive
-  // whether or not the Changes pane happens to be on screen.
-  useEffect(() => useReview.getState().listen(), [])
 
   /*
    * The manifest is a small file on a local disk and usually lands well inside

@@ -7,7 +7,7 @@ import { check, finish, section } from "./harness"
  * become (`proposalsIn`), the two files an approved proposal turns into
  * (`skillFileOf`, `appendLearning`), and the transcript a distilling turn is
  * handed (`transcriptOf`). The turn itself is `distillLearnings` in
- * `review-agent.ts` and is not run here — this is what stands between its
+ * `one-turn-agent.ts` and is not run here — this is what stands between its
  * output and somebody's repository.
  */
 const {

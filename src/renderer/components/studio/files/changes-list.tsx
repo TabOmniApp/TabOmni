@@ -27,29 +27,21 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import { Claude } from "@/components/ui/svgs/claude"
 import {
   changeTree,
   changesUnder,
   commentCountsUnder,
-  countsUnder,
-  worstUnder,
   type ChangeTreeNode,
 } from "@/lib/files/change-tree"
 import { splitChanges, useChanges } from "@/lib/files/changes"
 import { GIT_LABELS, GIT_LETTERS, GIT_TONES } from "@/lib/files/git-status"
 import { nameOf } from "@/lib/files/paths"
 import type { FileRoot } from "@/lib/files/roots"
-import {
-  openThreads,
-  severityAtRank,
-  severityRank,
-  threadsOf,
-  useReview,
-} from "@/lib/files/review"
+import { openThreads, threadsOf, useReview } from "@/lib/files/review"
 import { useFiles } from "@/lib/files/store"
 import { useStudio } from "@/lib/store"
 import { cn } from "@/lib/utils"
+import { FileIcon } from "../file-icon"
 import { SideRow } from "../side-row"
 import { CommitBox } from "./commit-box"
 
@@ -103,28 +95,22 @@ export function ChangesList({ root }: { root: FileRoot }) {
   const changes = useChanges((state) => state.byRoot[root.id])
   const loading = useChanges((state) => state.loading.includes(root.id))
 
-  /* How many review threads sit on each changed file, so a finding left by
-   * `Review` on a file nobody has opened yet is still visible — see the badge
-   * in `ChangeRow`/`DirRow`. Reduced to a `Map<path, count>` once per render
+  /* How many comment threads sit on each changed file, so a remark left in a
+   * file nobody has open is still visible — see the badge in
+   * `ChangeRow`/`DirRow`. Reduced to a `Map<path, count>` once per render
    * rather than handed the threads themselves, so `change-tree.ts` stays free
-   * of the review's own shape (`commentCountsUnder`). */
+   * of the comment's own shape (`commentCountsUnder`).
+   *
+   * The **open** ones: the badge is read as "this file still wants looking at",
+   * and a resolved conversation is the opposite of that. It is not gone —
+   * opening the file still draws it, folded. */
   const threads = useReview((state) => state.threads)
-  const [commentCounts, commentRanks] = useMemo(() => {
+  const commentCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    /* And the worst severity on each, as a rank — what tints the badge. Two
-       maps rather than one of pairs, because the tree walks them with two
-       different reductions (a sum and a maximum) and neither wants the other's
-       field. */
-    const ranks = new Map<string, number>()
-    /* The open ones: the badge is read as "this file still wants looking at",
-       and a resolved conversation is the opposite of that. It is not gone —
-       opening the file still draws it, folded. */
     for (const thread of openThreads(threadsOf({ threads }, root.id))) {
       counts.set(thread.path, (counts.get(thread.path) ?? 0) + 1)
-      const rank = severityRank(thread.severity)
-      ranks.set(thread.path, Math.max(ranks.get(thread.path) ?? 0, rank))
     }
-    return [counts, ranks] as const
+    return counts
   }, [threads, root.id])
 
   /** Which row the menu is about, or null for the list as a whole — the same
@@ -132,9 +118,6 @@ export function ChangesList({ root }: { root: FileRoot }) {
    * is a trigger inside a trigger. */
   const [target, setTarget] = useState<RowTarget | null>(null)
   const [discarding, setDiscarding] = useState<RowTarget | "all" | null>(null)
-  // For the menu's `Review this file`, which is refused while any review is
-  // running — the store's guard is app-wide. See `RowActions`.
-  const reviewing = useReview((state) => state.reviewing) !== null
 
   /** Both piles start folded, so a checkout arrives as two counts rather than as
    * however many rows a turn happened to touch. The headings keep their own
@@ -174,7 +157,6 @@ export function ChangesList({ root }: { root: FileRoot }) {
         indent={0}
         shut={shut}
         commentCounts={commentCounts}
-        commentRanks={commentRanks}
         onFold={(key) =>
           setShut((state) =>
             state.includes(key)
@@ -317,21 +299,6 @@ export function ChangesList({ root }: { root: FileRoot }) {
             {target.path && (
               <>
                 <ContextMenuSeparator />
-                {/* The same thing the row's own button does, for a row reached
-                    by keyboard — which has no pointer to hover with. Disabled
-                    rather than absent here: a menu is read, and an item that
-                    comes and goes is one nobody learns the place of. */}
-                <ContextMenuItem
-                  disabled={reviewing}
-                  onClick={() => {
-                    void useReview
-                      .getState()
-                      .reviewFile(root.id, root.path, target.path as string)
-                  }}
-                >
-                  <Claude />
-                  Review this file
-                </ContextMenuItem>
                 <ContextMenuItem
                   onClick={() =>
                     void navigator.clipboard.writeText(target.path as string)
@@ -418,7 +385,6 @@ function Nodes({
   indent,
   shut,
   commentCounts,
-  commentRanks,
   onFold,
   onMenu,
   onDiscard,
@@ -429,8 +395,6 @@ function Nodes({
   indent: number
   shut: string[]
   commentCounts: Map<string, number>
-  /** The worst severity on each file, as a rank — see `severityRank`. */
-  commentRanks: Map<string, number>
   onFold: (key: string) => void
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
@@ -446,7 +410,6 @@ function Nodes({
               root={root}
               indent={indent}
               commentCount={commentCounts.get(node.change.path) ?? 0}
-              commentRank={commentRanks.get(node.change.path) ?? 0}
               onMenu={onMenu}
               onDiscard={onDiscard}
             />
@@ -465,7 +428,6 @@ function Nodes({
               open={open}
               staged={pile === "staged"}
               commentCount={commentCountsUnder(node, commentCounts)}
-              commentRank={worstUnder(node, commentRanks)}
               onToggle={() => onFold(key)}
               onMenu={onMenu}
               onDiscard={onDiscard}
@@ -479,7 +441,6 @@ function Nodes({
                   indent={indent + 1}
                   shut={shut}
                   commentCounts={commentCounts}
-                  commentRanks={commentRanks}
                   onFold={onFold}
                   onMenu={onMenu}
                   onDiscard={onDiscard}
@@ -494,13 +455,17 @@ function Nodes({
 }
 
 /**
- * A folder in the tree: the chevron, the collapsed name, and the counts of
- * everything under it.
+ * A folder in the tree: the chevron, the collapsed name, and how many comments
+ * are under it.
  *
- * In the muted text of the panel rather than in a git colour. A folder holding
- * an added file and a deleted one has no single state, and picking one of them
- * would be the row asserting something git did not say — the counts underneath
- * are the honest summary.
+ * **No state letter and no `+`/`−`.** A folder holding an added file and a
+ * deleted one has no single state, so picking one would be the row asserting
+ * something git did not say. The summed counts were the honest answer to that
+ * and were drawn for a while, then removed: down a chain of folders they are a
+ * second column of numbers beside the one that answers the question being asked
+ * — which *file* changed, and by how much — and the file rows say that already.
+ * The comment badge stays, because a comment in a folded folder has nothing
+ * else to announce it.
  */
 function DirRow({
   node,
@@ -509,7 +474,6 @@ function DirRow({
   open,
   staged,
   commentCount,
-  commentRank,
   onToggle,
   onMenu,
   onDiscard,
@@ -519,17 +483,14 @@ function DirRow({
   indent: number
   open: boolean
   staged: boolean
-  /** Review threads on the files under this folder, summed — see
+  /** Comment threads on the files under this folder, summed — see
    * `commentCountsUnder`. */
   commentCount: number
-  /** The worst of their severities, as a rank — what tints it. */
-  commentRank: number
   onToggle: () => void
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
 }) {
   const under = changesUnder(node)
-  const counts = countsUnder(node)
   const target: RowTarget = {
     label: node.label,
     paths: under.map((change) => change.path),
@@ -555,19 +516,12 @@ function DirRow({
         <span className="min-w-0 flex-1 truncate text-left text-xs">
           {node.label}
         </span>
-        {/* No state letter: see the note above about a folder having no single
-            state. The counts step aside for the actions the way a file's do. */}
+        {/* Steps aside for the actions the way a file's badge does. */}
         <span
           aria-hidden
           className="flex shrink-0 items-center gap-1.5 group-focus-within/row:invisible group-hover/row:invisible"
         >
-          <CommentBadge count={commentCount} rank={commentRank} />
-          {counts && (
-            <span className="font-mono text-[0.65rem] tabular-nums">
-              <span className={GIT_TONES.added}>+{counts.added}</span>{" "}
-              <span className={GIT_TONES.deleted}>−{counts.removed}</span>
-            </span>
-          )}
+          <CommentBadge count={commentCount} />
         </span>
       </SideRow>
 
@@ -650,18 +604,15 @@ function ChangeRow({
   root,
   indent,
   commentCount,
-  commentRank,
   onMenu,
   onDiscard,
 }: {
   change: GitChange
   root: FileRoot
   indent: number
-  /** Review threads left on this file — see `commentCounts` in
+  /** Comment threads left on this file — see `commentCounts` in
    * `ChangesList`. */
   commentCount: number
-  /** The worst of their severities, as a rank — what tints it. */
-  commentRank: number
   onMenu: (target: RowTarget) => void
   onDiscard: (target: RowTarget) => void
 }) {
@@ -735,20 +686,31 @@ function ChangeRow({
          * grows, so unlike most `SideRow`s there is space for the alignment to
          * distribute.
          */}
-        <span className="flex min-w-0 flex-1 items-center overflow-hidden text-left">
+        {/* `gap-1.5` and `size-3.5` are `SIDE_ROW_SHAPE`'s own two numbers, so
+            a folder-leaf row and a file row put their labels in the same
+            place. */}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left">
           {/*
-           * The one row that carries a glyph, because it is the one row that is
-           * not what the list is otherwise made of. A folder icon on every file
-           * would be a column of icons saying nothing; on this one it is the
-           * difference between `public/images/building` read as a file with no
-           * counts and read as the directory it is. The trailing `/` says the
-           * same thing again for anybody reading the text alone.
+           * The file-type icon the tree and the strip draw, so the same `.ts` is
+           * the same icon wherever it is listed — and the row is scannable by
+           * kind before its name is read, which after a turn touching thirty
+           * files is most of what this list is for. It is **not** tinted by the
+           * git state: the vendored icons are full colour, the name beside it
+           * carries the state, and the `+`/`−` at the end says it a third time.
+           *
+           * A wholly untracked directory keeps the folder glyph instead, in the
+           * git colour: it is the one row here that is not a file, and that is
+           * the difference between `public/images/building` read as a file and
+           * read as the directory it is. The trailing `/` says it again for
+           * anybody reading the text alone.
            */}
-          {change.directory && (
+          {change.directory ? (
             <Folder
               aria-hidden
-              className={cn("mr-1 size-3 shrink-0", GIT_TONES[change.state])}
+              className={cn("size-3.5 shrink-0", GIT_TONES[change.state])}
             />
+          ) : (
+            <FileIcon filePath={change.path} className="size-3.5" />
           )}
           <span className={cn("truncate text-xs", GIT_TONES[change.state])}>
             {nameOf(change.path)}
@@ -771,7 +733,7 @@ function ChangeRow({
           <span className="text-center font-mono text-[0.65rem]">
             {GIT_LETTERS[change.state]}
           </span>
-          <CommentBadge count={commentCount} rank={commentRank} />
+          <CommentBadge count={commentCount} />
           <Counts change={change} />
         </span>
       </SideRow>
@@ -811,34 +773,9 @@ function RowActions({
   onDiscard: (target: RowTarget) => void
 }) {
   const what = target.path ? target.label : `everything in ${target.label}`
-  // Any review, not this checkout's: the guard in the store is app-wide.
-  const reviewing = useReview((state) => state.reviewing) !== null
 
   return (
     <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100 group-hover/row:pointer-events-auto group-hover/row:opacity-100">
-      {/*
-        Read this one file again, furthest from the pointer's resting place by
-        the same rule the three below are ordered on: it is the least pressed of
-        the four, and the one that costs a `claude`.
-
-        Only on a file — a directory row is one path git named and nothing under
-        it is listed, so there is nothing to hand a turn. Absent while a review
-        is running rather than disabled: `reviewAll` is one at a time across the
-        whole app, and a button that is there but refuses is worse than one that
-        waits.
-      */}
-      {target.path && !reviewing && (
-        <RowAction
-          label={`Have Claude review ${target.label} again`}
-          onClick={() => {
-            void useReview
-              .getState()
-              .reviewFile(root.id, root.path, target.path as string)
-          }}
-        >
-          <Claude />
-        </RowAction>
-      )}
       {/* Discard first, stage last: the one that ends nearest the pointer's
           resting place is the one pressed most, and staging is that. The
           destructive one is the one that has to be reached for — and it opens
@@ -914,51 +851,21 @@ function RowAction({
  * bug.
  */
 /**
- * How many review threads sit on a row, drawn the way the bottom bar in
- * `review-panel.tsx` says the same thing — the same icon, so a comment left
- * by `Review` on a file nobody has opened yet is still findable: click the
+ * How many comment threads sit on a row, drawn with the icon `review-panel.tsx`
+ * uses — so a remark left in a file nobody has open is still findable: click the
  * row, the checkout's diff tab opens on this file, and the thread is right
- * there. See `commentCounts` in `ChangesList`.
+ * there. See `commentCounts` in `ChangesList`, and the `Comments` tab for the
+ * listing that answers "where are they all".
  */
-function CommentBadge({ count, rank }: { count: number; rank: number }) {
+function CommentBadge({ count }: { count: number }) {
   if (count === 0) return null
 
-  const worst = severityAtRank(rank)
   return (
-    <span
-      className={cn(
-        "flex items-center gap-0.5",
-        BADGE_TONES[rank] ?? "text-muted-foreground"
-      )}
-      title={
-        worst
-          ? `${count} open comment${count === 1 ? "" : "s"} — worst is ${worst}`
-          : undefined
-      }
-    >
+    <span className="flex items-center gap-0.5 text-muted-foreground">
       <MessageSquare aria-hidden className="size-2.5" />
       <span className="font-mono text-[0.65rem] tabular-nums">{count}</span>
     </span>
   )
-}
-
-/**
- * What a row's badge is coloured by: the **worst** severity on it.
- *
- * The complaint this answers is that `3` says how much and not how bad, so a
- * reviewer opened three files to find the one with the `critical` in it. The
- * badge is the only thing on that row a review owns, so it is where the answer
- * has to go.
- *
- * Only the top two are coloured, exactly as the chip in a thread is
- * (`SEVERITY_CHIP` in `review-panel.tsx`) and for the same reason: a tree where
- * every badge is a different colour is a tree with no signal in it. Ranks are
- * `severityRank`'s — 4 is `critical`, 3 is `high` — and everything below is the
- * muted grey the badge has always been.
- */
-const BADGE_TONES: Record<number, string> = {
-  4: "text-red-600 dark:text-red-400",
-  3: "text-amber-600 dark:text-amber-400",
 }
 
 function Counts({ change }: { change: GitChange }) {

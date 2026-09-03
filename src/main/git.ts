@@ -636,9 +636,8 @@ export async function discardAll(dir: string): Promise<string[]> {
  * What is staged, as a patch and as the summary of one.
  *
  * For the commit message Claude drafts (`draftCommitMessage` in
- * `review-agent.ts`), which needs to be told what it is describing and has no
- * shell to ask git itself — the same bargain `reviewChanges` makes with
- * `fileDiff`. Both halves, because a large staged change is a patch nothing
+ * `one-turn-agent.ts`), which needs to be told what it is describing and has no
+ * shell to ask git itself: a read-only tool list has no `git`. Both halves, because a large staged change is a patch nothing
  * will read whole and a `--stat` still says what the commit is: the caller
  * picks, and asking git twice here is cheaper than a second round trip for the
  * fallback.

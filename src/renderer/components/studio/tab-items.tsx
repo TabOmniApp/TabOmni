@@ -1,9 +1,6 @@
 import {
   Columns3,
-  File,
-  FileText,
   GitCompare,
-  Image,
   Loader2,
   MessageSquare,
   ShieldQuestion,
@@ -14,14 +11,13 @@ import { useBoard } from "@/lib/board/store"
 import { useChanges } from "@/lib/files/changes"
 import { isDeleted, isDirty, useFiles } from "@/lib/files/store"
 import { gitStateOf, GIT_TONES, useGitStatus } from "@/lib/files/git-status"
-import { iconFor } from "@/lib/files/icons"
 import { nameOf } from "@/lib/files/paths"
-import { isImage, isNote } from "@/lib/files/viewers"
 import { groupRootId } from "@/lib/panels"
 import { useTabGroups } from "@/lib/panels"
 import { useStudio, type Pane } from "@/lib/store"
 import { groupTabId, PREFIX } from "@/lib/tabs"
 import { useWorktreeChats } from "@/lib/worktree-chat/store"
+import { FileIcon } from "./file-icon"
 import type { TabStripItem } from "./tab-strip"
 
 /**
@@ -91,7 +87,7 @@ export function useTabItems(): Map<string, TabStripItem> {
       copyLabel: "Copy path",
       // The same icon the tree draws, so a tab and the row it came from are
       // recognisably the same file.
-      icon: iconOf(filePath),
+      icon: <FileIcon filePath={filePath} />,
       // The same dot the tree marks the row with: whichever of the two is being
       // looked at says the file has edits that are not on disk.
       dirty: isDirty(fileDocs[filePath]),
@@ -270,18 +266,4 @@ function groupName(
     changes: "",
     board: "",
   }[pane]
-}
-
-/** A file's icon: the vendored file-type one, or the glyph the studio uses for
- * anything it has no icon checked in for. */
-function iconOf(filePath: string) {
-  const url = iconFor(filePath)
-  if (url) {
-    return <img src={url} alt="" aria-hidden className="size-3.5 shrink-0" />
-  }
-  if (isImage(filePath)) return <Image className="size-3.5 shrink-0" />
-  // A `.note` is the block editor over a file, and this is the glyph that
-  // says so.
-  if (isNote(filePath)) return <FileText className="size-3.5 shrink-0" />
-  return <File className="size-3.5 shrink-0" />
 }
