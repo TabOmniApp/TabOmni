@@ -6,6 +6,10 @@
  * frontend reaches it through the `@shared` alias.
  */
 
+// Type-only, so the circle with `learnings.ts` (which takes `AssistantMessage`
+// from here) never exists at runtime.
+import type { LearningProposal } from "./learnings"
+
 /**
  * One folder the workspace has been pointed at — a repository on this machine,
  * edited and run where it already is.
@@ -839,6 +843,19 @@ export const MCP_DISABLED_TOOLS_KEY = "mcp.disabledTools"
  */
 export const CHAT_NOTIFICATIONS_KEY = "chats.notifications"
 
+/**
+ * Whether the menu bar carries an icon counting the chats that are working and
+ * the ones stopped on a question. `"off"` takes it out of the strip;
+ * **anything else, including unset, is on**.
+ *
+ * The same default and the same argument as `CHAT_NOTIFICATIONS_KEY`, which it
+ * sits beside: a notification is a moment and this is the standing version of
+ * it, for the far commoner case of glancing at the machine rather than being
+ * interrupted by it. Read by main, which owns the icon — the renderer only
+ * draws the switch.
+ */
+export const CHAT_TRAY_KEY = "chats.tray"
+
 /** One tool a server offers, as a row of the Settings listing draws it. */
 export type McpToolInfo = {
   /** The tool's own name, without the `mcp__<server>__` the CLI prefixes it
@@ -1496,6 +1513,18 @@ export type ReviewReplyAnswer = { text: string } | { error: string }
 export type ReviewChangesAnswer =
   { findings: ReviewFinding[] } | { error: string }
 
+/** What `distillLearnings` came back with. An empty list is a real answer —
+ * the chat taught nothing worth keeping — and the dialog says it as one. The
+ * proposal type itself lives in `shared/learnings.ts` with the parsing and the
+ * file shapes, which is also where the argument for the feature is. */
+export type DistillAnswer =
+  { proposals: LearningProposal[] } | { error: string }
+
+/** What `saveLearning` came back with: the path written, relative to the
+ * project, for the dialog to show — or the refusal, which is an answer too
+ * (`A skill named … already exists.`). */
+export type SaveLearningAnswer = { path: string } | { error: string }
+
 /**
  * One line of a whole-diff review's activity, while it is running — a tool
  * call read off one of the turns `review-agent.ts` runs `reviewChanges` on
@@ -2027,10 +2056,9 @@ export type DesktopApi = {
    * these write to somebody's repository, and the case worth defending against
    * is the one where the renderer is wrong.
    *
-   * Committing is deliberately not here. The dock has a shell in the same
-   * folder, a commit is a sentence somebody writes rather than a button, and a
-   * studio that stages but does not commit is one that stops at the point the
-   * shell is better.
+   * `gitCommit` is the fourth now, and the reversal is recorded on `commit` in
+   * `main/git.ts` and in `docs/design.md` § Committing. What is still refused is
+   * everything past it: no amend, no log, no branch, no push.
    */
   gitStage: (folderId: string, paths: string[]) => Promise<void>
   gitUnstage: (folderId: string, paths: string[]) => Promise<void>
@@ -2044,6 +2072,32 @@ export type DesktopApi = {
   gitDiscard: (folderId: string, paths: string[]) => Promise<void>
   /** The same, for everything the folder has changed. */
   gitDiscardAll: (folderId: string) => Promise<void>
+  /**
+   * Commits what is staged, and answers with the commit that was written.
+   *
+   * **Rejects** rather than answering with an error, unlike the two review
+   * calls: git's own message is what a refusal has to say — nothing staged, no
+   * identity configured, a `pre-commit` hook that said no — and the pane draws
+   * it as it came.
+   */
+  gitCommit: (
+    folderId: string,
+    message: string
+  ) => Promise<{ sha: string; subject: string }>
+  /**
+   * A commit message for what is staged, drafted by the read-only `claude`.
+   *
+   * The same shape as `replyToReviewComment` and for the same reasons — the
+   * same three settings, and an answer either way rather than a rejection: a
+   * draft that did not arrive leaves the box as it was. What comes back goes
+   * into an editable field, never straight into a commit.
+   */
+  draftCommitMessage: (
+    folderId: string,
+    model: string | null,
+    effort: ChatEffort | null,
+    profileId: string | null
+  ) => Promise<ReviewReplyAnswer>
 
   /**
    * The committed side of a diff and git's own patch for it — see `FileDiff`.
@@ -2395,11 +2449,16 @@ export type DesktopApi = {
    * order, the same way it owns the requests'. */
   saveBoardCards: (cards: BoardCard[]) => Promise<void>
   /**
-   * Every changed file in a checkout, reviewed by one read-only turn.
+   * A checkout's changed files, reviewed by one read-only turn each.
    *
    * The findings come back rather than the threads: this side turns each one
    * into a thread, because that is where the file's own text is to hand to quote
    * from — see `reviewAll` in `lib/files/review.ts`.
+   *
+   * `paths` narrows it to some of them — a file read again after being fixed,
+   * which is the whole of why one row has a button. Relative to `cwd`, filtered
+   * against the diff rather than trusted, and it narrows only which files get a
+   * *turn*: each one is still told what else the change touches.
    *
    * Resolves either way rather than rejecting, the same as
    * `replyToReviewComment`. `model`, `effort` and `profileId` are the same
@@ -2409,13 +2468,42 @@ export type DesktopApi = {
     cwd: string,
     model: string | null,
     effort: ChatEffort | null,
-    profileId: string | null
+    profileId: string | null,
+    paths?: string[]
   ) => Promise<ReviewChangesAnswer>
   /** A whole-diff review's activity while it runs — see `ReviewProgressEvent`.
    * Returns an unsubscribe. */
   onReviewProgress: (
     listener: (event: ReviewProgressEvent) => void
   ) => () => void
+
+  /**
+   * What one chat taught about its project, proposed by the read-only
+   * `claude` — never written. Asked for from the chat's own row, and each
+   * proposal in the answer is saved or discarded by hand (`saveLearning`).
+   *
+   * The chat id says which transcript, the folder id says which project the
+   * turn reads in — resolved on the main side, the same as a chat's own cwd.
+   * `model`, `effort` and `profileId` are the review's three, for the review's
+   * reason: it is the same second CLI.
+   */
+  distillLearnings: (
+    chatId: string,
+    folderId: string,
+    model: string | null,
+    effort: ChatEffort | null,
+    profileId: string | null
+  ) => Promise<DistillAnswer>
+  /**
+   * One approved proposal, written where the user's own `claude` will find it:
+   * a skill under `.claude/skills/`, a memory as a bullet in `CLAUDE.md`. The
+   * one write this feature makes, and only ever per press of Save — see
+   * `main/learnings.ts`.
+   */
+  saveLearning: (
+    folderId: string,
+    proposal: LearningProposal
+  ) => Promise<SaveLearningAnswer>
 
   /**
    * Every review thread in the workspace.
@@ -2547,8 +2635,17 @@ export type DesktopApi = {
    * throws when it could not be started at all — success is not something this
    * call can report, because the script's second act is quitting the app that
    * made it. macOS only, which is what `installable` on `UpdateCheck` says.
+   *
+   * The release's `.dmg` is fetched by main before the script runs, so this call
+   * spans the download too and reports it through `onUpdateProgress`. A throw is
+   * therefore also how a failed download arrives — the one part of an install
+   * whose failure there is still a window to show.
    */
   installUpdate: (version: string) => Promise<void>
+
+  /** Subscribes to how far `installUpdate` has got. Returns an unsubscribe
+   * function. */
+  onUpdateProgress: (listener: (event: UpdateProgress) => void) => () => void
 }
 
 /**
@@ -2577,6 +2674,26 @@ export type UpdateCheck =
       installable: boolean
     }
   | { status: "unknown"; current: string; error: string }
+
+/**
+ * How far an install has got, while the window is still there to say.
+ *
+ * Two stages rather than a percentage of the whole, because only one of them
+ * can be measured: `downloading` is bytes against a known total, `installing`
+ * is `install.sh` mounting, quitting this app and copying a bundle — a few
+ * seconds with no progress to read and no process left to read it from. So the
+ * bar is a percentage up to the handover and indeterminate after it, which is
+ * the truth rather than a fake ramp to 100.
+ */
+export type UpdateProgress =
+  | {
+      stage: "downloading"
+      version: string
+      received: number
+      /** Zero when the release does not say how large its asset is. */
+      total: number
+    }
+  | { stage: "installing"; version: string }
 
 /**
  * What the menus ask the renderer to do.
@@ -2612,6 +2729,8 @@ export const IPC = {
   gitUnstage: "git:unstage",
   gitDiscard: "git:discard",
   gitDiscardAll: "git:discard-all",
+  gitCommit: "git:commit",
+  draftCommitMessage: "git:draft-message",
   fileDiff: "git:file-diff",
   getSetting: "settings:get",
   setSetting: "settings:set",
@@ -2656,6 +2775,8 @@ export const IPC = {
   replyToReviewComment: "review:reply",
   reviewChanges: "review:changes",
   reviewProgress: "review:progress",
+  distillLearnings: "review:distill",
+  saveLearning: "review:save-learning",
   listReviewThreads: "review:list",
   saveReviewThreads: "review:save",
   listBoardCards: "board:list",
@@ -2679,4 +2800,5 @@ export const IPC = {
   systemUsage: "system:usage",
   checkForUpdate: "update:check",
   installUpdate: "update:install",
+  updateProgress: "update:progress",
 } as const

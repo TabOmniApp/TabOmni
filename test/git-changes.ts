@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
 
-import { changes, fileAtHead } from "../src/main/git"
+import { changes, commit, fileAtHead, recentSubjects } from "../src/main/git"
 import { check, finish, section } from "./harness"
 
 /**
@@ -188,6 +188,58 @@ async function main() {
     "HEAD is reached through the repository's own path",
     (await fileAtHead(inner, path.join(inner, "app.ts"))) === "one\ntwo\n"
   )
+
+  /*
+   * The fourth write, against a real repository for the same reason the three
+   * above are: what is being relied on is git's own behaviour — that `commit`
+   * takes the index and not the working tree, and that it refuses rather than
+   * writing an empty commit.
+   */
+  section("committing what is staged")
+
+  const both = path.join(root, "staged.ts")
+  await writeFile(both, "staged\n")
+  await git(root, "add", "--", "staged.ts")
+  // Edited again after staging, so this file is a row on each side — the case
+  // where "commit the working tree" and "commit the index" differ, and the one
+  // a message box above two piles has to get right.
+  await writeFile(both, "staged\nand then edited\n")
+
+  const written = await commit(root, "feat: the staged half\n\nAnd a body.")
+
+  check("answers with a short sha", /^[0-9a-f]{7,}$/.test(written.sha), written)
+  check(
+    "and with the subject alone, not the body",
+    written.subject === "feat: the staged half",
+    written
+  )
+  check(
+    "the commit holds what was staged, not what is on disk",
+    (await fileAtHead(root, both)) === "staged\n"
+  )
+
+  const afterCommit = await rowsIn(root)
+  check(
+    "the later edit is still a change",
+    afterCommit["staged.ts"]?.staged === false,
+    afterCommit["staged.ts"]
+  )
+
+  check(
+    "and the last subject is what a draft would be shown",
+    (await recentSubjects(root, 1))[0] === "feat: the staged half",
+    await recentSubjects(root, 1)
+  )
+
+  let refused = ""
+  try {
+    await commit(root, "   ")
+  } catch (error) {
+    refused = error instanceof Error ? error.message : String(error)
+  }
+  // Guarded here rather than left to git, which would open an editor on an
+  // empty `-m` — and an editor with no terminal to draw in never returns.
+  check("an empty message is refused", refused !== "", refused)
 
   section("a repository with no commits")
 

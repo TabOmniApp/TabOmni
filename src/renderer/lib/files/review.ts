@@ -10,6 +10,9 @@ import { REVIEW_SEVERITY_IDS } from "@shared/api"
  * clicking its row in the Changes list would. One direction only: that store
  * knows nothing about a review. */
 import { useChanges } from "./changes"
+/* The one place a path is split — `reviewFile` names a file the way a finding
+ * does, which is relative to the checkout. */
+import { relativeTo } from "./paths"
 
 /*
  * The record's own types live in the contract rather than here, because a review
@@ -493,8 +496,36 @@ type ReviewState = {
    * Threads are **added**, never replaced: a review Claude ran on top of remarks
    * somebody had already written is two reviews of the same diff, and throwing
    * one away is not this button's business. `Discard` is.
+   *
+   * `only` is the files to read, relative to the root, or absent for the whole
+   * diff. It is not a second implementation because the only thing it changes is
+   * which files get a turn — the guard, the dialog, the threads and the summary
+   * are the run, whether it is one file or four hundred.
    */
-  reviewAll: (rootId: string, rootPath: string) => Promise<void>
+  reviewAll: (
+    rootId: string,
+    rootPath: string,
+    only?: string[]
+  ) => Promise<void>
+  /**
+   * One changed file, read again — the row's own button.
+   *
+   * The case the whole-diff review does not cover, and the one that happens
+   * every day: a comment is acted on, the file is fixed, and the question is
+   * whether *this* file is right now. Re-reviewing the checkout for it is N
+   * turns to answer one file's question, and the answers to the other N−1 are
+   * already on screen.
+   *
+   * Unlike `reviewAll` this **does** take something away first, and exactly one
+   * thing: Claude's own comments on that file that nobody has answered. See the
+   * body for where that rule stops.
+   */
+  reviewFile: (
+    rootId: string,
+    rootPath: string,
+    /** Absolute, as the Changes list and the diff hold it. */
+    path: string
+  ) => Promise<void>
   /**
    * Asks Claude about one thread and puts its answer in as a reply.
    *
@@ -818,9 +849,49 @@ export const useReview = create<ReviewState>((set, get) => ({
     set({ spot })
   },
 
-  async reviewAll(rootId, rootPath) {
-    // One at a time across the app: this reads every changed file, and two of
-    // them racing would be two `claude`s over the same diff.
+  reviewFile(rootId, rootPath, path) {
+    /*
+     * The comments this run is about to replace: the ones **Claude left on this
+     * file and nobody has answered**.
+     *
+     * Without this, reading a file again after fixing it is a second opinion
+     * stacked on the first, and the pane fills with remarks about code that is
+     * no longer there — which is the state this button exists to get out of.
+     *
+     * The rule stops exactly where somebody has typed. A thread with more than
+     * its opening note has been replied to, argued with or answered by
+     * `@claude-review`, and that is a conversation rather than a finding; it
+     * stays, and `settle` marks it stale if the lines it quoted have gone. The
+     * user's own comments are never touched, which is the promise the whole-diff
+     * review makes too ("threads are added, never replaced") — this narrows it
+     * to Claude's own unanswered word on one file rather than breaking it.
+     */
+    const kept = get().threads.filter(
+      (thread) =>
+        !(
+          thread.rootId === rootId &&
+          thread.path === path &&
+          // An author is a *note's*, not a thread's — a thread of one note by
+          // the agent is a finding, and anything longer has somebody in it.
+          thread.notes.length === 1 &&
+          thread.notes[0]?.author === "agent"
+        )
+    )
+    if (kept.length !== get().threads.length) {
+      set({ threads: kept })
+      keep(kept)
+    }
+
+    // Relative, which is how a finding names a file and so how main filters:
+    // the store works in absolute paths and the contract does not.
+    return get().reviewAll(rootId, rootPath, [relativeTo(rootPath, path)])
+  },
+
+  async reviewAll(rootId, rootPath, only) {
+    // One at a time across the app: a whole-diff review reads every changed
+    // file, and two of them racing would be two `claude`s over the same diff. A
+    // single file is no exception — it is the same store, the same progress
+    // list and the same dialog, and there is nothing to show two runs in.
     if (get().reviewing) return
     set({
       reviewing: rootId,
@@ -840,7 +911,8 @@ export const useReview = create<ReviewState>((set, get) => ({
         rootPath,
         settings.reviewModel,
         settings.reviewEffort,
-        settings.reviewProfileId
+        settings.reviewProfileId,
+        only
       )
     } catch (error) {
       answer = { error: error instanceof Error ? error.message : String(error) }

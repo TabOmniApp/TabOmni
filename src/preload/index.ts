@@ -16,6 +16,7 @@ import {
   type WorktreeChatEvent,
   type TerminalExit,
   type TerminalOutput,
+  type UpdateProgress,
 } from "../shared/api"
 
 /**
@@ -62,6 +63,16 @@ const api: DesktopApi = {
   gitDiscard: (folderId, paths) =>
     ipcRenderer.invoke(IPC.gitDiscard, folderId, paths),
   gitDiscardAll: (folderId) => ipcRenderer.invoke(IPC.gitDiscardAll, folderId),
+  gitCommit: (folderId, message) =>
+    ipcRenderer.invoke(IPC.gitCommit, folderId, message),
+  draftCommitMessage: (folderId, model, effort, profileId) =>
+    ipcRenderer.invoke(
+      IPC.draftCommitMessage,
+      folderId,
+      model,
+      effort,
+      profileId
+    ),
   fileDiff: (filePath) => ipcRenderer.invoke(IPC.fileDiff, filePath),
 
   listDirectory: (dirPath) => ipcRenderer.invoke(IPC.listDirectory, dirPath),
@@ -136,10 +147,28 @@ const api: DesktopApi = {
       effort,
       profileId
     ),
-  reviewChanges: (cwd, model, effort, profileId) =>
-    ipcRenderer.invoke(IPC.reviewChanges, cwd, model, effort, profileId),
+  reviewChanges: (cwd, model, effort, profileId, paths) =>
+    ipcRenderer.invoke(
+      IPC.reviewChanges,
+      cwd,
+      model,
+      effort,
+      profileId,
+      paths ?? null
+    ),
   onReviewProgress: (listener) =>
     subscribe<ReviewProgressEvent>(IPC.reviewProgress, listener),
+  distillLearnings: (chatId, folderId, model, effort, profileId) =>
+    ipcRenderer.invoke(
+      IPC.distillLearnings,
+      chatId,
+      folderId,
+      model,
+      effort,
+      profileId
+    ),
+  saveLearning: (folderId, proposal) =>
+    ipcRenderer.invoke(IPC.saveLearning, folderId, proposal),
   listReviewThreads: () => ipcRenderer.invoke(IPC.listReviewThreads),
   saveReviewThreads: (threads) =>
     ipcRenderer.invoke(IPC.saveReviewThreads, threads),
@@ -184,6 +213,8 @@ const api: DesktopApi = {
 
   checkForUpdate: () => ipcRenderer.invoke(IPC.checkForUpdate),
   installUpdate: (version) => ipcRenderer.invoke(IPC.installUpdate, version),
+  onUpdateProgress: (listener) =>
+    subscribe<UpdateProgress>(IPC.updateProgress, listener),
 }
 
 contextBridge.exposeInMainWorld("desktop", api)

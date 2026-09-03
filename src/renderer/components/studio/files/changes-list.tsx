@@ -27,6 +27,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import { Claude } from "@/components/ui/svgs/claude"
 import {
   changeTree,
   changesUnder,
@@ -50,6 +51,7 @@ import { useFiles } from "@/lib/files/store"
 import { useStudio } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import { SideRow } from "../side-row"
+import { CommitBox } from "./commit-box"
 
 /**
  * The changed files of one checkout — the Explorer's `Changes` tab.
@@ -130,6 +132,9 @@ export function ChangesList({ root }: { root: FileRoot }) {
    * is a trigger inside a trigger. */
   const [target, setTarget] = useState<RowTarget | null>(null)
   const [discarding, setDiscarding] = useState<RowTarget | "all" | null>(null)
+  // For the menu's `Review this file`, which is refused while any review is
+  // running — the store's guard is app-wide. See `RowActions`.
+  const reviewing = useReview((state) => state.reviewing) !== null
 
   /** Both piles start folded, so a checkout arrives as two counts rather than as
    * however many rows a turn happened to touch. The headings keep their own
@@ -213,6 +218,11 @@ export function ChangesList({ root }: { root: FileRoot }) {
          * appears only in some states is an action that appears only in some
          * states.
          */}
+        {/* Above the piles, where a Source Control panel puts it, and only
+            while there is something staged for it to commit — see
+            `CommitBox`. */}
+        {staged.length > 0 && <CommitBox root={root} />}
+
         {staged.length > 0 && (
           <>
             <Heading
@@ -307,6 +317,21 @@ export function ChangesList({ root }: { root: FileRoot }) {
             {target.path && (
               <>
                 <ContextMenuSeparator />
+                {/* The same thing the row's own button does, for a row reached
+                    by keyboard — which has no pointer to hover with. Disabled
+                    rather than absent here: a menu is read, and an item that
+                    comes and goes is one nobody learns the place of. */}
+                <ContextMenuItem
+                  disabled={reviewing}
+                  onClick={() => {
+                    void useReview
+                      .getState()
+                      .reviewFile(root.id, root.path, target.path as string)
+                  }}
+                >
+                  <Claude />
+                  Review this file
+                </ContextMenuItem>
                 <ContextMenuItem
                   onClick={() =>
                     void navigator.clipboard.writeText(target.path as string)
@@ -786,9 +811,34 @@ function RowActions({
   onDiscard: (target: RowTarget) => void
 }) {
   const what = target.path ? target.label : `everything in ${target.label}`
+  // Any review, not this checkout's: the guard in the store is app-wide.
+  const reviewing = useReview((state) => state.reviewing) !== null
 
   return (
     <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100 group-hover/row:pointer-events-auto group-hover/row:opacity-100">
+      {/*
+        Read this one file again, furthest from the pointer's resting place by
+        the same rule the three below are ordered on: it is the least pressed of
+        the four, and the one that costs a `claude`.
+
+        Only on a file — a directory row is one path git named and nothing under
+        it is listed, so there is nothing to hand a turn. Absent while a review
+        is running rather than disabled: `reviewAll` is one at a time across the
+        whole app, and a button that is there but refuses is worse than one that
+        waits.
+      */}
+      {target.path && !reviewing && (
+        <RowAction
+          label={`Have Claude review ${target.label} again`}
+          onClick={() => {
+            void useReview
+              .getState()
+              .reviewFile(root.id, root.path, target.path as string)
+          }}
+        >
+          <Claude />
+        </RowAction>
+      )}
       {/* Discard first, stage last: the one that ends nearest the pointer's
           resting place is the one pressed most, and staging is that. The
           destructive one is the one that has to be reached for — and it opens

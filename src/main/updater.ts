@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process"
-import { closeSync, openSync } from "node:fs"
-import { mkdir } from "node:fs/promises"
+import { closeSync, createWriteStream, openSync } from "node:fs"
+import { mkdir, rm } from "node:fs/promises"
 import path from "node:path"
+import { Readable } from "node:stream"
+import type { ReadableStream as WebReadableStream } from "node:stream/web"
+import { pipeline } from "node:stream/promises"
 
 import type { UpdateCheck } from "../shared/api"
 import { dataDir } from "./data-dir"
@@ -16,6 +19,12 @@ import { dataDir } from "./data-dir"
  * latest release is, compare it against this build, and run the very script the
  * README already tells people to paste into a terminal. Nothing is downloaded
  * in the background, nothing is staged, and there is no delta.
+ *
+ * The one thing this process does fetch is the `.dmg` itself, and only once the
+ * button is pressed (`downloadUpdate`) — because the download *is* the wait,
+ * about a hundred megabytes of it, and it is the one phase the window is still
+ * alive for. `install.sh` quits the app before it copies anything, so a
+ * percentage is honest up to there and nothing after it could be drawn at all.
  *
  * Free of `electron` — this process's own version, and where the script it runs
  * lives, are arguments — so `test/updates.ts` can import it under plain `bun`,
@@ -150,6 +159,134 @@ export async function checkForUpdate(
 }
 
 /**
+ * How often a download says where it got to.
+ *
+ * A hundred megabytes arrives as a few thousand chunks and every one of them
+ * would otherwise be an IPC message and a React render. Ten a second is a bar
+ * that still moves smoothly.
+ */
+const PROGRESS_INTERVAL_MS = 100
+
+type Asset = { url: string; name: string; size: number }
+
+/**
+ * The `.dmg` for one architecture among a release's assets.
+ *
+ * Found by the suffix of the asset's *own* name, which is how `install.sh`
+ * finds it too — never by building a filename out of a version and a template,
+ * so a release whose files are named something else fails as "no arm64 build
+ * here" rather than as a 404 on a URL this app invented.
+ */
+export function dmgAsset(release: unknown, arch: string): Asset | null {
+  if (typeof release !== "object" || release === null) return null
+  const assets = (release as Record<string, unknown>).assets
+  if (!Array.isArray(assets)) return null
+  for (const entry of assets) {
+    if (typeof entry !== "object" || entry === null) continue
+    const record = entry as Record<string, unknown>
+    const name = record.name
+    const url = record.browser_download_url
+    if (typeof name !== "string" || typeof url !== "string") continue
+    if (!name.endsWith(`-${arch}.dmg`)) continue
+    // An absent or nonsense size reads as zero, which is "total unknown" — the
+    // bar draws that as indeterminate rather than as a percentage of nothing.
+    const size =
+      typeof record.size === "number" && record.size > 0 ? record.size : 0
+    return { name, url, size }
+  }
+  return null
+}
+
+/** A release by tag, in both spellings — which one a release used is not
+ * something anything here should have to know, the same reason `install.sh`
+ * tries both. */
+async function releaseByTag(version: string): Promise<unknown> {
+  const bare = version.replace(/^v/, "")
+  for (const tag of [`v${bare}`, bare]) {
+    const response = await fetch(
+      `https://api.github.com/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "Yasuo",
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }
+    )
+    if (response.ok) return response.json()
+    // Anything but "no such tag" is worth saying out loud: a 403 here is rate
+    // limiting, and retrying it under the other spelling would report it as a
+    // missing release.
+    if (response.status !== 404) {
+      throw new Error(`GitHub answered ${response.status}.`)
+    }
+  }
+  throw new Error(`No release tagged ${bare}.`)
+}
+
+/**
+ * Downloads a release's `.dmg`, reporting how far it has got.
+ *
+ * Ahead of `install.sh` rather than inside it: the script's own `curl` writes a
+ * progress bar to a log file nobody is reading, and this is the only phase of
+ * an install that can be drawn in the window — everything after it happens with
+ * the app already quit.
+ *
+ * Answers with the file's path, which is handed straight to the script.
+ */
+export async function downloadUpdate(input: {
+  version: string
+  /** `process.arch` — matches the `-arm64.dmg` / `-x64.dmg` suffix. */
+  arch: string
+  /** Called at most every `PROGRESS_INTERVAL_MS`, and once more at the end.
+   * `total` is 0 when the release does not say how large the asset is. */
+  onProgress: (received: number, total: number) => void
+}): Promise<string> {
+  const asset = dmgAsset(await releaseByTag(input.version), input.arch)
+  if (!asset) {
+    throw new Error(`No ${input.arch} .dmg in ${input.version}.`)
+  }
+
+  const dir = path.join(dataDir(), "updates")
+  // Emptied rather than added to: this holds one asset at a time, and an
+  // install that failed halfway should not leave a hundred megabytes behind for
+  // the next one to sit beside.
+  await rm(dir, { recursive: true, force: true })
+  await mkdir(dir, { recursive: true })
+  const file = path.join(dir, asset.name)
+
+  // No timeout on this one, unlike the metadata requests above: a slow link is
+  // not a hung request, and there is a person watching the bar who can say when
+  // they have had enough.
+  const response = await fetch(asset.url, {
+    headers: { "User-Agent": "Yasuo" },
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`The download answered ${response.status}.`)
+  }
+
+  const declared = Number(response.headers.get("content-length"))
+  const total =
+    Number.isFinite(declared) && declared > 0 ? declared : asset.size
+
+  let received = 0
+  let announced = 0
+  const body = Readable.fromWeb(response.body as WebReadableStream<Uint8Array>)
+  body.on("data", (chunk: Buffer) => {
+    received += chunk.length
+    const now = Date.now()
+    if (now - announced < PROGRESS_INTERVAL_MS) return
+    announced = now
+    input.onProgress(received, total)
+  })
+  await pipeline(body, createWriteStream(file))
+  // The last chunk is almost always inside the throttle window, so without this
+  // the bar stops a per cent or two short of the install starting.
+  input.onProgress(received, total)
+  return file
+}
+
+/**
  * Runs `install.sh` for a version and reopens the app afterwards.
  *
  * **Detached, and that is the whole trick.** The script's third act is quitting
@@ -169,6 +306,9 @@ export async function startInstaller(input: {
   /** The bundle to reopen — where `install.sh` puts it, not where this process
    * happens to be running from. */
   appPath: string
+  /** The `.dmg` `downloadUpdate` already fetched, so the script skips its own
+   * `curl`. The script deletes it on the way out. */
+  dmg?: string
 }): Promise<void> {
   const logPath = updateLogPath()
   await mkdir(path.dirname(logPath), { recursive: true })
@@ -191,6 +331,12 @@ export async function startInstaller(input: {
     {
       detached: true,
       stdio: ["ignore", log, log],
+      // The one thing passed by environment rather than argument: the script's
+      // positional arguments are its public interface — a version, from a
+      // terminal — and a pre-downloaded file is this app talking to itself.
+      env: input.dmg
+        ? { ...process.env, YASUO_UPDATE_DMG: input.dmg }
+        : process.env,
       // No cwd of this app's: it may be inside the bundle about to be replaced.
       cwd: path.dirname(logPath),
     }

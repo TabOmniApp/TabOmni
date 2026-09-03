@@ -83,6 +83,19 @@ type ChangesState = {
   unstage: (root: FileRoot, paths: string[]) => Promise<void>
   discard: (root: FileRoot, paths: string[]) => Promise<void>
   discardAll: (root: FileRoot) => Promise<void>
+  /**
+   * The fourth write: what is staged, committed under this message.
+   *
+   * **Rejects** where the three above resolve, and that asymmetry is the point.
+   * Staging a file that is already staged is a no-op worth nobody's attention;
+   * a commit that did not happen is the one write here somebody has to be told
+   * about, because the message they wrote is still in the box and the work is
+   * still uncommitted. `CommitBox` draws git's own words.
+   */
+  commit: (
+    root: FileRoot,
+    message: string
+  ) => Promise<{ sha: string; subject: string }>
 
   /** Opens the diff tab for a root and puts it on screen — a row in the
    * Explorer's `Changes` list. */
@@ -147,6 +160,23 @@ export const useChanges = create<ChangesState>((set, get) => ({
     const paths = (get().byRoot[root.id] ?? []).map((change) => change.path)
     await window.desktop.gitDiscardAll(root.folderId)
     await settle(root, paths)
+  },
+
+  async commit(root, message) {
+    // The staged paths before the commit, because after it they are not
+    // changes any more and `settle` would have nothing to re-read: what has to
+    // be refreshed is the directories they were in, which is the same problem
+    // `discardAll` above solves the same way.
+    const paths = (get().byRoot[root.id] ?? [])
+      .filter((change) => change.staged)
+      .map((change) => change.path)
+
+    // Deliberately not caught: git's own refusal — nothing staged, no identity,
+    // a hook that said no — is what the box has to show, and swallowing it here
+    // would leave a message that looks committed and is not.
+    const written = await window.desktop.gitCommit(root.folderId, message)
+    await settle(root, paths)
+    return written
   },
 
   open(rootId) {

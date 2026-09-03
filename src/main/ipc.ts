@@ -15,6 +15,7 @@ import {
 
 import {
   CHAT_NOTIFICATIONS_KEY,
+  CHAT_TRAY_KEY,
   IPC,
   MCP_DISABLED_TOOLS_KEY,
   type BoardCard,
@@ -37,6 +38,7 @@ import * as files from "./files"
 import { MAX_INDEXED_FILES } from "./files"
 import {
   changes,
+  commit,
   currentBranch,
   discard,
   discardAll,
@@ -49,13 +51,21 @@ import {
 import { ChatNotices, noticeText, type ChatNotice } from "./notify"
 import { installedMcpServers, removeMcpServer } from "./mcp-servers"
 import { ProcessManager } from "./process"
-import { reviewChanges, reviewReply } from "./review-agent"
+import { transcriptOf, type LearningProposal } from "../shared/learnings"
+import { saveLearning } from "./learnings"
+import {
+  distillLearnings,
+  draftCommitMessage,
+  reviewChanges,
+  reviewReply,
+} from "./review-agent"
 import { expandHome, quote } from "./shell-env"
 import { systemUsage } from "./system-usage"
 import { Store } from "./store"
 import { TerminalManager } from "./terminal"
+import { ChatTray } from "./tray"
 import { TsServers } from "./tsserver"
-import { checkForUpdate, startInstaller } from "./updater"
+import { checkForUpdate, downloadUpdate, startInstaller } from "./updater"
 import { DirectoryWatchers } from "./watch"
 
 /** What `readImageDataUrl` will actually recognize — the same extensions
@@ -153,6 +163,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   terminals: TerminalManager
   tsServers: TsServers
   watchers: DirectoryWatchers
+  /** Exposed so the icon leaves the menu bar with the app rather than after
+   * it. */
+  tray: ChatTray
+  startTray: () => Promise<void>
   noteFilePath: (fileName: string) => string
 } {
   const store = new Store()
@@ -251,11 +265,80 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     },
     (event) => {
       send(IPC.worktreeChatEvent, event)
-      void announce(notices.read(event))
+      const notice = notices.read(event)
+      void announce(notice)
+      // Every event, not just the ones worth a banner: the count in the menu
+      // bar is a state and not an interruption, so a `busy` that rings nothing
+      // still moves it.
+      void refreshTray()
     }
   )
 
   const notices = new ChatNotices()
+
+  /**
+   * The count in the menu bar, off the same watcher the notifications are.
+   *
+   * See `tray.ts` for what it is for. It is created here rather than in
+   * `main.ts` because this is where the events are, but it cannot be *shown*
+   * until the app is ready — a `Tray` before then throws — which is what
+   * `startTray` below is for.
+   */
+  const tray = new ChatTray({
+    reveal: (chatId) => revealChat(chatId),
+    show: () => showWindow(),
+  })
+
+  /** Brings the studio up: from the dock, from behind another app, or from
+   * minimised, which are three different states and only the last has a name. */
+  const showWindow = (): BrowserWindow | null => {
+    const window = getWindow()
+    if (!window || window.isDestroyed()) return null
+    if (window.isMinimized()) window.restore()
+    window.show()
+    window.focus()
+    return window
+  }
+
+  /** The studio, scrolled to one chat. Shared by the notification's click and
+   * the tray's menu, which are the same errand arriving two ways. */
+  const revealChat = (chatId: string): void => {
+    showWindow()?.webContents.send(IPC.revealWorktreeChat, chatId)
+  }
+
+  /**
+   * Which draw of the tray is the current one.
+   *
+   * The listing is read from disk, so two events a few milliseconds apart are
+   * two awaits that can land in either order — and the one that lands second
+   * wins the icon. Without this the count sticks on whatever the slower read
+   * was counting, which looks exactly like a chat that never finished.
+   */
+  let trayDraw = 0
+
+  /** Redraws the tray, if it is in the strip at all. */
+  const refreshTray = async (): Promise<void> => {
+    if (!tray.shown) return
+    const draw = ++trayDraw
+    const pending = notices.pending()
+    // Only for the names in the menu, so an idle machine reads no files.
+    const running = pending.working.length + pending.waiting.length > 0
+    const chats = running ? await worktreeChats.list() : []
+    if (draw !== trayDraw) return
+    tray.update(pending, chats)
+  }
+
+  /**
+   * Puts the icon in the strip, or takes it out, to match the setting.
+   *
+   * Called once the app is ready and again whenever that setting changes. Off
+   * by default is the wrong default here for the reason it is wrong for
+   * notifications — see `CHAT_TRAY_KEY` — so an unset key reads as on.
+   */
+  const applyTraySetting = async (): Promise<void> => {
+    tray.setShown((await store.getSetting(CHAT_TRAY_KEY)) !== "off")
+    await refreshTray()
+  }
 
   /**
    * Rings the OS notification a chat's event turned out to deserve.
@@ -292,14 +375,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     const banner = new Notification({ title: text.title, body: text.body })
     // Clicking it is the way back to the chat it is about — a notification that
     // only tells you something happened leaves you hunting for the row.
-    banner.on("click", () => {
-      const target = getWindow()
-      if (!target || target.isDestroyed()) return
-      if (target.isMinimized()) target.restore()
-      target.show()
-      target.focus()
-      target.webContents.send(IPC.revealWorktreeChat, notice.chatId)
-    })
+    banner.on("click", () => revealChat(notice.chatId))
     banner.show()
   }
 
@@ -443,6 +519,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     // `busy: false`, so the watcher would keep it as working for the rest of
     // the run and swallow the first quiet of whatever reused the id.
     notices.forget(id)
+    // The deleted chat may have been the one the strip was counting.
+    void refreshTray()
     return worktreeChats.delete(id)
   })
 
@@ -641,6 +719,49 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   ipcMain.handle(IPC.gitDiscardAll, async (_event, folderId: string) => {
     await trashAll(await discardAll(await store.resolveFolderDir(folderId)))
   })
+
+  /*
+   * The staged work, committed — the fourth git write, and the argument for it
+   * is on `commit` in `git.ts` and in `docs/design.md` § Committing.
+   *
+   * The message is not touched on the way through: it is whatever the box held,
+   * and `commit` refuses an empty one. Git's own error comes back as the
+   * rejection, hooks included — a `pre-commit` that refused has said something
+   * worth reading, and a sentence of this app's own in front of it would hide
+   * it.
+   */
+  ipcMain.handle(
+    IPC.gitCommit,
+    async (_event, folderId: string, message: string) =>
+      commit(await store.resolveFolderDir(folderId), message)
+  )
+
+  /*
+   * A commit message drafted from the staged diff by the read-only `claude`.
+   *
+   * The same three settings a review turn takes, resolved the same way — it is
+   * the same second CLI, billed to the same profile. Answers rather than
+   * throws, like the other two calls into `review-agent.ts`: a draft that did
+   * not arrive leaves the box exactly as it was, which is a message somebody
+   * types themselves.
+   */
+  ipcMain.handle(
+    IPC.draftCommitMessage,
+    async (
+      _event,
+      folderId: string,
+      model: string | null,
+      effort: string | null,
+      profileId: string | null
+    ) =>
+      draftCommitMessage({
+        cwd: await store.resolveFolderDir(folderId),
+        model,
+        effort,
+        configDir: await configDirOf(profileId),
+        disabledTools: await disabledTools(),
+      })
+  )
 
   /**
    * The new files a discard could not restore, moved to the trash.
@@ -882,9 +1003,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.getSetting, (_event, key: string) => store.getSetting(key))
 
-  ipcMain.handle(IPC.setSetting, (_event, key: string, value: string) =>
-    store.setSetting(key, value)
-  )
+  ipcMain.handle(IPC.setSetting, async (_event, key: string, value: string) => {
+    await store.setSetting(key, value)
+    // The one setting with something of this process' own hanging off it: the
+    // switch has to put the icon in the menu bar or take it out there and then,
+    // since nothing else here re-reads it.
+    if (key === CHAT_TRAY_KEY) await applyTraySetting()
+  })
 
   ipcMain.handle(
     IPC.startProcess,
@@ -909,16 +1034,57 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       cwd: string,
       model: string | null,
       effort: string | null,
-      profileId: string | null
+      profileId: string | null,
+      // Absent is every changed file; a list is the one file a row's button
+      // asked to be read again. Filtered against the diff on the other side —
+      // see `paths` on `ReviewChangesRequest`.
+      paths: string[] | null
     ) =>
       reviewChanges({
         cwd,
         model,
         effort,
+        paths: paths ?? undefined,
         configDir: await configDirOf(profileId),
         disabledTools: await disabledTools(),
         onProgress: (text) => send(IPC.reviewProgress, { text }),
       })
+  )
+
+  /**
+   * What one chat taught, distilled by the same read-only `claude` a review
+   * runs on. The transcript is read here and handed over as text: a chat's
+   * file lives under `~/.yasuo`, which the turn — running in the project's own
+   * directory — has no business reaching into. `model`, `effort` and
+   * `profileId` are the review's three, resolved the same way.
+   */
+  ipcMain.handle(
+    IPC.distillLearnings,
+    async (
+      _event,
+      chatId: string,
+      folderId: string,
+      model: string | null,
+      effort: string | null,
+      profileId: string | null
+    ) =>
+      distillLearnings({
+        cwd: await store.resolveFolderDir(folderId),
+        transcript: transcriptOf(await worktreeChats.read(chatId)),
+        model,
+        effort,
+        configDir: await configDirOf(profileId),
+        disabledTools: await disabledTools(),
+      })
+  )
+
+  /** One approved proposal written into the project — see `main/learnings.ts`.
+   * The folder id is resolved here for the reason every write is: a path
+   * built in main is a path gated in main. */
+  ipcMain.handle(
+    IPC.saveLearning,
+    async (_event, folderId: string, proposal: LearningProposal) =>
+      saveLearning(await store.resolveFolderDir(folderId), proposal)
   )
 
   ipcMain.handle(IPC.listReviewThreads, () => store.listReviewThreads())
@@ -1007,10 +1173,26 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     if (!/^[0-9A-Za-z.+-]{1,64}$/.test(version)) {
       throw new Error(`Not a version: ${version}`)
     }
+    // Downloaded here rather than by the script, so the wait has a percentage
+    // on it: this is the long phase and the only one with a window left to draw
+    // in. A failure throws, and the renderer is still there to show it.
+    const dmg = await downloadUpdate({
+      version,
+      arch: process.arch,
+      onProgress: (received, total) =>
+        send(IPC.updateProgress, {
+          stage: "downloading",
+          version,
+          received,
+          total,
+        }),
+    })
+    send(IPC.updateProgress, { stage: "installing", version })
     await startInstaller({
       script: installerScript(),
       version,
       appPath: APP_DIR,
+      dmg,
     })
   })
 
@@ -1020,6 +1202,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     terminals,
     tsServers,
     watchers,
+    tray,
+    /** Shows the menu bar's icon if the setting has not switched it off.
+     * Separate from building it because `registerIpc` runs at module scope and
+     * a `Tray` constructed before `whenReady` throws. */
+    startTray: () => applyTraySetting(),
     /** For the `note-file://` handler, which is not an IPC call and so cannot
      * reach the store any other way — see `serveNoteFiles`. */
     noteFilePath: (fileName: string) => store.noteFilePath(fileName),

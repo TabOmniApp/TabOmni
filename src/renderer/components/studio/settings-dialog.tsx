@@ -39,7 +39,7 @@ import type { McpListing, McpServerInfo } from "@shared/api"
 import { useProjects } from "@/lib/projects"
 import { useSettings } from "@/lib/settings"
 import { useStudio } from "@/lib/store"
-import { pendingUpdate, useUpdates } from "@/lib/updates"
+import { installLabel, pendingUpdate, useUpdates } from "@/lib/updates"
 import {
   accountCaption,
   accountLabel,
@@ -63,6 +63,7 @@ import { useAgentModels } from "@/lib/worktree-chat/models"
 import { compact } from "@/lib/worktree-chat/usage"
 import { ClaudeLoginDialog } from "./claude-login-dialog"
 import { IconButton } from "./icon-button"
+import { UpdateProgressBar } from "./update-progress"
 import { serverMark } from "./worktree/chat-marks"
 import { ModelMenu, ProfileMenu } from "./worktree/chat-composer"
 
@@ -274,6 +275,8 @@ function TabsSection() {
 function ChatsSection() {
   const on = useSettings((state) => state.chatNotifications)
   const setOn = useSettings((state) => state.setChatNotifications)
+  const tray = useSettings((state) => state.chatTray)
+  const setTray = useSettings((state) => state.setChatTray)
 
   return (
     <Card>
@@ -288,6 +291,19 @@ function ChatsSection() {
         description="A notification when a chat goes quiet, fails, or stops to ask you something — only while this window is not focused, and clicking it opens that chat. Off, the only sign is the row in the sidebar."
       >
         <Switch checked={on} onCheckedChange={setOn} />
+      </Row>
+      {/*
+        The standing version of the row above, and on by default for the same
+        reason. It is a switch at all because this icon is in a strip shared
+        with every other app on the machine — that is the one place in this app
+        where "I do not want to see this" is a reasonable thing to want, and
+        where there is no way to say it from the icon itself.
+      */}
+      <Row
+        title="Count the chats in the menu bar"
+        description="An icon outside the window carrying how many chats are answering and how many are waiting on you, with a menu naming them. Off, the sidebar row is the only count."
+      >
+        <Switch checked={tray} onCheckedChange={setTray} />
       </Row>
     </Card>
   )
@@ -311,6 +327,7 @@ function UpdatesSection() {
   const check = useUpdates((state) => state.check)
   const checking = useUpdates((state) => state.checking)
   const installing = useUpdates((state) => state.installing)
+  const progress = useUpdates((state) => state.progress)
   const error = useUpdates((state) => state.error)
   const refresh = useUpdates((state) => state.refresh)
   const install = useUpdates((state) => state.install)
@@ -344,9 +361,18 @@ function UpdatesSection() {
         <Row
           title={`Yasuo ${update.version} is available`}
           description={
-            update.installable
-              ? "Installs into /Applications and reopens the app. Terminal sessions and anything running in the dock end with it."
-              : "Installing from inside the app is macOS only — the release page has the build for this machine."
+            installing ? (
+              // The bar takes the description's place rather than sitting under
+              // the button: it is what this row is about while it is on screen,
+              // and the sentence it replaces is one the user has just acted on.
+              <span className="mt-1.5 block max-w-xs">
+                <UpdateProgressBar progress={progress} />
+              </span>
+            ) : update.installable ? (
+              "Installs into /Applications and reopens the app. Terminal sessions and anything running in the dock end with it."
+            ) : (
+              "Installing from inside the app is macOS only — the release page has the build for this machine."
+            )
           }
         >
           <div className="flex items-center gap-2">
@@ -365,7 +391,7 @@ function UpdatesSection() {
                 disabled={installing}
                 onClick={() => void install()}
               >
-                {installing ? "Installing…" : "Update and reopen"}
+                {installLabel(installing, progress)}
               </Button>
             )}
           </div>
@@ -1112,7 +1138,9 @@ function Row({
   children,
 }: {
   title: string
-  description: string
+  /** A sentence, all but always — `ReactNode` because the update row swaps its
+   * own for a progress bar while an install runs. */
+  description: ReactNode
   children: ReactNode
 }) {
   return (

@@ -507,7 +507,8 @@ async function inRepository(
  * tree into one state because a row there has nothing more to say. What brought
  * them back is the Changes list: it is what somebody reads after an agent has
  * run a turn, and "keep this file, throw that one away" is the sentence being
- * said at that moment. Committing is still not here, and is still the shell's.
+ * said at that moment. `commit` below is the fourth now, and the note on it
+ * says what moved and what did not.
  *
  * Every path is a **pathspec relative to `dir`**, not to the repository root.
  * Git resolves a pathspec against its own cwd, and `dir` is the cwd of every
@@ -629,6 +630,95 @@ export async function discardAll(dir: string): Promise<string[]> {
     dir,
     entries.map((entry) => entry.path)
   )
+}
+
+/**
+ * What is staged, as a patch and as the summary of one.
+ *
+ * For the commit message Claude drafts (`draftCommitMessage` in
+ * `review-agent.ts`), which needs to be told what it is describing and has no
+ * shell to ask git itself — the same bargain `reviewChanges` makes with
+ * `fileDiff`. Both halves, because a large staged change is a patch nothing
+ * will read whole and a `--stat` still says what the commit is: the caller
+ * picks, and asking git twice here is cheaper than a second round trip for the
+ * fallback.
+ *
+ * `-M` so a rename reads as a rename rather than as a whole file deleted and
+ * another added, which is a commit message describing work nobody did.
+ */
+export async function stagedDiff(
+  dir: string
+): Promise<{ stat: string; patch: string }> {
+  const [stat, patch] = await Promise.all([
+    git(dir, ["diff", "--cached", "-M", "--stat"]),
+    git(dir, ["diff", "--cached", "-M"]),
+  ])
+  return { stat, patch }
+}
+
+/**
+ * The subjects of the last few commits, newest first.
+ *
+ * What a drafted message is shown so it writes in **this repository's** voice —
+ * `feat(chat): …` where that is the convention and a bare sentence where it is
+ * not. A model told only the diff writes whatever its training leans toward,
+ * which is a message that has to be rewritten to be committed, which is a draft
+ * nobody presses twice.
+ *
+ * A repository with no commits has no log and answers with none, rather than
+ * failing: the first commit is exactly the one somebody has no convention to
+ * follow yet.
+ */
+export async function recentSubjects(
+  dir: string,
+  limit: number
+): Promise<string[]> {
+  try {
+    const log = await git(dir, ["log", `-n${limit}`, "--pretty=%s"])
+    return log
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Commits what is staged, and answers with the commit.
+ *
+ * **This is the line moving, and it is worth saying where it now sits.** The
+ * rule was that staging and discarding are answered by pointing at rows while a
+ * commit is a sentence somebody writes, so the shell one click away in the dock
+ * was the better place for it. What changed is that the sentence can now be
+ * drafted from the staged diff by the read-only `claude` this app already runs
+ * (`draftCommitMessage`), so the gesture is no longer "write a paragraph in a
+ * panel with no room for one" — it is reading a diff, then ending that reading.
+ * `docs/design.md` § Committing carries the whole argument.
+ *
+ * What is still refused is everything after it: no amend, no log, no branch, no
+ * push. This app is not becoming a second and worse git client — it finishes the
+ * one gesture it already had somebody in the middle of.
+ *
+ * The message goes as an **argument**, never through a shell, so a backtick or
+ * a `$(…)` in it is text. Hooks run: a repository that refuses a commit at
+ * `pre-commit` has said something the studio has no business overriding, and its
+ * output comes back as the error.
+ */
+export async function commit(
+  dir: string,
+  message: string
+): Promise<{ sha: string; subject: string }> {
+  const body = message.trim()
+  // Guarded here as well as in the pane: git would open an editor on an empty
+  // `-m`, and an editor with no terminal to draw in is a call that never
+  // returns.
+  if (!body) throw new Error("A commit needs a message.")
+
+  await git(dir, ["commit", "-m", body])
+
+  const sha = (await git(dir, ["rev-parse", "--short", "HEAD"])).trim()
+  return { sha, subject: body.split("\n")[0] ?? "" }
 }
 
 /** Whether `HEAD` has this path — the question that decides whether discarding

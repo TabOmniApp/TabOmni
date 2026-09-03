@@ -2,6 +2,7 @@ import { create } from "zustand"
 
 import {
   CHAT_NOTIFICATIONS_KEY,
+  CHAT_TRAY_KEY,
   MCP_DISABLED_TOOLS_KEY,
   type ChatEffort,
 } from "@shared/api"
@@ -105,8 +106,19 @@ type SettingsState = Stored & {
    */
   chatNotifications: boolean
 
+  /**
+   * Whether the menu bar carries the standing count of what the chats are
+   * doing.
+   *
+   * Beside `chatNotifications` in every way — main's to read, main's to act on,
+   * and on by default for the same reason (`CHAT_TRAY_KEY`). The renderer keeps
+   * it only so the switch can be drawn from the same store as its neighbour.
+   */
+  chatTray: boolean
+
   setGroupTabs: (group: boolean) => void
   setChatNotifications: (on: boolean) => void
+  setChatTray: (on: boolean) => void
   setDiffSideBySide: (sideBySide: boolean) => void
   setDiffWhitespace: (show: boolean) => void
   /** Sets the model and its effort together, the way a chat's `ModelMenu`
@@ -190,6 +202,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     reviewProfileId: null,
     mcpDisabledTools: [],
     chatNotifications: true,
+    chatTray: true,
     loaded: false,
 
     setGroupTabs(groupTabs) {
@@ -203,6 +216,14 @@ export const useSettings = create<SettingsState>((set, get) => {
       // as the two words main matches on, and only `"off"` means anything —
       // see `CHAT_NOTIFICATIONS_KEY`.
       void setSetting(CHAT_NOTIFICATIONS_KEY, chatNotifications ? "on" : "off")
+    },
+
+    setChatTray(chatTray) {
+      set({ chatTray })
+      // Its own key for the same reason as the switch above, and the write is
+      // what puts the icon in the menu bar: main acts on this key as it lands
+      // rather than at the next launch.
+      void setSetting(CHAT_TRAY_KEY, chatTray ? "on" : "off")
     },
 
     setDiffSideBySide(diffSideBySide) {
@@ -235,10 +256,11 @@ export const useSettings = create<SettingsState>((set, get) => {
 
     restore() {
       restorePromise ??= (async () => {
-        const [stored, disabled, notifications] = await Promise.all([
+        const [stored, disabled, notifications, tray] = await Promise.all([
           recall(SETTINGS_KEY, isStored),
           getSetting(MCP_DISABLED_TOOLS_KEY).catch(() => null),
           getSetting(CHAT_NOTIFICATIONS_KEY).catch(() => null),
+          getSetting(CHAT_TRAY_KEY).catch(() => null),
         ])
         set({
           // Nothing stored is the default, not a failure: the spread of a null
@@ -249,6 +271,10 @@ export const useSettings = create<SettingsState>((set, get) => {
           // — the same reading main does, and the two must agree or the switch
           // would show one thing while the bell did another.
           chatNotifications: notifications !== "off",
+          // The same reading, for the same reason: main puts the icon in the
+          // strip unless the key says `off`, and a switch drawn the other way
+          // would describe a menu bar the user is looking at.
+          chatTray: tray !== "off",
           loaded: true,
         })
       })()

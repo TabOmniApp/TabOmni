@@ -101,7 +101,16 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
   notification: quiet (**not** `done` — a message sent mid-turn is queued behind
   it), a failure, a question. Free of `electron` so `test/notify.ts` can import
   it; `ipc.ts` rings the bell, only while the window is unfocused, and the click
-  comes back as `IPC.revealWorktreeChat`.
+  comes back as `IPC.revealWorktreeChat`. Its `pending()` is those same two sets
+  read as a **standing count** rather than as edges.
+- **`tray.ts`** — the menu bar's icon and that count beside it, drawn in the
+  sidebar row's own words: `activityLabel` and friends live in
+  `@shared/chat-activity`, re-exported by `lib/worktree-chat/running.ts`, so the
+  count outside the window and the one inside it cannot disagree. A `Tray` built
+  before `whenReady` throws, so it is created with the managers and shown from
+  `startTray`; it is **held on the object**, since an unreferenced one is
+  collected and the icon vanishes with nothing in any log. `CHAT_TRAY_KEY`
+  switches it off, and `ipc.ts` acts on that key as the write lands.
 - **`files.ts`** — every `files:*` call goes through `insideAny`, which is what
   keeps an absolute path from the renderer inside the roots the workspace was
   pointed at. Deleting is `shell.trashItem`, never `unlink`. `fileRoots` in
@@ -112,8 +121,14 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
 --numstat` per side of the index), `fileAtHead` for the diff's left side,
   `fileDiff` for the diff **itself** — `git diff HEAD --unified=0`, so the pane
   and the row's `+`/`-` counts are one algorithm rather than two that agree most
-  of the time — and `stage` / `unstage` / `discard` for the list's menu. No git panel exists and
-  **nothing commits** — that line is deliberate, see `docs/design.md`. `discard`
+  of the time — and `stage` / `unstage` / `discard` for the list's menu. No git panel exists.
+  **`commit` is the one write past that line**, and the reversal is recorded in
+  `docs/design.md` § Committing: the sentence a commit needs can now be drafted
+  off the staged diff by the read-only `claude` (`draftCommitMessage` in
+  `review-agent.ts`, fed by `stagedDiff` / `recentSubjects` here), so the gesture
+  is ending a reading of the diff rather than writing a paragraph in a panel with
+  no room for one. Amend, log, branch and push stay out — that is the git client
+  the dock's shell already is. `discard`
   answers with the paths it could not restore instead of deleting them: they go
   to the trash in `ipc.ts`, because this module stays free of `electron` so the
   tests can import it.
@@ -137,16 +152,26 @@ handler and the long-lived managers (`Store`, `SqlConnections`, `DockerRuntime`,
 - **`review-agent.ts`** — the **second** `claude`, and the only one that is not a
   conversation: one read-only turn, opened for a question and closed on the
   answer, with no transcript, no resume and nothing to send a second message to.
-  Two of them — `reviewReply`, for a comment that says `@claude-review`, and
+  Four of them — `reviewReply`, for a comment that says `@claude-review`;
   `reviewChanges`, which is **a turn per changed file**, `REVIEW_CONCURRENCY` of
-  them at a time, and turns what comes back into threads. One turn over the whole
+  them at a time, and turns what comes back into threads (its `paths` narrows it
+  to one file, which is the row's own `Review this file`);
+  `draftCommitMessage`, which reads the staged diff and the last ten subjects and
+  answers with a message for the box above the piles — never with a commit; and
+  `distillLearnings`, which reads one chat's transcript and answers with
+  **proposals** — a skill for `.claude/skills/`, a memory bullet for the
+  project's `CLAUDE.md` — each written only when its Save is pressed
+  (`main/learnings.ts`, shapes in `shared/learnings.ts`). One turn over the whole
   diff was the first shape and its `PATCH_LIMIT` was a budget for the lot, so a
   large change was reviewed as far as the alphabet went and no further; each turn
   is now given its own file's patch, the list of the others as context, and may
   comment only on its own. The rule below still holds — a feature calling the CLI as a helper is
-  refused — and neither is one: both are asked for out loud, and both answer as
-  comments in the pane the diff is in. `docs/design.md` § Changes has the
-  argument, and `findingsIn` is checked in `test/review.ts`.
+  refused — and none of the four is one: each is asked for out loud by a button,
+  a menu item or a mention, and each answers in the pane it was asked from, as
+  comments, proposals somebody saves one by one, or text in a box somebody still
+  has to press Commit on. `docs/design.md` § Changes, § Committing and
+  § Distilling learnings have the argument; `findingsIn` is checked in
+  `test/review.ts`, `proposalsIn` in `test/learnings.ts`.
 
 ### `worktree-chat.ts` + `claude-agent.ts` — the `claude` a conversation runs on
 
@@ -421,7 +446,8 @@ own `ChatNotices` (`test/notify.ts`),
 `main/mcp-servers.ts`'s own `readServer` (`test/mcp-servers.ts`),
 `lib/worktree-chat/claude-profiles.ts`'s `accountLabel` / `accountCaption` with
 `main/claude-auth.ts`'s own `readAuthStatus` and `main/claude-profiles.ts`'s
-naming of a profile's directory (`test/claude-account.ts`). Put new logic on that side of the line.
+naming of a profile's directory (`test/claude-account.ts`),
+`shared/learnings.ts` (`test/learnings.ts`). Put new logic on that side of the line.
 
 ## Conventions
 

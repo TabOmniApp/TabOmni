@@ -383,6 +383,19 @@ Four things, and none of them is a fifth panel knowing about the board:
   knows the card is done, and the alternative is switching to the board to drag
   a card whose chat they were just in. It draws nothing at all for a chat no
   card names, which is most chats.
+  Beside the dropdown, once the chat has **stopped**, is the card's way to the
+  **last column in one click**. Two controls for one field is a repeat only on
+  paper: a dropdown answers "which column", and this answers the question
+  actually asked at the end of a turn, which is the whole of what makes the
+  board worth keeping up to date. The last column rather than one called `Done`,
+  because the names are the user's — the same reading `unfinishedCount` does,
+  and the two have to agree or this button would move a card the project's tab
+  still counts as unfinished. It is **absent** while the chat is answering or
+  waiting on a question, rather than disabled: mid-turn it is a button for a
+  fact nobody has yet, and a greyed control in a strip that thin is a smear
+  nobody can read the reason for. None of this is the agent writing to the
+  board — see below; it is a person pressing something, in the place they
+  already are.
 - A card whose chat has been **deleted** says so and offers to start another.
   `linkedChat` resolves the link at read time and is null for exactly that, the
   way `chatRootId` is null for a chat whose project has gone. Deleting a chat
@@ -580,6 +593,76 @@ that a user who has to find the row first has already missed the turn they
 walked away from. It lives under its own settings key rather than in the
 renderer's preference bag, for the reason the switched-off MCP tools do: main
 reads it, and a bag only the renderer parses is not a thing both sides can name.
+
+### The menu bar
+
+A notification is a **moment**, and it is gone as soon as it is dismissed or
+missed. The commoner case is not being interrupted at all — it is glancing at
+the machine while doing something else and wanting to know whether anything
+wants you yet. Inside the window that question is answered by the project row's
+count; outside it, there was nothing.
+
+So the menu bar carries an icon — a speech bubble — with **that same count
+beside it**: `2` answering, `1!` waiting, `2 · 1!` for both. The label is
+`activityLabel`, the sidebar row's own, and making the two agree is the whole
+reason it moved: it and `activityTitle`, `isRunning` and the `ChatActivity`
+shape are `@shared/chat-activity` now, re-exported by
+`lib/worktree-chat/running.ts` so the sidebar still asks one file about it. Two
+formats for one fact would read as two facts, and this is precisely the number
+somebody checks the other one against. It is **empty when nothing is running**
+rather than a `0`: that strip belongs to the whole machine, and an app charging
+it three characters to say nothing is happening is one that gets dragged out of
+it.
+
+**Nothing new watches for this.** `ChatNotices` already holds which chats are
+working and which have a question up, because that is what turning a stream of
+states into edges requires — `pending()` hands those two sets out, with
+**waiting winning over working** applied there rather than at the call site, and
+`main/tray.ts` draws them. A second pass over the same events would be a second
+answer that can drift from the first. The redraw is on _every_ chat event, not
+only the ones worth a banner: a count is a state, not an interruption.
+
+The menu behind the icon **names the chats**, waiting first under its own
+heading and answering below it, because those are not the same errand — one is
+a question with a turn stopped behind it and the other is something to leave
+alone. Clicking one is `IPC.revealWorktreeChat`, the same thing clicking a
+notification does; `revealChat` in `ipc.ts` is the one implementation, since the
+two are the same errand arriving by different routes. The names come from the
+listing rather than from the watcher, which holds only ids — and an id with no
+row is dropped rather than drawn under a stand-in, for the same reason a notice
+about one is not rung.
+
+Three things are worth knowing before touching it. The `Tray` is **held on the
+object**, not in a local: an unreferenced one is collected and the icon vanishes
+from the menu bar seconds after launch with nothing in any log. The tray is
+**created with the managers but shown from `whenReady`** (`startTray`), because
+`registerIpc` runs at module scope and a `Tray` constructed before the app is
+ready throws. And the redraw is **sequenced** (`trayDraw`) — it reads the
+listing off disk, so two events milliseconds apart are two awaits that can land
+in either order, and the loser would leave the icon counting a state that has
+passed, which looks exactly like a chat that never finished.
+
+`setTitle` is macOS's, so that is the only platform with the count _beside_ the
+icon; everywhere else it is the tooltip, which is set on all three, and a click
+opens the window rather than the menu. `Quit` is on the menu because on macOS
+this icon can be the only part of the app on screen.
+
+It is **on by default** and switchable off beside the notification switch
+(`CHAT_TRAY_KEY`, Settings › Chats), and it is switchable at all for a reason
+the row above does not have: this icon sits in a strip shared with every other
+app on the machine, and there is no way to say "not you" from the icon itself.
+Switching it off **destroys the tray** rather than leaving one that stops
+counting, and `ipc.ts` acts on the key as the write lands rather than at the
+next launch — a switch whose effect is a relaunch away is a switch that reads
+as broken.
+
+The icon is generated by `scripts/tray-icon.mjs` into `resources/tray.png`
+(+ `@2x`), for the reason `menu-icon.mjs` is: an artefact only some machines can
+regenerate is one nobody regenerates. It is **filled** where the menu's gear is
+an outline — the gear sits in a list beside SF Symbols at the menu's own weight,
+and this is glanced at from across the room, which is what a 1.1px outline loses
+first — and it is a **template image**, so macOS tints it to the bar's own
+appearance rather than the app fighting light and dark with one colour.
 
 ### The chat is hosted, not tailed
 
@@ -1391,6 +1474,55 @@ A chat's empty state is `WorktreeWelcome` — which project, and its path —
 because somebody with two projects open needs to know which one they are about
 to change. It says the opposite of a reassurance, on purpose: this is the
 working tree you have checked out, and an edit here is an edit to your work.
+
+## Distilling learnings
+
+The learning loop: the more a project is worked on in its chats, the more of
+what was learned should be waiting for the next one. `Distill learnings…` in a
+chat row's context menu opens one read-only turn of the review's `claude`
+(`distillLearnings` in `main/review-agent.ts`) over that chat's transcript, and
+what comes back is a list of **proposals** in a dialog
+(`distill-dialog.tsx`) — each a skill or a memory, each with its own Save
+button, none of it written anywhere until one is pressed.
+
+**Where a saved learning goes is the whole design.** This app keeps no store of
+its own and serves no MCP server, so a learning lives where the user's own
+`claude` already looks: a **skill** becomes `.claude/skills/<name>/SKILL.md` in
+the project, which the CLI discovers by itself; a **memory** becomes one bullet
+under `## Learnings` in the project's `CLAUDE.md`, which is the same file the
+CLI's own `#` shortcut appends to. The next chat in the project finds both with
+this app doing nothing further — the folder is the user's real working tree and
+`worktree-chat.ts` passes no `settingSources`, so the CLI loads them the way
+plain `claude` in that directory would. The two kinds are split by rent: a
+memory line is read at the top of every future turn forever, so it is a
+sentence or two and the distilling prompt says so; anything procedural goes to
+a skill, loaded only when its description matches.
+
+**Why this is not the helper turn the "no second CLI" rule refuses**: it is a
+menu item on the chat it reads, pressed by the person who had the conversation,
+and its output is proposals somebody still has to save one by one — the same
+test `draftCommitMessage` passes. An automatic pass after every turn was
+considered and refused for exactly that rule: a turn nobody asked for, spending
+tokens on every conversation including the ones that taught nothing. The prompt
+is told most conversations teach nothing and that an empty array is a good
+answer, and the dialog draws that as the answer it is rather than as a failure.
+
+The transcript is read in main and handed over as text (`transcriptOf` in
+`shared/learnings.ts`): a chat's file lives under `~/.yasuo`, which a turn
+running in the project's directory has no business reaching into. `thinking`
+lines are dropped — what the model considered is not what the conversation
+established. The writes are `main/learnings.ts`: a skill is `wx`, so an
+existing one — possibly hand-written — is a refusal the dialog shows rather
+than an overwrite; a memory append (`appendLearning`) carries the rest of
+`CLAUDE.md` through byte for byte, because it is the one write this feature
+makes to a file the user also edits by hand. The parsing and both file shapes
+are pure and checked in `test/learnings.ts`.
+
+Deliberately absent: editing a proposal in the dialog (the file is in the
+user's own tree — open it), a per-workspace learning store (the CLI would not
+read it), and any write the agent can make to `.claude/` through this feature's
+own machinery — a chat in `Edits` mode can already write a skill when asked,
+and that path stays the chat's.
 
 ## The dock
 
@@ -2989,11 +3121,13 @@ one, throw that one away". Every other panel lets somebody act on the thing it
 is showing. This one made them go to a shell to act on rows they were already
 pointing at.
 
-Committing stays out, and the line is not arbitrary: staging and discarding are
-answered by pointing at rows, and a commit is a sentence somebody writes. The
-dock has a shell in the same folder one click away, so stopping here is
-stopping exactly where the shell is better — rather than growing a message box,
-then an amend, then a log, then a second and worse git client.
+Committing stayed out for a long time, and the line was not arbitrary: staging
+and discarding are answered by pointing at rows, and a commit is a sentence
+somebody writes. The dock has a shell in the same folder one click away, so
+stopping there was stopping exactly where the shell is better — rather than
+growing a message box, then an amend, then a log, then a second and worse git
+client. **That decision is reversed, and only in its first clause** — see
+Committing below, which is about what changed and what did not.
 
 **The index is no longer collapsed in this list, and still is in the tree.**
 Porcelain's two columns are the index against `HEAD` and the working tree
@@ -3066,6 +3200,52 @@ path inside another of the workspace's folders cannot be staged into this one's
 repository. Nothing is optimistic: what a `git add` did to a `MM` file is git's
 answer to give, so all three writes end by re-reading the list, the tree's
 colours and the listings the paths were in.
+
+### Committing
+
+**The rule above said a commit is a sentence somebody writes, and that is still
+true — what changed is who can write the first draft of it.** The argument for
+stopping at staging had two halves: a message box in a panel this narrow is a
+bad place to compose a paragraph, and the dock has a shell one click away that
+is a better one. The first half is answered by `draftCommitMessage` — the same
+read-only `claude` that answers a review comment, given the staged patch, the
+`--stat` and the last ten subjects, returning a message into an **editable
+box**. What is left is reading a diff and then ending that reading, which is the
+one thing every other panel in this app lets somebody do to what it is showing,
+and the one thing this panel made them leave to do.
+
+So there is a **message box above the piles**, drawn only while something is
+staged. Not always: a box that commits nothing most of the time is furniture,
+and one that committed the working tree would be a second meaning for the
+`Staged` heading two rows under it. `⌘⏎` commits and a bare `Enter` does not —
+a commit message has a body, and this is the field it is typed in.
+
+**`Draft` is a button, and that is what keeps it inside the "no helper turns"
+rule.** The rule refuses a turn that happens on the way past — an AI filter, an
+import button that summarises. This one is pressed, its whole output is text
+handed back to the person who pressed it, and nothing at all happens if they
+never press Commit. It is shown the recent subjects rather than taught a
+convention here, because this app has no business telling somebody's repository
+how to write its own history; ten subjects say more about a house style than a
+rule would. It is billed to the review's own model and profile, since it is the
+review's own CLI.
+
+**Where it stops is the whole of the decision.** No amend, no log, no branch, no
+push, no stash — and the reason is unchanged from the paragraph above: those are
+a git client, and the dock's shell is a better one than this would ever grow
+into. The commit itself is `git commit -m`, message passed as an **argument** so
+a backtick in it is text, hooks left to run — a `pre-commit` that refuses has
+said something the studio has no business overriding, and its output is what the
+box draws in place of a receipt. That is also why `gitCommit` is the one git
+call in the contract that **rejects** where the others resolve: a stage that did
+nothing is nobody's business, and a commit that did not happen is the one write
+here somebody has to be told about, because their message is still in the box
+and their work is still uncommitted.
+
+A commit empties the `Staged` pile, so the box says which one it wrote —
+`3f9a1c2 · fix(chat): …` — until the next word is typed. Without it the only
+sign that anything happened is rows disappearing, which is also exactly what
+`Discard all` looks like.
 
 Its list is read for the **one project on screen**, unlike the colours, which
 are read for every root so that any path can be coloured — `useWatchChanges` is
@@ -3607,6 +3787,29 @@ many places as it has comments.
   Threads are **added**, never replaced: a review run on top of remarks somebody
   had already written is two reviews of the same diff, and throwing one away is
   `Discard`'s business rather than this button's.
+- **One row, read again.** The whole-diff review answers "what is wrong with
+  this change"; the question asked every day after it is "and is _this_ file
+  right now" — a comment acted on, the file fixed, and the only way to check was
+  N turns to re-answer one file's question when the other N−1 answers were
+  already on screen. So a file's row in the Changes list carries `Review this
+file` (a hover button, and the same item on its menu for a row reached by
+  keyboard), and `reviewChanges` takes the paths to look at. It narrows which
+  files get a **turn** and nothing else: each one is still told what else the
+  change touches, because a file re-read after being fixed is still part of the
+  same change and a turn told it is the only one would be a turn given a false
+  premise. A named path that is no longer in the diff says so rather than
+  opening a turn on a file with nothing to review.
+  This is also the **one place threads are taken away**, and the rule is narrow
+  on purpose: Claude's own comments on that file **that nobody has answered**.
+  Without it, reading a file again stacks a second opinion on the first and the
+  pane fills with remarks about code that is no longer there — which is the
+  state the button exists to get out of. It stops exactly where somebody has
+  typed: a thread with more than its opening note has been replied to or argued
+  with, and that is a conversation rather than a finding, so it stays and
+  `settle` marks it stale if the lines it quoted have gone. A comment somebody
+  wrote is never touched. Only one review runs at a time across the whole app —
+  one file is no exception, since it is the same progress dialog and the same
+  store, and there is nowhere to draw two runs.
 - **A finding says how bad it is**, on the scale a forge already taught
   everybody: `critical` / `high` / `medium` / `low`, the words CodeQL, Copilot
   Autofix and every GitHub security alert use, in that order. Four rather than
@@ -4788,6 +4991,35 @@ mechanism is three small pieces:
   the moment of the click is a different thing to agree to than one that runs
   the app's own copy, even where both URLs are the same.
 
+**The `.dmg` is fetched by the app, and that is the progress bar.** The sentence
+above about a progress bar ending in a failure nobody can act on still holds for
+the _install_ — but it was never true of the download, which is a hundred-odd
+megabytes and most of the wait, and which happens while the window is still
+open: `install.sh` quits the app only after it has the disk image. So
+`downloadUpdate` in `main/updater.ts` streams the asset itself, counting bytes
+against the release's own `size` (or the response's `content-length`) and
+pushing `update:progress` at ten a second — a chunk-by-chunk event would be a
+few thousand IPC messages and as many renders. The file is then handed to the
+script through `YASUO_UPDATE_DMG`, which is the one thing passed by environment
+rather than argument, because the script's positional arguments are its public
+interface for a person in a terminal and a pre-downloaded file is this app
+talking to itself. The script deletes it on the way out.
+
+The bar is a **percentage up to the handover and indeterminate after it**, which
+is why `UpdateProgress` has two stages instead of one number: the `installing`
+stage is `hdiutil`, a `quit` and a `ditto`, with nothing to measure and, halfway
+through, no process left to measure it from. A fake ramp to 100 would be an
+animation pretending to know something. The two states are drawn by one
+component (`update-progress.tsx`) off one label function (`installLabel`), so
+the pill and Settings › Updates cannot disagree about a number that is only on
+screen for half a minute and would never be seen side by side. The percentage
+reaches the pill's own text too — the sheet can be closed mid-download, and the
+pill is then the only thing saying it is still running.
+
+One thing this bought beyond the bar: a download that fails now fails **in the
+app**, with a window still there to say so, rather than as a line in
+`update.log` after everything has already quit.
+
 Three details are load-bearing:
 
 - **The installer is spawned detached.** `install.sh` quits the running app
@@ -4796,14 +5028,17 @@ Three details are load-bearing:
   to finish and to `open` the app again.
 - **There is no success path to report.** The app is gone before the script
   ends, so the renderer's `installing` state is never cleared, and the honest
-  end of it is the window closing. A failure to _start_ the installer is
-  reported in the dialog; a failure inside it lands in `~/.yasuo/update.log`,
-  which is the only place left to put it.
+  end of it is the window closing. A failure to _start_ the installer, or to
+  download the asset, is reported in the dialog; a failure inside the script
+  lands in `~/.yasuo/update.log`, which is the only place left to put it.
 - **`isNewer` is strictly newer, and numeric.** A string comparison makes
   `1.0.9` newer than `1.0.19` and offers everybody a downgrade forever, and a
   check for "different" does the same to anyone running a build from a checkout.
   Prereleases sort below the release they precede. `test/updates.ts` is that
-  table, and it is the only part of this with an opinion worth testing.
+  table, and now `dmgAsset`, `downloadPercent` and `installLabel` beside it —
+  the asset is found by the suffix of its own name, the way the script finds it,
+  so a release whose files are named something else fails as "no arm64 build
+  here" rather than as a 404 on a URL this app invented.
 
 Nothing ever pops up. The check comes back while the user is in the middle of
 something, and whatever that was, it was more important — so the answer becomes

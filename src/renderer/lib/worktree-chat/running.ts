@@ -1,4 +1,5 @@
 import type { WorktreeChat } from "@shared/api"
+import type { ChatActivity } from "@shared/chat-activity"
 
 /**
  * How many of a set of chats are working, and how many have stopped to ask.
@@ -8,24 +9,23 @@ import type { WorktreeChat } from "@shared/api"
  * is easy to get wrong in two places at once, and neither way of getting it
  * wrong looks broken.
  *
- * **Waiting wins over working**, which is the rule. Both are true while a
- * question is up — the turn has not ended, so the chat is still `busy` — and
- * only one of them is something for the user to do. A chat counted in both
- * columns would make a project of three chats read as five things happening,
- * and worse, it would draw a "1 waiting" beside a "1 working" that are the same
- * conversation. This is the same precedence the chat row itself draws with, and
- * they must not disagree: the row is what somebody checks the count against.
+ * The rule itself, the shape and the two labels moved to
+ * `@shared/chat-activity` when the menu bar's tray started drawing the same
+ * count from the main process — see the header there. Re-exported so this file
+ * is still the one place the sidebar asks about it.
  */
-export type ChatActivity = {
-  /** Answering, and nothing is wanted from anybody. */
-  working: number
-  /** Stopped on a question. Nothing moves in these until they are answered, and
-   * nothing times them out — see `WorktreeChats.ask` in main. */
-  waiting: number
-}
+export {
+  NOTHING_RUNNING,
+  isRunning,
+  activityLabel,
+  activityTitle,
+  type ChatActivity,
+} from "@shared/chat-activity"
 
-export const NOTHING_RUNNING: ChatActivity = { working: 0, waiting: 0 }
-
+/** The counts for one set of chats, read off the store. **Waiting wins over
+ * working** — see `ChatActivity`. This is the same precedence the chat row
+ * itself draws with, and they must not disagree: the row is what somebody
+ * checks the count against. */
 export function activityOf(
   chats: WorktreeChat[],
   /** The chats main last said were busy — `sending` in the store. */
@@ -40,37 +40,4 @@ export function activityOf(
     else if (sending.includes(chat.id)) working += 1
   }
   return { working, waiting }
-}
-
-/** Whether there is anything to draw at all. A row that says `0 running` is a
- * row saying nothing, and this list is mostly idle. */
-export function isRunning(activity: ChatActivity): boolean {
-  return activity.working > 0 || activity.waiting > 0
-}
-
-/**
- * The count as a row draws it: `2` working, `1!` waiting, `2 · 1!` for both.
- *
- * Deliberately not words. This sits at the right-hand end of a sidebar row
- * whose left-hand end is a project name that has to keep its width — "2 chats
- * running, 1 waiting" is a sentence, and a sentence here is a truncated project
- * name. The `!` is what separates the two without a second colour to read, so
- * the label survives being drawn in the muted hue everything else on the row
- * uses.
- */
-export function activityLabel(activity: ChatActivity): string {
-  const parts: string[] = []
-  if (activity.working > 0) parts.push(String(activity.working))
-  if (activity.waiting > 0) parts.push(`${activity.waiting}!`)
-  return parts.join(" · ")
-}
-
-/** The same thing said out loud, for the row's `title` and for a screen reader —
- * where the width the label was compressed for does not apply. */
-export function activityTitle(activity: ChatActivity): string {
-  const parts: string[] = []
-  if (activity.working > 0) parts.push(`${activity.working} answering`)
-  if (activity.waiting > 0)
-    parts.push(`${activity.waiting} waiting for your answer`)
-  return parts.join(", ")
 }

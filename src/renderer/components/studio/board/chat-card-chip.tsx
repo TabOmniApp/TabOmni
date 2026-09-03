@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Columns3 } from "lucide-react"
+import { ArrowRight, Check, ChevronDown, Columns3 } from "lucide-react"
 
 import {
   DropdownMenu,
@@ -10,6 +10,7 @@ import { cardOfChat, cardsOf, columnOf, columnsOf } from "@/lib/board/cards"
 import { useBoard } from "@/lib/board/store"
 import { BOARD_TONES, toneOf } from "@/lib/board/tones"
 import { cn } from "@/lib/utils"
+import { useWorktreeChats } from "@/lib/worktree-chat/store"
 
 /**
  * The card this chat is the work of, over the transcript — the link read from
@@ -26,10 +27,21 @@ import { cn } from "@/lib/utils"
  * just in. Moving it to the foot of the column it goes to — index past the end,
  * which `moveCard` lands last — since a card arriving in `Doing` from a chat is
  * not jumping the queue of what was already being worked on.
+ *
+ * Beside it, once the chat has stopped, is the **last column in one click** —
+ * see `finish`. Two controls for one field is a repeat only on paper: the
+ * dropdown answers "which column", and this answers the one question actually
+ * asked at the end of a turn, which the board is otherwise switched to and
+ * dragged across to say. Both are the user pressing something; the agent still
+ * cannot write to the board.
  */
 export function ChatCardChip({ chatId }: { chatId: string }) {
   const cards = useBoard((state) => state.cards)
   const allColumns = useBoard((state) => state.columns)
+  // Whether this conversation is mid-turn. Read here rather than passed in
+  // because it decides only what this strip draws — see `finish` below.
+  const busy = useWorktreeChats((state) => state.sending.includes(chatId))
+  const asking = useWorktreeChats((state) => state.asks[chatId] !== undefined)
 
   const card = cardOfChat(cards, chatId)
   if (!card) return null
@@ -40,6 +52,34 @@ export function ChatCardChip({ chatId }: { chatId: string }) {
   const here = columnOf(allColumns, card)
   const tone = BOARD_TONES[toneOf(here?.tone ?? "slate")]
 
+  const moveTo = (columnId: string) =>
+    useBoard
+      .getState()
+      .move(
+        card.id,
+        columnId,
+        cardsOf(cards, allColumns, card.folderId, columnId).length
+      )
+
+  /**
+   * The one-click way to the **last** column, or nothing.
+   *
+   * The last one rather than a column called `Done`, because the names are the
+   * user's — the same reading `unfinishedCount` does, and the two must agree or
+   * this button would move a card the tab's count still calls unfinished.
+   *
+   * Drawn only while the chat is **stopped**, and this is the whole of why it
+   * is a second control beside a dropdown that could already do it. The moment
+   * it is for is finishing reading a turn and knowing the work is done; offered
+   * mid-answer it is a button for a fact nobody has yet, and beside a question
+   * the chat is waiting on it is worse than useless. Absent rather than
+   * disabled, since a disabled button in a strip this thin is a smear nobody
+   * can read the reason for — the dropdown is still there for anyone who means
+   * it anyway.
+   */
+  const last = columns.at(-1)
+  const finish = !busy && !asking && last && last.id !== here?.id ? last : null
+
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-1.5">
       <Columns3 className="size-3.5 shrink-0 text-muted-foreground" />
@@ -49,6 +89,18 @@ export function ChatCardChip({ chatId }: { chatId: string }) {
       >
         {card.title}
       </span>
+
+      {finish && (
+        <button
+          type="button"
+          title={`Move this card to ${finish.name}`}
+          onClick={() => moveTo(finish.id)}
+          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <ArrowRight className="size-3" />
+          {finish.name}
+        </button>
+      )}
 
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -75,13 +127,7 @@ export function ChatCardChip({ chatId }: { chatId: string }) {
               key={column.id}
               onClick={() => {
                 if (column.id === here?.id) return
-                useBoard
-                  .getState()
-                  .move(
-                    card.id,
-                    column.id,
-                    cardsOf(cards, allColumns, card.folderId, column.id).length
-                  )
+                moveTo(column.id)
               }}
             >
               {column.id === here?.id ? (

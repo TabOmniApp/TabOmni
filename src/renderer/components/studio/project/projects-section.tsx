@@ -3,6 +3,7 @@ import {
   Columns3,
   Folder,
   FolderOpen,
+  GraduationCap,
   Loader2,
   MessageSquare,
   Pencil,
@@ -35,6 +36,7 @@ import { useStudio } from "@/lib/store"
 import { IconButton } from "../icon-button"
 import { RenameRow, useMenuFocusHandoff } from "../rename-row"
 import { SideRow } from "../side-row"
+import { DistillDialog } from "../worktree/distill-dialog"
 import { useShells } from "@/lib/shell/store"
 import {
   chatsOf,
@@ -468,6 +470,9 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
   /** Which chat's name is a field right now. In place, the way every other
    * sidebar in the studio renames — see `RenameRow`. */
   const [renamingId, setRenamingId] = useState<string | null>(null)
+  /** Which chat is being distilled — the dialog under the list. One at a
+   * time, because each is a turn of the review's own CLI. */
+  const [distilling, setDistilling] = useState<WorktreeChat | null>(null)
   const menuFocus = useMenuFocusHandoff()
 
   const listed = saved(chats, unsaved)
@@ -569,6 +574,14 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
                 <Pencil />
                 Rename
               </ContextMenuItem>
+              {/* Only under a project: the turn reads in the project's own
+                  directory, and an ungrouped chat has none to read in. */}
+              {folderId && (
+                <ContextMenuItem onClick={() => setDistilling(chat)}>
+                  <GraduationCap />
+                  Distill learnings…
+                </ContextMenuItem>
+              )}
               <ContextMenuSeparator />
               {/* The conversation is on disk, so this is the one way it goes. */}
               <ContextMenuItem
@@ -582,6 +595,14 @@ function ProjectChats({ folderId }: { folderId: string | null }) {
           </ContextMenu>
         )
       })}
+      {distilling && folderId && (
+        <DistillDialog
+          chatId={distilling.id}
+          chatTitle={distilling.title}
+          folderId={folderId}
+          onClose={() => setDistilling(null)}
+        />
+      )}
     </>
   )
 }

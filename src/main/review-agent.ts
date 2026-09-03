@@ -6,8 +6,9 @@ import {
   type ReviewFinding,
   type ReviewSeverity,
 } from "../shared/api"
+import { proposalsIn, type LearningProposal } from "../shared/learnings"
 import { startAgentSession } from "./claude-agent"
-import { changes, fileDiff } from "./git"
+import { changes, fileDiff, recentSubjects, stagedDiff } from "./git"
 
 /**
  * One question about one review comment, answered and then closed.
@@ -367,6 +368,20 @@ export type ReviewChangesRequest = {
   effort?: string | null
   configDir?: string | null
   disabledTools?: string[]
+  /**
+   * Which of the changed files get a turn, or every one of them.
+   *
+   * Relative paths, as the rest of this module names files. It is a filter over
+   * what `changes` reports rather than a list to review as given: a path that is
+   * not in the diff has nothing to review, and one arriving from the renderer is
+   * not a licence to open a turn on an arbitrary file.
+   *
+   * What it does **not** narrow is the list of the change's other files each
+   * turn is handed as context — one file re-read after being fixed is still
+   * being read as part of the same change, and a turn told it is the only
+   * changed file would be a turn given a false premise.
+   */
+  paths?: string[]
   /** See `oneTurn`'s own field — this is the one call worth watching run,
    * since a reply is one paragraph and this is a turn per changed file. */
   onProgress?: (text: string) => void
@@ -431,8 +446,25 @@ export async function reviewChanges(
     return { error: "Nothing has changed in this checkout." }
   }
 
+  /*
+   * The files that actually get a turn, which is `paths` unless the caller named
+   * some — a file re-read after being fixed, which is the common one. Intersected
+   * with the diff rather than taken as given, so a name that is no longer in it
+   * says so instead of opening a turn on a file with nothing to review.
+   */
+  const only = request.paths
+  const reviewing = only ? paths.filter((path) => only.includes(path)) : paths
+  if (reviewing.length === 0) {
+    return {
+      error:
+        only?.length === 1
+          ? `${only[0]} has no changes to review.`
+          : "None of those files have changes to review.",
+    }
+  }
+
   request.onProgress?.(
-    `Reviewing ${paths.length} changed file${paths.length === 1 ? "" : "s"}…`
+    `Reviewing ${reviewing.length} changed file${reviewing.length === 1 ? "" : "s"}…`
   )
 
   const findings: ReviewFinding[] = []
@@ -448,9 +480,11 @@ export async function reviewChanges(
   // `paths.length` CLIs at once, which on a large change is the machine.
   const worker = async () => {
     for (;;) {
-      const relative = paths[next++]
+      const relative = reviewing[next++]
       if (relative === undefined) return
 
+      // `paths` and not `reviewing`: the context each turn is given is the whole
+      // change, however few of its files are being read this time.
       const answer = await reviewFile(
         request,
         relative,
@@ -466,12 +500,15 @@ export async function reviewChanges(
         if ("error" in answer) errors.push(`${relative}: ${answer.error}`)
         else findings.push(...answer.findings)
       }
-      request.onProgress?.(`${done}/${paths.length} · ${relative}`)
+      request.onProgress?.(`${done}/${reviewing.length} · ${relative}`)
     }
   }
 
   await Promise.all(
-    Array.from({ length: Math.min(REVIEW_CONCURRENCY, paths.length) }, worker)
+    Array.from(
+      { length: Math.min(REVIEW_CONCURRENCY, reviewing.length) },
+      worker
+    )
   )
 
   // Only when nothing at all came back, and only then: an error surfaces as a
@@ -632,4 +669,252 @@ function severityOf(row: Record<string, unknown>): ReviewSeverity | undefined {
   const said =
     typeof row.severity === "string" ? row.severity.trim().toLowerCase() : ""
   return REVIEW_SEVERITY_IDS.find((id) => id === said)
+}
+
+/**
+ * How long a drafted commit message is given.
+ *
+ * Shorter than a review's, because it is a different amount of work and a
+ * different amount of patience: this one has somebody sitting in front of it
+ * with the message box open, and a draft that has not arrived in a minute is one
+ * they have already typed past.
+ */
+const DRAFT_TIMEOUT_MS = 60_000
+
+/** How much of the staged patch goes over. Below `PATCH_LIMIT`, because a
+ * message is written from the shape of a change rather than from every line of
+ * it, and the `--stat` takes over past this. */
+const DRAFT_PATCH_LIMIT = 120_000
+
+/** How many previous subjects the draft is shown — enough to read a convention
+ * off, few enough that they do not become the bulk of the prompt. */
+const DRAFT_LOG = 10
+
+/**
+ * What the draft is allowed to call.
+ *
+ * Reading only, and no web: the answer is in the diff and in the repository
+ * around it. `WebSearch` in a turn that owes one line is a minute spent on
+ * something nobody asked about.
+ */
+const DRAFT_TOOLS = ["ToolSearch", "Read", "Glob", "Grep"]
+
+/**
+ * What the drafting turn is told.
+ *
+ * The output shape is again the whole difficulty, and it is stricter here than
+ * anywhere else in this file: whatever comes back is put **in a text box the
+ * user is about to commit**, so a preamble, a code fence or an offer to revise
+ * is not a flaw in the answer, it is text somebody has to delete by hand before
+ * they can press the button. So: the message and nothing else.
+ *
+ * It is told to follow the log it is shown rather than any convention named
+ * here. This app has no business teaching somebody's repository how to write its
+ * own history, and the ten subjects above the diff say more about a house style
+ * than a rule ever does.
+ */
+const DRAFT_PROMPT = [
+  "You write the commit message for a change that is already staged. You are not reviewing it, not improving it and not commenting on it.",
+  "Answer with the message itself and nothing else — no preamble, no code fence, no sign-off, no offer to revise. What you return goes straight into the message box.",
+  "A subject line under 72 characters, in the style of the recent subjects you are shown. Where the change needs it, a blank line and then a short body saying why; where it does not, the subject alone.",
+  "Describe what the change does, not which files moved. If the staged diff is several unrelated things, say the largest one plainly rather than inventing a theme that covers them all.",
+  "You may read the files around the change. You cannot edit anything, and there is nobody to ask.",
+].join("\n")
+
+export type DraftCommitRequest = {
+  /** The checkout being committed — the directory the turn reads in. */
+  cwd: string
+  model?: string | null
+  effort?: string | null
+  configDir?: string | null
+  disabledTools?: string[]
+}
+
+/**
+ * A commit message for what is staged, written by the read-only `claude`.
+ *
+ * **Why this is not the helper turn the "no second CLI" rule refuses**: it is a
+ * button, pressed by the person who is about to commit, and its whole output is
+ * text handed to them in an editable box. Nothing happens on its way past —
+ * a draft nobody presses costs nothing and changes nothing, and a draft that is
+ * wrong is a sentence somebody rewrites before pressing Commit. That is the same
+ * test `reviewReply` passes: asked for out loud, answered in the place it was
+ * asked from.
+ *
+ * The patch is gathered here rather than left to the turn to fetch, for the
+ * reason `reviewChanges` gathers its own: a read-only tool list has no `git`,
+ * and this process already knows how to ask.
+ */
+export async function draftCommitMessage(
+  request: DraftCommitRequest
+): Promise<ReviewReplyResult> {
+  const [{ stat, patch }, subjects] = await Promise.all([
+    stagedDiff(request.cwd),
+    recentSubjects(request.cwd, DRAFT_LOG),
+  ])
+
+  if (!stat.trim() && !patch.trim()) {
+    return { error: "Nothing is staged to write a message about." }
+  }
+
+  const prompt = [
+    "Write the commit message for this staged change.",
+    "",
+    "What it touches:",
+    "```",
+    stat.trim(),
+    "```",
+    "",
+    // Past the cap the `--stat` above is what the message is written from, said
+    // out loud so the turn reads files rather than describing a patch it never
+    // saw.
+    patch.length > DRAFT_PATCH_LIMIT
+      ? "The patch itself is too large to include. Read the files above where you need to."
+      : ["```diff", patch.trim(), "```"].join("\n"),
+    ...(subjects.length > 0
+      ? [
+          "",
+          "The last few commits here, newest first — follow their style:",
+          ...subjects.map((subject) => `- ${subject}`),
+        ]
+      : []),
+  ].join("\n")
+
+  return oneTurn({
+    cwd: request.cwd,
+    prompt,
+    system: DRAFT_PROMPT,
+    tools: DRAFT_TOOLS,
+    timeoutMs: DRAFT_TIMEOUT_MS,
+    model: request.model,
+    effort: request.effort,
+    configDir: request.configDir,
+    disabledTools: request.disabledTools,
+  })
+}
+
+/**
+ * How long a distilling turn is given. A review's bound rather than a draft's:
+ * it reads a whole conversation and then the repository's existing skills and
+ * `CLAUDE.md` to avoid proposing what is already written down.
+ */
+const DISTILL_TIMEOUT_MS = 300_000
+
+/**
+ * How much of the transcript goes over, and it is the **tail** that is kept:
+ * a long chat's early turns are the attempts, and the corrections that
+ * superseded them — the part worth learning from — come later. Said out loud
+ * in the prompt when it happens, so the turn knows it is reading an excerpt.
+ */
+const DISTILL_TRANSCRIPT_LIMIT = 160_000
+
+/**
+ * The draft's list, plus `Glob` and `Grep`: the turn has to find what
+ * `.claude/skills/` and `CLAUDE.md` already say before proposing to say it
+ * again. No web — the learnings are in the conversation, not on a page.
+ */
+const DISTILL_TOOLS = ["ToolSearch", "Read", "Glob", "Grep"]
+
+/**
+ * What the distilling turn is told.
+ *
+ * The output shape is again the whole difficulty, and the second difficulty is
+ * restraint. A model asked what a conversation taught will find a lesson in
+ * every turn of it; what is wanted is the two or three things the *next* chat
+ * in this project would otherwise have to rediscover — so the number is said
+ * out loud, and so is the test ("had to be found out", not "was mentioned").
+ * The split between the two kinds is said in terms of rent: a memory line is
+ * read at the top of every turn forever, a skill is read when its description
+ * matches, so anything longer than a sentence or two goes to a skill.
+ */
+const DISTILL_PROMPT = [
+  "You are reading one finished conversation between a user and a coding agent, in the project the conversation was about. Your job is to distill what it taught — the facts, conventions and procedures the next conversation in this project would otherwise have to rediscover.",
+  "",
+  'Answer with a single fenced ```json block and nothing else: an array of proposals, each `{ "kind", "name", "description", "body" }`.',
+  "",
+  '- `kind` is `"skill"` or `"memory"`. A **memory** is one or two sentences of standing fact — a constraint, a convention, a decision and its reason — that becomes a bullet in this project\'s `CLAUDE.md`, read at the start of every future conversation; keep it short, its cost is paid forever. A **skill** is a procedure — steps that were worked out and would be followed again — and becomes `.claude/skills/<name>/SKILL.md`, loaded only when relevant; this is where anything longer than two sentences belongs.',
+  "- `name` is a short kebab-case slug: a skill's directory name, a memory's label.",
+  "- `description` is one line saying when the learning applies — for a skill it is what the agent matches against before loading it.",
+  "- `body` is the learning itself, markdown. For a memory: the sentence or two, stating the why. For a skill: the procedure, concrete enough to follow without this conversation open.",
+  "",
+  "Before proposing anything, read what is already written down: this project's `CLAUDE.md`, and the skills under `.claude/skills/` if there are any. Propose nothing that restates them, and nothing derivable from the code itself — a learning is what had to be found out the hard way: a command that only works a certain way, a constraint that cost a debugging session, an approach that was tried and rejected and why.",
+  "",
+  "Fewer, better. Two or three proposals is a good answer; most conversations teach nothing worth keeping, and for those return an empty array and say nothing else. Never propose a learning about the conversation itself, the user's mood, or the one-off task that was done.",
+  "",
+  "This turn is read-only on purpose: the editing tools and the shell are unavailable, so do not try them. Nothing you propose is written anywhere — each proposal is shown to the user, who saves or discards it.",
+].join("\n")
+
+export type DistillRequest = {
+  /** The project the chat belongs to — the directory the turn reads in. */
+  cwd: string
+  /** The chat's lines as plain text — `transcriptOf` in `shared/learnings.ts`
+   * builds it, main hands it over. Gathered here rather than left to the turn
+   * for the reason the review gathers its patches: a chat's file lives under
+   * `~/.yasuo`, which is nowhere a turn in the project's directory reads. */
+  transcript: string
+  model?: string | null
+  effort?: string | null
+  configDir?: string | null
+  disabledTools?: string[]
+}
+
+export type DistillResult =
+  { proposals: LearningProposal[] } | { error: string }
+
+/**
+ * What one conversation taught, proposed — never written.
+ *
+ * **Why this is not the helper turn the "no second CLI" rule refuses**: it is a
+ * menu item on the chat it reads, pressed by the person who had the
+ * conversation, and its whole output is a list of proposals in a dialog with a
+ * Save button on each. Nothing happens on its way past — a proposal nobody
+ * saves costs nothing and changes nothing. That is the same test
+ * `draftCommitMessage` passes: asked for out loud, answered in the place it was
+ * asked from, acted on by a person.
+ */
+export async function distillLearnings(
+  request: DistillRequest
+): Promise<DistillResult> {
+  const transcript = request.transcript.trim()
+  if (!transcript) {
+    return { error: "This chat has nothing in it to learn from." }
+  }
+
+  const clipped = transcript.length > DISTILL_TRANSCRIPT_LIMIT
+  const shown = clipped
+    ? transcript.slice(-DISTILL_TRANSCRIPT_LIMIT)
+    : transcript
+
+  const prompt = [
+    "Distill what this conversation taught about the project in this directory.",
+    "",
+    ...(clipped
+      ? [
+          "The conversation is long, so this is its latter part — read it as an excerpt.",
+          "",
+        ]
+      : []),
+    "```",
+    shown,
+    "```",
+  ].join("\n")
+
+  const answer = await oneTurn({
+    cwd: request.cwd,
+    prompt,
+    system: DISTILL_PROMPT,
+    tools: DISTILL_TOOLS,
+    timeoutMs: DISTILL_TIMEOUT_MS,
+    model: request.model,
+    effort: request.effort,
+    configDir: request.configDir,
+    disabledTools: request.disabledTools,
+  })
+  if ("error" in answer) return answer
+
+  const proposals = proposalsIn(answer.text)
+  if (proposals === null) {
+    return { error: "Claude answered, but not with proposals this could read." }
+  }
+  return { proposals }
 }

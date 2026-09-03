@@ -5,6 +5,10 @@
 #   ./install.sh            the latest release
 #   ./install.sh 0.1.0      that release
 #
+# YASUO_UPDATE_DMG names a .dmg already on disk, which is how the app's own
+# "Update and reopen" runs this: it downloads the asset itself so it can draw a
+# percentage, then hands the file over. The file is deleted afterwards.
+#
 # The download is the point of this script. macOS puts `com.apple.quarantine`
 # on anything a browser, Mail or AirDrop hands over, and Gatekeeper refuses a
 # quarantined app that carries no Developer ID — which these builds do not,
@@ -55,9 +59,21 @@ asset_url() {
     | head -1
 }
 
-echo "Looking up the release…"
+# A .dmg the app downloaded itself before running this, so that the progress bar
+# in its window is a real measure: the download is the long part of an install
+# and the only one the app is still alive for — everything below the `quit` is
+# not drawable. Treated as a temporary of this run and deleted with the rest.
+PREFETCHED="${YASUO_UPDATE_DMG:-}"
+if [ -n "$PREFETCHED" ] && [ ! -f "$PREFETCHED" ]; then
+  echo "No such file: $PREFETCHED — downloading instead." >&2
+  PREFETCHED=""
+fi
+
 VERSION="${1:-}"
-if [ -n "$VERSION" ]; then
+if [ -n "$PREFETCHED" ]; then
+  URL=""
+elif [ -n "$VERSION" ]; then
+  echo "Looking up the release…"
   # Both tag spellings, because which one a release used is not something the
   # person running this should have to know.
   URL=$(asset_url "https://api.github.com/repos/$REPO/releases/tags/v${VERSION#v}") || true
@@ -67,7 +83,7 @@ else
   URL=$(asset_url "https://api.github.com/repos/$REPO/releases/latest") || true
 fi
 
-if [ -z "${URL:-}" ]; then
+if [ -z "$PREFETCHED" ] && [ -z "${URL:-}" ]; then
   echo "No ${ARCH} .dmg in ${VERSION:-the latest release} of $REPO." >&2
   echo "See https://github.com/$REPO/releases" >&2
   exit 1
@@ -79,14 +95,22 @@ cleanup() {
   # Detaching a volume that was never attached is not an error worth printing.
   hdiutil detach "$MOUNT" -quiet 2>/dev/null || true
   rm -rf "$TMP"
+  [ -n "$PREFETCHED" ] && rm -f "$PREFETCHED"
+  return 0
 }
 trap cleanup EXIT
 
-echo "Downloading $(basename "${URL//%20/ }")…"
-curl -fL --progress-bar -o "$TMP/app.dmg" "$URL"
+if [ -n "$PREFETCHED" ]; then
+  DMG="$PREFETCHED"
+  echo "Using $(basename "$DMG")…"
+else
+  DMG="$TMP/app.dmg"
+  echo "Downloading $(basename "${URL//%20/ }")…"
+  curl -fL --progress-bar -o "$DMG" "$URL"
+fi
 
 mkdir -p "$MOUNT"
-hdiutil attach "$TMP/app.dmg" -nobrowse -quiet -mountpoint "$MOUNT"
+hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$MOUNT"
 
 APP_SRC=$(find "$MOUNT" -maxdepth 1 -name "*.app" -print -quit)
 if [ -z "$APP_SRC" ]; then

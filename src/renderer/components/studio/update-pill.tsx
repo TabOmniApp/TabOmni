@@ -11,7 +11,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { pendingUpdate, useUpdates } from "@/lib/updates"
+import { installLabel, pendingUpdate, useUpdates } from "@/lib/updates"
+import { UpdateProgressBar } from "./update-progress"
 
 /**
  * "Update to 1.0.20", in the status bar, and the sheet that explains what
@@ -32,6 +33,7 @@ import { pendingUpdate, useUpdates } from "@/lib/updates"
 export function UpdatePill() {
   const update = useUpdates((state) => pendingUpdate(state))
   const installing = useUpdates((state) => state.installing)
+  const progress = useUpdates((state) => state.progress)
   const error = useUpdates((state) => state.error)
   const install = useUpdates((state) => state.install)
   const dismiss = useUpdates((state) => state.dismiss)
@@ -48,7 +50,12 @@ export function UpdatePill() {
         className="flex shrink-0 items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary outline-none hover:bg-primary/20 focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <ArrowUpCircle className="size-3 shrink-0" />
-        Update to {update.version}
+        {/* The percentage reaches the pill too, not only the sheet: the sheet
+            can be closed while the download runs, and this is then the one
+            thing on screen saying it still is. */}
+        {installing
+          ? installLabel(installing, progress)
+          : `Update to ${update.version}`}
       </button>
 
       <AlertDialog open={open} onOpenChange={setOpen}>
@@ -89,6 +96,17 @@ export function UpdatePill() {
             </a>
           </p>
 
+          {installing && (
+            <div className="space-y-1.5">
+              <UpdateProgressBar progress={progress} />
+              <p className="text-xs text-muted-foreground">
+                {progress?.stage === "installing"
+                  ? "Yasuo is quitting to replace itself, and reopens when it is done."
+                  : `Downloading Yasuo ${update.version}. Nothing has been replaced yet.`}
+              </p>
+            </div>
+          )}
+
           {error && (
             <p className="text-xs leading-relaxed text-destructive">{error}</p>
           )}
@@ -110,7 +128,7 @@ export function UpdatePill() {
                   void install()
                 }}
               >
-                {installing ? "Installing…" : "Update and reopen"}
+                {installLabel(installing, progress)}
               </AlertDialogAction>
             ) : (
               <AlertDialogAction
